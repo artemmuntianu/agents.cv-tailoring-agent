@@ -51,7 +51,7 @@ Tailor the candidate's CV text to match the provided job description.
 RULES:
 1. DO NOT fabricate false experience, metrics, or positions.
 2. Rephrase existing achievements using the (Action + Context + Result) formula to highlight relevant keywords.
-3. Return exact ("original_text", "tailored_text") pairs where "original_text" matches exact substrings or sentences in the CV text.
+3. Return exact ("original_text", "tailored_text") pairs where "original_text" MUST be an EXACT verbatim sentence or bullet point copied from the provided CV text.
 """
     if state.get("layout_feedback"):
         prompt += f"\nCRITICAL VISUAL FEEDBACK FROM PREVIOUS LAYOUT INSPECTION:\n{state['layout_feedback']}\nAdjust phrases to be more concise to fix page overflow and widow/orphan lines."
@@ -67,6 +67,17 @@ RULES:
         output_path=state["output_path"]
     )
     print(f"✅ Applied {applied_count} text replacements to DOCX.")
+
+    if applied_count == 0:
+        print("⚠️  No text replacements could be applied to the DOCX. Stopping process.")
+        return {
+            **state,
+            "current_cv_text": cv_text,
+            "modifications": [{"original_text": m.original_text, "tailored_text": m.tailored_text} for m in mod_result.modifications],
+            "revision_count": state["revision_count"] + 1,
+            "is_approved": True,
+            "layout_feedback": "Stopped: No text replacements applied to DOCX."
+        }
 
     return {
         **state,
@@ -97,9 +108,14 @@ def vision_check(state: State) -> State:
     pil_images = [Image.open(p) for p in state["image_paths"]]
     
     prompt = """Analyze the rendered CV page images for formatting quality and visual layout.
-Specifically evaluate:
-1. Are there orphaned or widow lines (e.g. 1-2 lines spilling onto a new page at the end)?
-2. Is the overall spacing, alignment, and formatting visually clean and balanced?
+
+IMPORTANT LAYOUT GUIDELINES:
+1. This CV design uses a two-column template layout with a left sidebar (skills/education/contact) and a right main section (experience).
+2. It is EXPECTED and ACCEPTABLE for page 2 (and subsequent pages) to have an empty left sidebar if all sidebar sections are completed on page 1. Do NOT flag an empty left sidebar on page 2 as a layout flaw or issue.
+3. It is ACCEPTABLE for page 2 to contain bullet points continuing the final job entry.
+4. ONLY flag severe formatting defects, such as:
+   - 1 single line orphaned at the bottom or top of a page (widow line cut off abruptly).
+   - Overlapping text, text extending past margin boundaries, or corrupt unreadable characters.
 
 Return json matching schema with fields:
 - is_layout_ok: boolean

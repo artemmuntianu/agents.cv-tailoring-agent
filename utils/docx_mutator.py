@@ -7,17 +7,27 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
         return False
         
     full_text = paragraph.text
-    if original_text not in full_text:
-        return False
-        
+    target_text = original_text.strip()
+    
+    for prefix in ["• ", "o ", "- ", "* "]:
+        if target_text.startswith(prefix):
+            target_text = target_text[len(prefix):].strip()
+            
+    if target_text not in full_text:
+        full_text_clean = full_text.replace("\xa0", " ")
+        target_text_clean = target_text.replace("\xa0", " ")
+        if target_text_clean not in full_text_clean:
+            return False
+        target_text = target_text_clean
+
     runs = paragraph.runs
     if not runs:
-        paragraph.text = full_text.replace(original_text, tailored_text)
+        paragraph.text = full_text.replace(target_text, tailored_text)
         return True
 
     for run in runs:
-        if original_text in run.text:
-            run.text = run.text.replace(original_text, tailored_text)
+        if target_text in run.text:
+            run.text = run.text.replace(target_text, tailored_text)
             return True
 
     combined_text = ""
@@ -28,10 +38,10 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
         end = len(combined_text)
         run_ranges.append((idx, start, end))
 
-    match_start = combined_text.find(original_text)
+    match_start = combined_text.find(target_text)
     if match_start == -1:
         return False
-    match_end = match_start + len(original_text)
+    match_end = match_start + len(target_text)
 
     affected_runs = []
     for idx, start, end in run_ranges:
