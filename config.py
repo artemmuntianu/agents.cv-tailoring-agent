@@ -6,6 +6,12 @@ if GEMINI_API_KEY:
 
 MODEL_NAME = "gemini-3.5-flash"
 
+# Persisted model availability state (JSON). Survives across runs so we resume
+# from the last known-good model and skip models that recently failed.
+MODEL_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_state.json")
+# How long (hours) a model flagged unavailable is skipped before it is retried.
+MODEL_UNAVAILABLE_TTL_HOURS = 24
+
 # Ordered fallback list (top = most preferred). The retry layer advances to the
 # next model when the current one hits its 429 rate-limit retry ceiling, or when
 # its daily quota (RPD) is exhausted.

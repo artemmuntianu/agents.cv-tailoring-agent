@@ -3,6 +3,7 @@ import functools
 from datetime import datetime, timezone, timedelta
 from google.genai.errors import APIError
 import config
+from utils import model_state
 
 def wait_until_midnight_utc():
     now_utc = datetime.now(timezone.utc)
@@ -25,29 +26,62 @@ def wait_until_midnight_utc():
         seconds_remaining -= 1
     print("\n✅ Midnight UTC reached! Resuming operation...")
 
-def _preferred_models():
-    models = getattr(config, "PREFERRED_MODELS", None)
-    return list(models) if models else [config.MODEL_NAME]
-
-
 def _advance_model():
-    """Advance config.MODEL_NAME to the next preferred model.
+    """Advance config.MODEL_NAME to the next available preferred model.
 
-    Returns True if a fallback model was selected, False if the current model
-    is already the last in the list (or not present in the preferred list).
+    The failing model is recorded as unavailable in the persisted model state so
+    future runs resume from a known-good model. Returns True if a fallback model
+    was selected, False if no further model is available.
     """
-    models = _preferred_models()
-    try:
-        idx = models.index(config.MODEL_NAME)
-    except ValueError:
-        print("⚠️  Current MODEL_NAME is not in PREFERRED_MODELS; cannot auto-switch to a fallback.")
-        return False
-    if idx + 1 >= len(models):
+    next_model = model_state.advance_after_failure(config.MODEL_NAME, "retry ceiling reached")
+    if next_model is None:
         print("⚠️  All preferred models exhausted; re-raising the rate-limit error.")
         return False
-    config.MODEL_NAME = models[idx + 1]
+    config.MODEL_NAME = next_model
     print(f"\n🔁 Rate limit on previous model — switching MODEL_NAME to '{config.MODEL_NAME}'.")
     return True
+
+
+def _is_retryable(error_msg, status_code=None):
+    """Return True for transient 429 / 503 style errors that warrant a retry."""
+    if status_code is not None and str(status_code) in ("429", "503"):
+        return True
+    retryable_tokens = (
+        "429", "503", "resourceexhausted", "toomanyrequests",
+        "unavailable", "high demand", "try again later", "rate limit",
+    )
+    return any(t in error_msg for t in retryable_tokens)
+
+
+def _is_daily_quota(error_msg):
+    return any(t in error_msg for t in ("daily", "per_day", "rpd"))
+
+
+def _handle_transient(error_msg, retries, delay, exc):
+    """Back off on a transient error; advance to the next model on the ceiling.
+
+    Returns (retries, delay) to continue the retry loop, or raises when no
+    fallback model remains.
+    """
+    if _is_daily_quota(error_msg):
+        if _advance_model():
+            return 0, config.BACKOFF_INITIAL_DELAY
+        wait_until_midnight_utc()
+        return retries, delay
+
+    retries += 1
+    if retries > config.BACKOFF_MAX_RETRIES:
+        if _advance_model():
+            return 0, config.BACKOFF_INITIAL_DELAY
+        if "503" in error_msg or "unavailable" in error_msg or "high demand" in error_msg:
+            print(f"❌ Max retries ({config.BACKOFF_MAX_RETRIES}) reached for 503 UNAVAILABLE error.")
+        else:
+            print(f"❌ Max retries ({config.BACKOFF_MAX_RETRIES}) reached for 429 Rate Limit error.")
+        raise exc
+
+    print(f"⚠️  Transient API error encountered. Backing off for {delay:.1f}s (Retry {retries}/{config.BACKOFF_MAX_RETRIES})...")
+    time.sleep(delay)
+    return retries, min(delay * config.BACKOFF_FACTOR, config.BACKOFF_MAX_DELAY)
 
 
 def retry_with_exponential_backoff(func):
@@ -61,40 +95,14 @@ def retry_with_exponential_backoff(func):
             except APIError as e:
                 error_msg = str(e).lower()
                 status_code = getattr(e, "code", None)
-                if status_code == 429 or "resourceexhausted" in error_msg or "toomanyrequests" in error_msg:
-                    if "daily" in error_msg or "per_day" in error_msg or "rpd" in error_msg:
-                        if _advance_model():
-                            retries = 0
-                            delay = config.BACKOFF_INITIAL_DELAY
-                            continue
-                        wait_until_midnight_utc()
-                        continue
-                    retries += 1
-                    if retries > config.BACKOFF_MAX_RETRIES:
-                        if _advance_model():
-                            retries = 0
-                            delay = config.BACKOFF_INITIAL_DELAY
-                            continue
-                        print(f"❌ Max retries ({config.BACKOFF_MAX_RETRIES}) reached for 429 Rate Limit error.")
-                        raise e
-                    print(f"⚠️  Rate limit 429 encountered. Backing off for {delay:.1f}s (Retry {retries}/{config.BACKOFF_MAX_RETRIES})...")
-                    time.sleep(delay)
-                    delay = min(delay * config.BACKOFF_FACTOR, config.BACKOFF_MAX_DELAY)
+                if _is_retryable(error_msg, status_code):
+                    retries, delay = _handle_transient(error_msg, retries, delay, e)
                 else:
                     raise e
             except Exception as e:
                 error_msg = str(e).lower()
-                if "429" in error_msg or "resourceexhausted" in error_msg or "rate limit" in error_msg:
-                    retries += 1
-                    if retries > config.BACKOFF_MAX_RETRIES:
-                        if _advance_model():
-                            retries = 0
-                            delay = config.BACKOFF_INITIAL_DELAY
-                            continue
-                        raise e
-                    print(f"⚠️  Rate limit encountered. Backing off for {delay:.1f}s (Retry {retries}/{config.BACKOFF_MAX_RETRIES})...")
-                    time.sleep(delay)
-                    delay = min(delay * config.BACKOFF_FACTOR, config.BACKOFF_MAX_DELAY)
+                if _is_retryable(error_msg, getattr(e, "code", None)):
+                    retries, delay = _handle_transient(error_msg, retries, delay, e)
                 else:
                     raise e
     return wrapper

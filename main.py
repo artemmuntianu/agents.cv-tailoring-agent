@@ -2,6 +2,7 @@ import os
 import sys
 from agent.graph import create_graph
 from agent.state import State
+from utils.model_state import init_model_state
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -35,6 +36,10 @@ def run_cv_tailoring(cv_path: str, job_desc_path: str, output_path: str):
         "image_paths": [],
         "is_approved": False
     }
+
+    # Restore persistence: resume from the last known-good model and skip models
+    # that recently failed, so we don't waste retries on a rate-limited model.
+    init_model_state()
 
     graph = create_graph()
     final_state = graph.invoke(initial_state)

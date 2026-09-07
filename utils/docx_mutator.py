@@ -12,6 +12,14 @@ def _clean_char(c: str) -> str:
 def _norm_str(s: str) -> str:
     return "".join(_clean_char(c) for c in s)
 
+
+def _strip_leading_bullet(s: str) -> str:
+    """Remove a leading bullet/list marker so Word does not render a double bullet."""
+    for prefix in ("• ", "- ", "* ", "o ", "– ", "— ", "•", "-", "*", "–", "—"):
+        if s.startswith(prefix):
+            return s[len(prefix):].strip()
+    return s
+
 def iter_all_paragraphs(container, seen=None):
     if seen is None:
         seen = set()
@@ -30,6 +38,7 @@ def iter_all_paragraphs(container, seen=None):
                     yield from iter_all_paragraphs(cell, seen)
 
 def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
+    tailored_text = _strip_leading_bullet(tailored_text)
     if not original_text or original_text == tailored_text:
         return False
         
