@@ -1,5 +1,9 @@
 import os
 
+GEMINI_API_KEY = ""
+if GEMINI_API_KEY:
+    os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
+
 MODEL_NAME = "gemini-2.5-flash"
 MAX_REVISIONS = 3
 RENDER_DPI = 70

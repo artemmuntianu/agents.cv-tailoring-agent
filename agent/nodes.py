@@ -35,9 +35,14 @@ def _call_gemini_vision_eval(client, contents):
     )
     return LayoutCheckResult.model_validate_json(response.text)
 
+def get_genai_client():
+    if getattr(config, "GEMINI_API_KEY", None):
+        return genai.Client(api_key=config.GEMINI_API_KEY)
+    return genai.Client()
+
 def adapt_text(state: State) -> State:
     print(f"\n✏️  [Node: adapt_text] Starting revision #{state['revision_count'] + 1}...")
-    client = genai.Client()
+    client = get_genai_client()
     cv_text = extract_doc_text()
     
     prompt = f"""You are a professional CV tailoring expert.
@@ -87,7 +92,7 @@ def render(state: State) -> State:
 
 def vision_check(state: State) -> State:
     print(f"👁️  [Node: vision_check] Evaluating visual document layout with Gemini Vision...")
-    client = genai.Client()
+    client = get_genai_client()
     
     pil_images = [Image.open(p) for p in state["image_paths"]]
     
