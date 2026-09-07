@@ -4,6 +4,7 @@ class State(TypedDict):
     cv_path: str
     job_description: str
     output_path: str
+    target_role_title: str
     current_cv_text: str
     modifications: List[Dict[str, str]]
     layout_feedback: str

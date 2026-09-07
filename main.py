@@ -3,6 +3,9 @@ import sys
 from agent.graph import create_graph
 from agent.state import State
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 def run_cv_tailoring(cv_path: str, job_desc_path: str, output_path: str):
     print("🚀 Starting Automated CV Tailoring Agent...")
     print(f"📂 CV Path: {cv_path}")
@@ -24,6 +27,7 @@ def run_cv_tailoring(cv_path: str, job_desc_path: str, output_path: str):
         "cv_path": cv_path,
         "job_description": job_description_text,
         "output_path": output_path,
+        "target_role_title": "",
         "current_cv_text": "",
         "modifications": [],
         "layout_feedback": "",

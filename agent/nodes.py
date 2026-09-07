@@ -4,10 +4,29 @@ from google import genai
 from google.genai import types
 import config
 from agent.state import State
-from agent.models import TextModificationList, LayoutCheckResult
+from agent.models import TextModificationList, LayoutCheckResult, JobRoleExtraction
 from utils.retry import retry_with_exponential_backoff
 from utils.docx_mutator import extract_doc_text, apply_text_replacements
 from utils.renderer import convert_docx_to_pdf, convert_pdf_to_images
+
+@retry_with_exponential_backoff
+def _call_gemini_extract_role(client, job_description: str) -> str:
+    prompt = f"""Extract the exact or primary target role title from this job description.
+Return json matching schema with target_role_title.
+
+JOB DESCRIPTION:
+{job_description}"""
+    response = client.models.generate_content(
+        model=config.MODEL_NAME,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=JobRoleExtraction,
+            temperature=0.0,
+        ),
+    )
+    res = JobRoleExtraction.model_validate_json(response.text)
+    return res.target_role_title.strip()
 
 @retry_with_exponential_backoff
 def _call_gemini_text_adaptation(client, prompt):
@@ -45,13 +64,23 @@ def adapt_text(state: State) -> State:
     client = get_genai_client()
     cv_text = extract_doc_text(state["cv_path"])
     
+    target_role_title = state.get("target_role_title")
+    if not target_role_title:
+        target_role_title = _call_gemini_extract_role(client, state["job_description"])
+        print(f"🎯 [Role Extraction] Extracted Target Role Title: '{target_role_title}'")
+
     prompt = f"""You are a professional CV tailoring expert.
 Tailor the candidate's CV text to match the provided job description.
+
+TARGET ROLE TITLE FROM JOB DESCRIPTION:
+"{target_role_title}"
 
 RULES:
 1. DO NOT fabricate false experience, metrics, or positions.
 2. Rephrase existing achievements using the (Action + Context + Result) formula to highlight relevant keywords.
-3. Return exact ("original_text", "tailored_text") pairs where "original_text" MUST be an EXACT verbatim sentence or bullet point copied from the provided CV text.
+3. MANDATORY RULE FOR [HEADER_TITLE]:
+   You MUST adapt the primary professional title in the candidate's resume header (e.g. "AI-Native Senior Software Engineer | Tech Lead") to closely align with the targeted role title from the job description ("{target_role_title}"), while retaining core engineering seniority (e.g. "Senior Solution Architect | Ex-Tech Lead" or "Senior Solution Architect (.NET / Azure)"). Do NOT leave the header title unadapted if the job title differs significantly from the candidate's existing title.
+4. Return exact ("original_text", "tailored_text", "reason") pairs where "original_text" MUST be an EXACT verbatim sentence or bullet point copied from the provided CV text. Provide a clear "reason" explaining why this change was made to match the job description.
 """
     if state.get("layout_feedback"):
         prompt += f"\nCRITICAL VISUAL FEEDBACK FROM PREVIOUS LAYOUT INSPECTION:\n{state['layout_feedback']}\nAdjust phrases to be more concise to fix page overflow and widow/orphan lines."
@@ -59,21 +88,39 @@ RULES:
     prompt += f"\n\nCURRENT CV TEXT:\n{cv_text}\n\nJOB DESCRIPTION:\n{state['job_description']}"
 
     mod_result = _call_gemini_text_adaptation(client, prompt)
-    replacements = [(m.original_text, m.tailored_text) for m in mod_result.modifications]
+    replacements = [(m.original_text, m.tailored_text, getattr(m, "reason", "N/A")) for m in mod_result.modifications]
+
+    print(f"\n💡 Generated {len(mod_result.modifications)} suggested modification(s) from LLM:")
+    for idx, m in enumerate(mod_result.modifications, 1):
+        r_reason = getattr(m, "reason", "N/A")
+        print(f"\n  [Suggested #{idx}]")
+        print(f"    • Original:    {m.original_text}")
+        print(f"    • Replacement: {m.tailored_text}")
+        print(f"    • Reason:      {r_reason}")
     
     applied_count = apply_text_replacements(
         doc_path=state["cv_path"],
         replacements=replacements,
         output_path=state["output_path"]
     )
-    print(f"✅ Applied {applied_count} text replacements to DOCX.")
+    print(f"\n✅ Total Applied: {applied_count}/{len(replacements)} text replacement(s) successfully written to DOCX.")
+
+    mod_dicts = [
+        {
+            "original_text": m.original_text,
+            "tailored_text": m.tailored_text,
+            "reason": getattr(m, "reason", "N/A")
+        }
+        for m in mod_result.modifications
+    ]
 
     if applied_count == 0:
         print("⚠️  No text replacements could be applied to the DOCX. Stopping process.")
         return {
             **state,
+            "target_role_title": target_role_title,
             "current_cv_text": cv_text,
-            "modifications": [{"original_text": m.original_text, "tailored_text": m.tailored_text} for m in mod_result.modifications],
+            "modifications": mod_dicts,
             "revision_count": state["revision_count"] + 1,
             "is_approved": True,
             "layout_feedback": "Stopped: No text replacements applied to DOCX."
@@ -81,8 +128,9 @@ RULES:
 
     return {
         **state,
+        "target_role_title": target_role_title,
         "current_cv_text": cv_text,
-        "modifications": [{"original_text": m.original_text, "tailored_text": m.tailored_text} for m in mod_result.modifications],
+        "modifications": mod_dicts,
         "revision_count": state["revision_count"] + 1
     }
 

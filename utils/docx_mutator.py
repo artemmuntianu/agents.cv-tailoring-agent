@@ -118,11 +118,28 @@ def apply_text_replacements(doc_path, replacements, output_path):
     count = 0
     all_paragraphs = list(iter_all_paragraphs(doc))
 
-    for original_text, tailored_text in replacements:
+    print(f"\n📝 [Step: apply_text_replacements] Processing {len(replacements)} suggested text block replacement(s)...")
+    for idx, item in enumerate(replacements, 1):
+        if len(item) == 3:
+            original_text, tailored_text, reason = item
+        else:
+            original_text, tailored_text = item[:2]
+            reason = "N/A"
+
+        applied = False
         for p in all_paragraphs:
             if _replace_text_in_paragraph(p, original_text, tailored_text):
                 count += 1
+                applied = True
+                print(f"\n  [Replacement #{idx}/{len(replacements)}] ✅ Applied to DOCX:")
+                print(f"    • Original:    {original_text}")
+                print(f"    • Replacement: {tailored_text}")
+                print(f"    • Reason:      {reason}")
                 break
+        if not applied:
+            print(f"\n  [Replacement #{idx}/{len(replacements)}] ⚠️  Could NOT find matching target text in DOCX:")
+            print(f"    • Original:    {original_text}")
+            print(f"    • Reason:      {reason}")
 
     doc.save(output_path)
     return count
@@ -198,13 +215,15 @@ STATIC_CV_DATA = {
 
 def get_encoded_cv_text():
     lines = [
-        f"{STATIC_CV_DATA['header']['name']} - {STATIC_CV_DATA['header']['title']}",
+        STATIC_CV_DATA['header']['name'],
+        STATIC_CV_DATA['header']['title'],
         "\nSUMMARY:",
         STATIC_CV_DATA['summary'],
         "\nRELEVANT SKILLS:"
     ]
     for category, skills in STATIC_CV_DATA['skills'].items():
-        lines.append(f"- {category}: {skills}")
+        lines.append(category)
+        lines.append(skills)
         
     lines.append("\nPROFESSIONAL EXPERIENCE:")
     for exp in STATIC_CV_DATA['professional_experience']:
