@@ -38,7 +38,7 @@ def _call_gemini_vision_eval(client, contents):
 def adapt_text(state: State) -> State:
     print(f"\n✏️  [Node: adapt_text] Starting revision #{state['revision_count'] + 1}...")
     client = genai.Client()
-    cv_text = extract_doc_text(state["cv_path"])
+    cv_text = extract_doc_text()
     
     prompt = f"""You are a professional CV tailoring expert.
 Tailor the candidate's CV text to match the provided job description.

@@ -192,17 +192,4 @@ def get_encoded_cv_text():
     return "\n".join(lines)
 
 def extract_doc_text(doc_path=None):
-    if doc_path and os.path.exists(doc_path):
-        doc = docx.Document(doc_path)
-        paragraphs_text = [p.text for p in doc.paragraphs if p.text.strip()]
-        table_text = []
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for p in cell.paragraphs:
-                        if p.text.strip():
-                            table_text.append(p.text)
-        if paragraphs_text or table_text:
-            return "\n".join(paragraphs_text + table_text)
-            
     return get_encoded_cv_text()
