@@ -41,20 +41,7 @@ def run_cv_tailoring(cv_path: str, job_desc_path: str, output_path: str):
     print(f"🔄 Total Revisions: {final_state['revision_count']}")
 
 if __name__ == "__main__":
-    sample_cv = os.path.abspath("sample_cv.docx")
+    sample_cv = os.path.abspath("cv.docx")
     sample_jd = os.path.abspath("job_description.txt")
-    output_cv = os.path.abspath("output_tailored_cv.docx")
-
-    if not os.path.exists(sample_cv) or not os.path.exists(sample_jd):
-        print("💡 Creating sample input files for demonstration...")
-        import docx
-        doc = docx.Document()
-        doc.add_heading("Jane Doe - Senior AI Engineer", level=0)
-        p1 = doc.add_paragraph("Summary: Experienced Python Engineer building LLM applications and automated tools.")
-        p2 = doc.add_paragraph("Experience: Built scalable microservices using Python and FastAPI. Implemented search pipelines with vector databases.")
-        doc.save(sample_cv)
-
-        with open(sample_jd, "w", encoding="utf-8") as f:
-            f.write("We are looking for a Senior AI Engineer skilled in Python, LangGraph, Google GenAI SDK, and automated document processing workflows.")
-
+    output_cv = os.path.abspath("cv_new.docx")
     run_cv_tailoring(sample_cv, sample_jd, output_cv)
