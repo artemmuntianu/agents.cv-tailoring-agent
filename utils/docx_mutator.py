@@ -2,46 +2,85 @@ import os
 import json
 import docx
 
+def _clean_char(c: str) -> str:
+    if c == '\xa0':
+        return ' '
+    if c in ('\u2013', '\u2014'):
+        return '-'
+    return c
+
+def _norm_str(s: str) -> str:
+    return "".join(_clean_char(c) for c in s)
+
+def iter_all_paragraphs(container, seen=None):
+    if seen is None:
+        seen = set()
+    for p in getattr(container, 'paragraphs', []):
+        if p._element not in seen:
+            seen.add(p._element)
+            yield p
+    for table in getattr(container, 'tables', []):
+        if table._element in seen:
+            continue
+        seen.add(table._element)
+        for row in table.rows:
+            for cell in row.cells:
+                if cell._tc not in seen:
+                    seen.add(cell._tc)
+                    yield from iter_all_paragraphs(cell, seen)
+
 def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
     if not original_text or original_text == tailored_text:
         return False
         
     full_text = paragraph.text
+    if not full_text or not full_text.strip():
+        return False
+        
     target_text = original_text.strip()
-    
-    for prefix in ["• ", "o ", "- ", "* "]:
+    for prefix in ["• ", "o ", "- ", "* ", "– ", "— ", "•", "-", "*"]:
         if target_text.startswith(prefix):
             target_text = target_text[len(prefix):].strip()
             
-    if target_text not in full_text:
-        full_text_clean = full_text.replace("\xa0", " ")
-        target_text_clean = target_text.replace("\xa0", " ")
-        if target_text_clean not in full_text_clean:
-            return False
-        target_text = target_text_clean
+    norm_full = _norm_str(full_text)
+    norm_target = _norm_str(target_text)
+    
+    match_start = norm_full.find(norm_target)
+    if match_start == -1:
+        return False
+        
+    match_end = match_start + len(norm_target)
 
     runs = paragraph.runs
     if not runs:
-        paragraph.text = full_text.replace(target_text, tailored_text)
+        paragraph.text = full_text[:match_start] + tailored_text + full_text[match_end:]
         return True
 
     for run in runs:
-        if target_text in run.text:
-            run.text = run.text.replace(target_text, tailored_text)
+        norm_run = _norm_str(run.text)
+        r_start = norm_run.find(norm_target)
+        if r_start != -1:
+            r_end = r_start + len(norm_target)
+            run.text = run.text[:r_start] + tailored_text + run.text[r_end:]
             return True
 
-    combined_text = ""
-    run_ranges = []
-    for idx, run in enumerate(runs):
-        start = len(combined_text)
-        combined_text += run.text
-        end = len(combined_text)
-        run_ranges.append((idx, start, end))
-
-    match_start = combined_text.find(target_text)
+    combined_text = "".join(r.text for r in runs)
+    norm_combined = _norm_str(combined_text)
+    
+    match_start = norm_combined.find(norm_target)
     if match_start == -1:
-        return False
-    match_end = match_start + len(target_text)
+        paragraph.text = full_text[:match_start] + tailored_text + full_text[match_end:]
+        return True
+        
+    match_end = match_start + len(norm_target)
+
+    run_ranges = []
+    curr_len = 0
+    for idx, run in enumerate(runs):
+        start = curr_len
+        curr_len += len(run.text)
+        end = curr_len
+        run_ranges.append((idx, start, end))
 
     affected_runs = []
     for idx, start, end in run_ranges:
@@ -49,17 +88,19 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
             affected_runs.append(idx)
 
     if not affected_runs:
-        return False
+        paragraph.text = combined_text[:match_start] + tailored_text + combined_text[match_end:]
+        return True
 
     first_idx = affected_runs[0]
-    first_run = runs[first_idx]
-    
-    first_start, first_end = run_ranges[first_idx][1], run_ranges[first_idx][2]
-    prefix = first_run.text[:match_start - first_start]
-    
     last_idx = affected_runs[-1]
+
+    first_run = runs[first_idx]
     last_run = runs[last_idx]
-    last_start, last_end = run_ranges[last_idx][1], run_ranges[last_idx][2]
+
+    first_start = run_ranges[first_idx][1]
+    last_start = run_ranges[last_idx][1]
+
+    prefix = first_run.text[:match_start - first_start]
     suffix = last_run.text[match_end - last_start:]
 
     first_run.text = prefix + tailored_text + (suffix if first_idx == last_idx else "")
@@ -75,34 +116,19 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
 def apply_text_replacements(doc_path, replacements, output_path):
     doc = docx.Document(doc_path)
     count = 0
+    all_paragraphs = list(iter_all_paragraphs(doc))
 
     for original_text, tailored_text in replacements:
-        replaced = False
-        for p in doc.paragraphs:
+        for p in all_paragraphs:
             if _replace_text_in_paragraph(p, original_text, tailored_text):
-                replaced = True
                 count += 1
                 break
-                
-        if not replaced:
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for p in cell.paragraphs:
-                            if _replace_text_in_paragraph(p, original_text, tailored_text):
-                                replaced = True
-                                count += 1
-                                break
-                        if replaced:
-                            break
-                    if replaced:
-                        break
-                if replaced:
-                    break
 
     doc.save(output_path)
     return count
 
+def extract_doc_text(doc_path=None):
+    return get_encoded_cv_text()
 
 STATIC_CV_DATA = {
     "header": {
@@ -201,5 +227,4 @@ def get_encoded_cv_text():
         
     return "\n".join(lines)
 
-def extract_doc_text(doc_path=None):
-    return get_encoded_cv_text()
+

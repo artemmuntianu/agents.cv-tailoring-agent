@@ -43,7 +43,7 @@ def get_genai_client():
 def adapt_text(state: State) -> State:
     print(f"\n✏️  [Node: adapt_text] Starting revision #{state['revision_count'] + 1}...")
     client = get_genai_client()
-    cv_text = extract_doc_text()
+    cv_text = extract_doc_text(state["cv_path"])
     
     prompt = f"""You are a professional CV tailoring expert.
 Tailor the candidate's CV text to match the provided job description.
