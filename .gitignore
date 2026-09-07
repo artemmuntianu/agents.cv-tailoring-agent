@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.pdf
+*.png
+output/
+scratch/
+.env
+.idea/
+.vscode/

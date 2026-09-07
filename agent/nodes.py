@@ -1,0 +1,115 @@
+import os
+from PIL import Image
+from google import genai
+from google.genai import types
+import config
+from agent.state import State
+from agent.models import TextModificationList, LayoutCheckResult
+from utils.retry import retry_with_exponential_backoff
+from utils.docx_mutator import extract_doc_text, apply_text_replacements
+from utils.renderer import convert_docx_to_pdf, convert_pdf_to_images
+
+@retry_with_exponential_backoff
+def _call_gemini_text_adaptation(client, prompt):
+    response = client.models.generate_content(
+        model=config.MODEL_NAME,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=TextModificationList,
+            temperature=0.2,
+        ),
+    )
+    return TextModificationList.model_validate_json(response.text)
+
+@retry_with_exponential_backoff
+def _call_gemini_vision_eval(client, contents):
+    response = client.models.generate_content(
+        model=config.MODEL_NAME,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=LayoutCheckResult,
+            temperature=0.1,
+        ),
+    )
+    return LayoutCheckResult.model_validate_json(response.text)
+
+def adapt_text(state: State) -> State:
+    print(f"\n✏️  [Node: adapt_text] Starting revision #{state['revision_count'] + 1}...")
+    client = genai.Client()
+    cv_text = extract_doc_text(state["cv_path"])
+    
+    prompt = f"""You are a professional CV tailoring expert.
+Tailor the candidate's CV text to match the provided job description.
+
+RULES:
+1. DO NOT fabricate false experience, metrics, or positions.
+2. Rephrase existing achievements using the (Action + Context + Result) formula to highlight relevant keywords.
+3. Return exact ("original_text", "tailored_text") pairs where "original_text" matches exact substrings or sentences in the CV text.
+"""
+    if state.get("layout_feedback"):
+        prompt += f"\nCRITICAL VISUAL FEEDBACK FROM PREVIOUS LAYOUT INSPECTION:\n{state['layout_feedback']}\nAdjust phrases to be more concise to fix page overflow and widow/orphan lines."
+
+    prompt += f"\n\nCURRENT CV TEXT:\n{cv_text}\n\nJOB DESCRIPTION:\n{state['job_description']}"
+
+    mod_result = _call_gemini_text_adaptation(client, prompt)
+    replacements = [(m.original_text, m.tailored_text) for m in mod_result.modifications]
+    
+    applied_count = apply_text_replacements(
+        doc_path=state["cv_path"],
+        replacements=replacements,
+        output_path=state["output_path"]
+    )
+    print(f"✅ Applied {applied_count} text replacements to DOCX.")
+
+    return {
+        **state,
+        "current_cv_text": cv_text,
+        "modifications": [{"original_text": m.original_text, "tailored_text": m.tailored_text} for m in mod_result.modifications],
+        "revision_count": state["revision_count"] + 1
+    }
+
+def render(state: State) -> State:
+    print(f"📄 [Node: render] Converting DOCX to PDF and rendering low-res PNGs...")
+    output_dir = os.path.dirname(state["output_path"]) or "."
+    pdf_path = os.path.join(output_dir, "temp_rendered.pdf")
+    
+    convert_docx_to_pdf(state["output_path"], pdf_path)
+    images_dir = os.path.join(output_dir, "rendered_pages")
+    image_paths = convert_pdf_to_images(pdf_path, images_dir, dpi=config.RENDER_DPI)
+    print(f"🖼️  Generated {len(image_paths)} page preview PNG(s) at {config.RENDER_DPI} DPI.")
+    
+    return {
+        **state,
+        "image_paths": image_paths
+    }
+
+def vision_check(state: State) -> State:
+    print(f"👁️  [Node: vision_check] Evaluating visual document layout with Gemini Vision...")
+    client = genai.Client()
+    
+    pil_images = [Image.open(p) for p in state["image_paths"]]
+    
+    prompt = """Analyze the rendered CV page images for formatting quality and visual layout.
+Specifically evaluate:
+1. Are there orphaned or widow lines (e.g. 1-2 lines spilling onto a new page at the end)?
+2. Is the overall spacing, alignment, and formatting visually clean and balanced?
+
+Return json matching schema with fields:
+- is_layout_ok: boolean
+- feedback: string explanation of layout issues (if any) or confirmation of clean layout.
+"""
+    contents = [*pil_images, prompt]
+    result = _call_gemini_vision_eval(client, contents)
+    
+    if result.is_layout_ok:
+        print(f"✅ Visual check passed! Feedback: {result.feedback}")
+    else:
+        print(f"⚠️  Visual check flagged layout issues: {result.feedback}")
+
+    return {
+        **state,
+        "is_approved": result.is_layout_ok,
+        "layout_feedback": result.feedback
+    }
