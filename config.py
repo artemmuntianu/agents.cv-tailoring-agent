@@ -16,4 +16,4 @@ LIBREOFFICE_PATHS = [
     "libreoffice"
 ]
 
-POPPLER_PATH = None
+POPPLER_PATH = r"C:\Tools\poppler\poppler-26.07.0\Library\bin"
