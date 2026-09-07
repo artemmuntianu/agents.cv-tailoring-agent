@@ -5,6 +5,18 @@ if GEMINI_API_KEY:
     os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 
 MODEL_NAME = "gemini-3.5-flash"
+
+# Ordered fallback list (top = most preferred). The retry layer advances to the
+# next model when the current one hits its 429 rate-limit retry ceiling, or when
+# its daily quota (RPD) is exhausted.
+PREFERRED_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+]
 MAX_REVISIONS = 3
 RENDER_DPI = 70
 

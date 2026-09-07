@@ -69,18 +69,34 @@ def adapt_text(state: State) -> State:
         target_role_title = _call_gemini_extract_role(client, state["job_description"])
         print(f"🎯 [Role Extraction] Extracted Target Role Title: '{target_role_title}'")
 
-    prompt = f"""You are a professional CV tailoring expert.
-Tailor the candidate's CV text to match the provided job description.
+    prompt = f"""You are a professional CV tailoring expert optimising a candidate's resume to maximise alignment with a target job description AND to pass Applicant Tracking System (ATS) screening - while NEVER fabricating anything.
+
+You receive the candidate's CURRENT CV TEXT, which contains these sections in order:
+- HEADER (NAME + TITLE)
+- SUMMARY
+- RELEVANT SKILLS (labelled categories)
+- PROFESSIONAL EXPERIENCE (role, company_info, bullet highlights)
+- EDUCATION, CONTACT, LANGUAGES
 
 TARGET ROLE TITLE FROM JOB DESCRIPTION:
 "{target_role_title}"
 
+MISSION:
+Produce text replacements for EVERY relevant section so the resume surfaces the exact keywords and responsibilities the job description requests. You MUST cover ALL of the following sections; do not skip any that exist in the CV text:
+1. HEADER_TITLE
+2. SUMMARY
+3. SKILLS
+4. PROFESSIONAL_EXPERIENCE (role lines and highlight bullets)
+
 RULES:
-1. DO NOT fabricate false experience, metrics, or positions.
-2. Rephrase existing achievements using the (Action + Context + Result) formula to highlight relevant keywords.
-3. MANDATORY RULE FOR [HEADER_TITLE]:
-   You MUST adapt the primary professional title in the candidate's resume header (e.g. "AI-Native Senior Software Engineer | Tech Lead") to closely align with the targeted role title from the job description ("{target_role_title}"), while retaining core engineering seniority (e.g. "Senior Solution Architect | Ex-Tech Lead" or "Senior Solution Architect (.NET / Azure)"). Do NOT leave the header title unadapted if the job title differs significantly from the candidate's existing title.
-4. Return exact ("original_text", "tailored_text", "reason") pairs where "original_text" MUST be an EXACT verbatim sentence or bullet point copied from the provided CV text. Provide a clear "reason" explaining why this change was made to match the job description.
+1. NO FABRICATION (HARD RULE): NEVER invent employers, job titles, dates, companies, projects, certifications, technologies, or metrics that are absent from the CURRENT CV TEXT. Only rephrase and re-weight what already exists. Never claim a technology the candidate has not used. Never alter a real figure (e.g. "2B+", "50%", "80%", "2 times", "300+ endpoints") into a different number, and never add a number that is not in the source.
+2. ATS KEYWORD MATCHING: Rephrase so the exact phrases the job description uses surface naturally as scannable tokens (e.g. "Solution Architect", "Azure", ".NET", "REST API design", "MS SQL Server", "architecture artifacts", "C4 / ADR / HLD / LLD", "security (JWT, OAuth2/OIDC, Key Vault, least-privilege)", "AI/LLM concepts (RAG, embeddings, prompt engineering)", "event-driven architecture", "Service Bus / Event Grid", "clean/onion architecture, Repository, CQRS", "Docker / AKS", "observability (Application Insights)"). Only surface a term if it is genuinely backed by the candidate's real experience.
+3. SUMMARY: Rewrite it (3-5 lines) to lead with the target role title and the top 3-5 MUST-HAVE requirements, framed as proven capability. Keep it strictly factual - do not claim deep mastery of something not evidenced on the CV.
+4. SKILLS: Reword the category labels and line items so the job description's keywords become the visible tokens (e.g. Azure services, .NET/C#, REST API design & contracts, MS SQL Server design/tuning, AI & LLM: RAG / embeddings / prompt engineering / agentic orchestration, architecture patterns). Do not add new technologies.
+5. HEADER_TITLE: MUST adapt the title to closely match the target role while preserving the candidate's genuine seniority, e.g. "Senior Solution Architect (.NET / Azure) | AI-Native Engineering Lead". Keep the candidate's NAME unchanged. If the job title differs from the current title, it MUST be adapted.
+6. PROFESSIONAL_EXPERIENCE: Rephrase each highlight using the (Action + Context + Result) formula, front-loading the job description's responsibility keywords (end-to-end solution design, REST API contracts, MS SQL Server schema/performance, Azure cloud architecture, architecture artifacts & clear documentation, communicating trade-offs). Keep every real metric exactly as-is.
+7. Keep each replacement readable and roughly the same length as the original. Do not merge, split, or drop bullets; keep the same count and order of experience entries.
+8. Output (original_text, tailored_text, reason) triples where original_text MUST be an EXACT verbatim string copied from the CURRENT CV TEXT (a full bullet, the title line, or a whole skill line). reason must state which job-description requirement the change now targets.
 """
     if state.get("layout_feedback"):
         prompt += f"\nCRITICAL VISUAL FEEDBACK FROM PREVIOUS LAYOUT INSPECTION:\n{state['layout_feedback']}\nAdjust phrases to be more concise to fix page overflow and widow/orphan lines."

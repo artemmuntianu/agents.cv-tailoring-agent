@@ -25,6 +25,31 @@ def wait_until_midnight_utc():
         seconds_remaining -= 1
     print("\n✅ Midnight UTC reached! Resuming operation...")
 
+def _preferred_models():
+    models = getattr(config, "PREFERRED_MODELS", None)
+    return list(models) if models else [config.MODEL_NAME]
+
+
+def _advance_model():
+    """Advance config.MODEL_NAME to the next preferred model.
+
+    Returns True if a fallback model was selected, False if the current model
+    is already the last in the list (or not present in the preferred list).
+    """
+    models = _preferred_models()
+    try:
+        idx = models.index(config.MODEL_NAME)
+    except ValueError:
+        print("⚠️  Current MODEL_NAME is not in PREFERRED_MODELS; cannot auto-switch to a fallback.")
+        return False
+    if idx + 1 >= len(models):
+        print("⚠️  All preferred models exhausted; re-raising the rate-limit error.")
+        return False
+    config.MODEL_NAME = models[idx + 1]
+    print(f"\n🔁 Rate limit on previous model — switching MODEL_NAME to '{config.MODEL_NAME}'.")
+    return True
+
+
 def retry_with_exponential_backoff(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -38,10 +63,18 @@ def retry_with_exponential_backoff(func):
                 status_code = getattr(e, "code", None)
                 if status_code == 429 or "resourceexhausted" in error_msg or "toomanyrequests" in error_msg:
                     if "daily" in error_msg or "per_day" in error_msg or "rpd" in error_msg:
+                        if _advance_model():
+                            retries = 0
+                            delay = config.BACKOFF_INITIAL_DELAY
+                            continue
                         wait_until_midnight_utc()
                         continue
                     retries += 1
                     if retries > config.BACKOFF_MAX_RETRIES:
+                        if _advance_model():
+                            retries = 0
+                            delay = config.BACKOFF_INITIAL_DELAY
+                            continue
                         print(f"❌ Max retries ({config.BACKOFF_MAX_RETRIES}) reached for 429 Rate Limit error.")
                         raise e
                     print(f"⚠️  Rate limit 429 encountered. Backing off for {delay:.1f}s (Retry {retries}/{config.BACKOFF_MAX_RETRIES})...")
@@ -54,6 +87,10 @@ def retry_with_exponential_backoff(func):
                 if "429" in error_msg or "resourceexhausted" in error_msg or "rate limit" in error_msg:
                     retries += 1
                     if retries > config.BACKOFF_MAX_RETRIES:
+                        if _advance_model():
+                            retries = 0
+                            delay = config.BACKOFF_INITIAL_DELAY
+                            continue
                         raise e
                     print(f"⚠️  Rate limit encountered. Backing off for {delay:.1f}s (Retry {retries}/{config.BACKOFF_MAX_RETRIES})...")
                     time.sleep(delay)
