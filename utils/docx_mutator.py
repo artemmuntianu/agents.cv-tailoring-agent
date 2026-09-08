@@ -158,35 +158,16 @@ def extract_doc_text(doc_path=None):
 
 STATIC_CV_DATA = {
     "header": {
-        "name": "ARTEM MUNTIANU",
-        "title": "AI-Native Senior Software Engineer | Tech Lead"
+        "title": "Senior Software Engineer | Ex-TechLead | Ex-Founder"
     },
     "summary": "Senior Fullstack Engineer & Tech Lead with 13+ years of experience building high-traffic web applications, analytics platforms, microservices, and AI-driven solutions. Proven track record in modernizing large-scale enterprise systems using .NET Core, Angular, and AI-agent orchestration. Strong expertise in leading engineering teams, system architecture, and cloud services (Azure/GCP). Passionate about AI-native development, team performance, and building secure, scalable software.",
     "skills": {
         "AI & Agentic Workflows": "Multi-Agent Orchestration, Custom AI Agents, Prompt Engineering, MCP, n8n, Cursor, LLMs (OpenAI, Anthropic, Google AI).",
         "Frontend": "Angular, React, Next.js, Astro",
-        "Backend": ".NET Core, REST APIs, Microservices",
+        "Backend": ".NET Core, Python, REST APIs, Microservices",
         "Databases & Cloud": "MSSQL Server, Postgres, Azure, GCP.",
         "Testing & DevOps": "Jest, Playwright.",
         "Leadership & Methodology": "System Architecture, Technical Planning, Team Mentoring, Agile/Scrum, Lean."
-    },
-    "education": [
-        {
-            "degree": "MSc in Software Engineering",
-            "institution": "Ukraine National University",
-            "period": "2007 – 2012"
-        }
-    ],
-    "contact": {
-        "email": "artemmuntianu@gmail.com",
-        "linkedin": "linkedin.com/in/artematdatopus",
-        "location": "Portugal",
-        "phone": "(+351) 913 316 091"
-    },
-    "languages": {
-        "English": "B2 (Upper-Intermediate)",
-        "Portuguese": "A1",
-        "Ukrainian": "Native"
     },
     "professional_experience": [
         {
@@ -205,7 +186,6 @@ STATIC_CV_DATA = {
             "highlights": [
                 "Established and directed an engineering team.",
                 "Optimized workflow by implementing practices from Agile and Lean philosophies.",
-                "Led the full development lifecycle for two critical business websites: Sales Website: Developed with Next.js, React, and deployed on Azure; Analytics Web Portal: Built using .NET, Angular, and deployed on Azure with GCP integration."
             ]
         },
         {
@@ -224,7 +204,6 @@ STATIC_CV_DATA = {
 
 def get_encoded_cv_text():
     lines = [
-        STATIC_CV_DATA['header']['name'],
         STATIC_CV_DATA['header']['title'],
         "\nSUMMARY:",
         STATIC_CV_DATA['summary'],
@@ -240,19 +219,5 @@ def get_encoded_cv_text():
         lines.append(f"{exp['company_info']}")
         for h in exp['highlights']:
             lines.append(f"• {h}")
-            
-    lines.append("\nEDUCATION:")
-    for edu in STATIC_CV_DATA['education']:
-        lines.append(f"{edu['degree']}, {edu['institution']} ({edu['period']})")
-        
-    lines.append("\nCONTACT:")
-    for k, v in STATIC_CV_DATA['contact'].items():
-        lines.append(f"{k.capitalize()}: {v}")
-        
-    lines.append("\nLANGUAGES:")
-    for lang, level in STATIC_CV_DATA['languages'].items():
-        lines.append(f"{lang}: {level}")
         
     return "\n".join(lines)
-
-

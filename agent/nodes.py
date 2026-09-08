@@ -76,7 +76,6 @@ You receive the candidate's CURRENT CV TEXT, which contains these sections in or
 - SUMMARY
 - RELEVANT SKILLS (labelled categories)
 - PROFESSIONAL EXPERIENCE (role, company_info, bullet highlights)
-- EDUCATION, CONTACT, LANGUAGES
 
 TARGET ROLE TITLE FROM JOB DESCRIPTION:
 "{target_role_title}"
@@ -175,12 +174,9 @@ def vision_check(state: State) -> State:
     prompt = """Analyze the rendered CV page images for formatting quality and visual layout.
 
 IMPORTANT LAYOUT GUIDELINES:
-1. This CV design uses a two-column template layout with a left sidebar (skills/education/contact) and a right main section (experience).
-2. It is EXPECTED and ACCEPTABLE for page 2 (and subsequent pages) to have an empty left sidebar if all sidebar sections are completed on page 1. Do NOT flag an empty left sidebar on page 2 as a layout flaw or issue.
-3. It is ACCEPTABLE for page 2 to contain bullet points continuing the final job entry.
-4. ONLY flag severe formatting defects, such as:
-   - 1 single line orphaned at the bottom or top of a page (widow line cut off abruptly).
-   - Overlapping text, text extending past margin boundaries, or corrupt unreadable characters.
+* Layout & Page Flow: Accept two-column design with sidebar ending on page 1. Allow natural overflow to page 2 (even partial pages or multi-page entry splits). Never propose margin, font, or spacing tweaks for page fitting.
+* Ignore Design Non-Issues: Do not flag orphan lines, minor overflows, or the intentional overlap between 'AI & Agentic Workflows' and the 'RELEVANT SKILLS' header background bar.
+* Focus & Scope: Flag only severe structural or visual defects. Prioritize content readability, technical accuracy, and structural hierarchy over page count.
 
 Return json matching schema with fields:
 - is_layout_ok: boolean

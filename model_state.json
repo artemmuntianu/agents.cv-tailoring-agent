@@ -1,11 +1,6 @@
 {
-  "current_model": "gemini-3.6-flash",
+  "current_model": "gemini-3.5-flash",
   "unavailable": [
-    {
-      "name": "gemini-3.5-flash",
-      "reason": "retry ceiling reached",
-      "recorded_at": "2026-09-07T18:09:49.963748+00:00"
-    }
   ],
-  "updated_at": "2026-09-07T18:09:49.963777+00:00"
+  "updated_at": "2026-09-08T17:02:09.887845+00:00"
 }
