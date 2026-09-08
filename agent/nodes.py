@@ -152,11 +152,12 @@ RULES:
 
 def render(state: State) -> State:
     print(f"📄 [Node: render] Converting DOCX to PDF and rendering low-res PNGs...")
-    output_dir = os.path.dirname(state["output_path"]) or "."
-    pdf_path = os.path.join(output_dir, "temp_rendered.pdf")
+    temp_dir = state.get("temp_dir", "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+    pdf_path = os.path.join(temp_dir, "temp_rendered.pdf")
     
     convert_docx_to_pdf(state["output_path"], pdf_path)
-    images_dir = os.path.join(output_dir, "rendered_pages")
+    images_dir = os.path.join(temp_dir, "rendered_pages")
     image_paths = convert_pdf_to_images(pdf_path, images_dir, dpi=config.RENDER_DPI)
     print(f"🖼️  Generated {len(image_paths)} page preview PNG(s) at {config.RENDER_DPI} DPI.")
     

@@ -1,0 +1,55 @@
+Role Overview
+
+We’re looking for a Junior—Mid Solution Architect to join our platform engineering team. You will help translate business needs into practical, secure, and scalable solutions on Azure using .NET, working closely with engineering, product, and operations across multiple domains.
+
+Responsibilities
+
+· Design end-to-end solutions for platform modules — services, integrations, data pipelines, and security boundaries.
+
+· Produce and maintain lightweight architecture artifacts: C4 diagrams, ADRs, HLD/LLD outlines, sequence diagrams, NFR catalogues.
+
+· Define and review REST APIs: contracts/DTOs, error models, pagination/filtering, versioning, and backward compatibility.
+
+· Support data design on MS SQL Server: schema, migrations, indexing, query performance, and data access patterns.
+
+· Contribute to cloud and runtime decisions on Azure (App Service, Functions, Service Bus, Event Grid, Key Vault, Storage, API Management).
+
+· Participate in design reviews, incident retrospectives, and reliability/performance improvement cycles.
+
+· Document decisions clearly and communicate trade-offs across engineering, product, and business stakeholders.
+
+Requirements — Must Have
+
+· 3–5+ years building backend systems with .NET (C#).
+
+· Azure hands-on experience with core cloud concepts: networking, identity, compute, storage, messaging.
+
+· REST API design strong understanding of integration patterns — sync/async, idempotency, contracts.
+
+· MS SQL Server schema design, indexes, transactions, query tuning, migrations (EF Migrations / DbUp or equivalent).
+
+· Security fundamentals: JWT, OAuth2/OIDC at integration and configuration level; secret management; least-privilege thinking.
+
+· Application design patterns: familiarity with layered/clean architecture, Repository, CQRS basics — and the judgment to apply them with guidance.
+
+· AI/LLM awareness: understands what RAG, embeddings, and prompt engineering are at a conceptual level; can ask the right questions when evaluating an AI integration proposal.
+
+· Communication: ability to document decisions clearly and work with multiple teams.
+
+Requirements — Nice to Have
+
+These are areas we’ll invest in together — not prerequisites.
+
+· Event-driven architecture: Azure Service Bus / Event Grid, outbox pattern, consumer group design.
+
+· Containers and orchestration: Docker, AKS / Kubernetes concepts, Helm basics.
+
+· Observability: Application Insights, OpenTelemetry, structured logging, distributed tracing, alerting.
+
+· Advanced design patterns: Domain-Driven Design (bounded contexts, aggregates, domain events); Event Sourcing; Saga / process manager; Modular Monolith as a stepping stone to services.
+
+· Advanced AI/LLM experience: production RAG deployments (chunking, vector stores, re-ranking, evaluation); Azure OpenAI / Azure AI Search; agentic patterns (tool use, Semantic Kernel / LangChain); AI-specific NFRs — latency, rate limits, grounding, PII handling.
+
+· API Management patterns: gateway policies, rate limiting, developer portal.
+
+        Відгукнутись на вакансію

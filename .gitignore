@@ -7,7 +7,9 @@ ENV/
 *.pdf
 *.png
 *.docx
+!input/cv.docx
 output/
+temp/
 scratch/
 .env
 .idea/
