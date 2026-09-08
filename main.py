@@ -11,15 +11,16 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_DIR = os.path.join(BASE_DIR, "input")
-OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-TEMP_DIR = os.path.join(BASE_DIR, "temp")
+ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
+INPUT_DIR = os.path.join(ARTIFACTS_DIR, "input")
+OUTPUT_DIR = os.path.join(ARTIFACTS_DIR, "output")
+TEMP_DIR = os.path.join(ARTIFACTS_DIR, "temp")
 
 JD_FILE_PATTERN = "jd_*.txt"
 
 
 def ensure_directories() -> None:
-    """Make sure input/, output/ and temp/ exist at the project root."""
+    """Make sure artifacts/input, artifacts/output and artifacts/temp exist."""
     for directory in (INPUT_DIR, OUTPUT_DIR, TEMP_DIR):
         os.makedirs(directory, exist_ok=True)
 
