@@ -116,6 +116,14 @@ def main() -> None:
         output_cv = os.path.join(OUTPUT_DIR, f"cv_{jd_id}.docx")
         run_temp_dir = os.path.join(TEMP_DIR, jd_id)
 
+        # Skip JDs whose tailored .docx already exists in the output folder.
+        if os.path.exists(output_cv):
+            print("=" * 72)
+            print(f"⏭️  Skipping JD {index}/{total}: {os.path.basename(job_desc_path)}")
+            print(f"   ✅ Output CV already exists, skipping: {output_cv}")
+            print("=" * 72)
+            continue
+
         print("=" * 72)
         print(f"🔄 Processing JD {index}/{total}: {os.path.basename(job_desc_path)}")
         print(f"   📄 Output CV: {output_cv}")
