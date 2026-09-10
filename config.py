@@ -1,6 +1,9 @@
 import os
 
-GEMINI_API_KEY = "REDACTED_BY_OPENCLAW"
+# Read API key from environment variable
+GCP_API_KEY = os.getenv("GCP_API_KEY")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 
