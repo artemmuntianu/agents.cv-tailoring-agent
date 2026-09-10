@@ -2,6 +2,18 @@ import os
 import json
 import docx
 
+# utils/docx_mutator.py lives one level below the repo root.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Static CV data model (header / summary / skills / professional_experience).
+CV_DATA_JSON = os.path.join(BASE_DIR, "artifacts", "cv_data.json")
+
+
+def _load_cv_data(path=CV_DATA_JSON):
+    """Load the static CV data model from the artifacts JSON file."""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _clean_char(c: str) -> str:
     if c == '\xa0':
         return ' '
@@ -19,6 +31,63 @@ def _strip_leading_bullet(s: str) -> str:
         if s.startswith(prefix):
             return s[len(prefix):].strip()
     return s
+
+
+def _split_lines(text):
+    """Split a string into its non-empty, whitespace-stripped single lines."""
+    return [ln.strip() for ln in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if ln.strip()]
+
+
+def normalize_replacements(items):
+    """
+    Sanitise suggested replacements so no single replacement ever spans more than
+    one paragraph/line of the DOCX.
+
+    The tailoring model sometimes concatenates a SKILLS category label with its
+    value (e.g. "Leadership & Methodology\\nSystem Architecture, ..."). Because a
+    label and its value live in SEPARATE paragraphs in the DOCX, such a
+    concatenated original_text can never be matched. This function splits any
+    multi-line replacement into one clean, single-line (original, tailored,
+    reason) entry per aligned line, drops entries whose line counts do not match,
+    strips leading bullet markers (which Word would render as a double bullet) and
+    drops no-op entries (original == tailored).
+
+    Items may be (original, tailored) or (original, tailored, reason) tuples.
+    """
+    normalized = []
+    for item in items:
+        if len(item) == 3:
+            original_text, tailored_text, reason = item
+        else:
+            original_text, tailored_text = item[:2]
+            reason = "N/A"
+
+        original_text = _strip_leading_bullet(original_text.strip())
+        tailored_text = _strip_leading_bullet(tailored_text.strip())
+
+        original_lines = _split_lines(original_text)
+        tailored_lines = _split_lines(tailored_text)
+
+        # Multi-line (concatenated label + value) replacement: split into pairs.
+        if len(original_lines) > 1 or len(tailored_lines) > 1:
+            if len(original_lines) != len(tailored_lines):
+                print("  ⚠️  Dropping replacement that spans multiple lines and cannot be aligned:")
+                print(f"      Original: {original_text!r}")
+                print(f"      Tailored: {tailored_text!r}")
+                continue
+            for o_line, t_line in zip(original_lines, tailored_lines):
+                if o_line and t_line and o_line != t_line:
+                    normalized.append((o_line, t_line, reason))
+            continue
+
+        # Normal single-line replacement.
+        o_line = original_lines[0] if original_lines else original_text
+        t_line = tailored_lines[0] if tailored_lines else tailored_text
+        if o_line and t_line and o_line != t_line:
+            normalized.append((o_line, t_line, reason))
+
+    return normalized
+
 
 def iter_all_paragraphs(container, seen=None):
     if seen is None:
@@ -135,6 +204,16 @@ def apply_text_replacements(doc_path, replacements, output_path):
             original_text, tailored_text = item[:2]
             reason = "N/A"
 
+        # Guard: never attempt a replacement that spans multiple paragraphs/lines.
+        # A single paragraph cannot contain a '\n', so a multi-line original_text
+        # (e.g. a SKILLS label concatenated with its value) can never match and
+        # would otherwise corrupt the target-splitting logic below.
+        if "\n" in original_text or "\r" in original_text:
+            print(f"\n  [Replacement #{idx}/{len(replacements)}] ⚠️  Skipped — original_text spans multiple lines and can never match a single paragraph:")
+            print(f"    • Original:    {original_text}")
+            print(f"    • Reason:      {reason}")
+            continue
+
         applied = False
         for p in all_paragraphs:
             if _replace_text_in_paragraph(p, original_text, tailored_text):
@@ -156,51 +235,7 @@ def apply_text_replacements(doc_path, replacements, output_path):
 def extract_doc_text(doc_path=None):
     return get_encoded_cv_text()
 
-STATIC_CV_DATA = {
-    "header": {
-        "title": "Senior Software Engineer | Ex-TechLead | Ex-Founder"
-    },
-    "summary": "Senior Fullstack Engineer & Tech Lead with 13+ years of experience building high-traffic web applications, analytics platforms, microservices, and AI-driven solutions. Proven track record in modernizing large-scale enterprise systems using .NET Core, Angular, and AI-agent orchestration. Strong expertise in leading engineering teams, system architecture, and cloud services (Azure/GCP). Passionate about AI-native development, team performance, and building secure, scalable software.",
-    "skills": {
-        "AI & Agentic Workflows": "Multi-Agent Orchestration, Custom AI Agents, Prompt Engineering, MCP, n8n, Cursor, LLMs (OpenAI, Anthropic, Google AI).",
-        "Frontend": "Angular, React, Next.js, Astro",
-        "Backend": ".NET Core, Python, REST APIs, Microservices",
-        "Databases & Cloud": "MSSQL Server, Postgres, Azure, GCP.",
-        "Testing & DevOps": "Jest, Playwright.",
-        "Leadership & Methodology": "System Architecture, Technical Planning, Team Mentoring, Agile/Scrum, Lean."
-    },
-    "professional_experience": [
-        {
-            "role": "AI-Native Senior Software Engineer",
-            "company_info": "Codify Technologies | FinTech Project | Aug 2025 – Aug 2026",
-            "highlights": [
-                "Large-Scale FinTech Modernization: End-to-end migration of 50 desktop screens and 10 WCF services (300+ endpoints across 5 repos) from legacy WinForms to a modern web architecture (.NET Core REST APIs + Angular), executing a seamless transition via WebView2.",
-                "Multi-Agent Architecture: Designed a multiagent orchestration framework using OpenAI & Anthropic models, accelerating migration by 50% and test creation by 80% while enforcing strict human-in-the-loop code ownership and integration in PROD.",
-                "Architecture, Security & APIM Gateway: Authored technical specifications; deployed specialized subagents for direct SQL-to-StoredProcedure refactoring, WCF-to-REST conversion, and Azure API Management perimeter security policies.",
-                "QA Automation Enablement: Formulated a comprehensive testing strategy (Jest + Playwright) and automated the injection of standardized automation-id attributes across UI components to empower e2e QA workflows."
-            ]
-        },
-        {
-            "role": "Founder",
-            "company_info": "Datopus, Portugal | Product Analytics Platform | July 2024 – June 2025",
-            "highlights": [
-                "Established and directed an engineering team.",
-                "Optimized workflow by implementing practices from Agile and Lean philosophies.",
-            ]
-        },
-        {
-            "role": "Tech Team Lead & Senior Software Engineer",
-            "company_info": "Tangiblee, USA | Multiple projects | February 2013 – July 2024",
-            "highlights": [
-                "Led the technical design and development of high-traffic, customer-facing web applications using React, Angular and .NET, processing 2B+ monthly requests.",
-                "Mentored a cross-functional Scrum team of 5 engineers, improving team code quality and increasing feature delivery speed by 25% through enhanced architectural guidance and best practices.",
-                "Architected and implemented new microservices and REST APIs, improving system scalability by 2 times and supporting expansion into new international markets (e.g., LATAM, EU, APAC).",
-                "Drove CI/CD adoption and DevOps mindset, resulting in a 50% increase in deployment frequency and a 25% reduction in time-to-market for new features.",
-                "Collaborated with Stakeholders, Product, Marketing and UX teams, translating complex requirements into scalable technical solutions for enterprise-grade projects."
-            ]
-        }
-    ]
-}
+STATIC_CV_DATA = _load_cv_data(CV_DATA_JSON)
 
 def get_encoded_cv_text():
     lines = [

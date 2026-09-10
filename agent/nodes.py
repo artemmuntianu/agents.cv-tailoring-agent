@@ -6,7 +6,7 @@ import config
 from agent.state import State
 from agent.models import TextModificationList, LayoutCheckResult, JobRoleExtraction
 from utils.retry import retry_with_exponential_backoff
-from utils.docx_mutator import extract_doc_text, apply_text_replacements
+from utils.docx_mutator import extract_doc_text, apply_text_replacements, normalize_replacements
 from utils.renderer import convert_docx_to_pdf, convert_pdf_to_images
 
 @retry_with_exponential_backoff
@@ -74,7 +74,7 @@ def adapt_text(state: State) -> State:
 You receive the candidate's CURRENT CV TEXT, which contains these sections in order:
 - HEADER (NAME + TITLE)
 - SUMMARY
-- RELEVANT SKILLS (labelled categories)
+- RELEVANT SKILLS (labelled categories - each category label and its skills value are SEPARATE single-line paragraphs)
 - PROFESSIONAL EXPERIENCE (role, company_info, bullet highlights)
 
 TARGET ROLE TITLE FROM JOB DESCRIPTION:
@@ -91,12 +91,13 @@ RULES:
 1. NO FABRICATION (HARD RULE): NEVER invent employers, job titles, dates, companies, projects, certifications, technologies, or metrics that are absent from the CURRENT CV TEXT. Only rephrase and re-weight what already exists. Never claim a technology the candidate has not used. Never alter a real figure (e.g. "2B+", "50%", "80%", "2 times", "300+ endpoints") into a different number, and never add a number that is not in the source.
 2. ATS KEYWORD MATCHING: Rephrase so the exact phrases the job description uses surface naturally as scannable tokens (e.g. "Solution Architect", "Azure", ".NET", "REST API design", "MS SQL Server", "architecture artifacts", "C4 / ADR / HLD / LLD", "security (JWT, OAuth2/OIDC, Key Vault, least-privilege)", "AI/LLM concepts (RAG, embeddings, prompt engineering)", "event-driven architecture", "Service Bus / Event Grid", "clean/onion architecture, Repository, CQRS", "Docker / AKS", "observability (Application Insights)"). Only surface a term if it is genuinely backed by the candidate's real experience.
 3. SUMMARY: Rewrite it (3-5 lines) to lead with the target role title and the top 3-5 MUST-HAVE requirements, framed as proven capability. Keep it strictly factual - do not claim deep mastery of something not evidenced on the CV.
-4. SKILLS: Reword the category labels and line items so the job description's keywords become the visible tokens (e.g. Azure services, .NET/C#, REST API design & contracts, MS SQL Server design/tuning, AI & LLM: RAG / embeddings / prompt engineering / agentic orchestration, architecture patterns). Do not add new technologies.
+4. SKILLS: Reword the category labels AND each skills value line SEPARATELY - a label and its value are two separate target lines, so rephrase each independently so the job description's keywords become the visible tokens (e.g. Azure services, .NET/C#, REST API design & contracts, MS SQL Server design/tuning, AI & LLM: RAG / embeddings / prompt engineering / agentic orchestration, architecture patterns). Do not add new technologies.
 5. HEADER_TITLE: MUST adapt the title to closely match the target role while preserving the candidate's genuine seniority, e.g. "Senior Solution Architect (.NET / Azure) | AI-Native Engineering Lead". Keep the candidate's NAME unchanged. If the job title differs from the current title, it MUST be adapted.
 6. PROFESSIONAL_EXPERIENCE: Rephrase each highlight using the (Action + Context + Result) formula, front-loading the job description's responsibility keywords (end-to-end solution design, REST API contracts, MS SQL Server schema/performance, Azure cloud architecture, architecture artifacts & clear documentation, communicating trade-offs). Keep every real metric exactly as-is.
 7. Keep each replacement readable and roughly the same length as the original. Do not merge, split, or drop bullets; keep the same count and order of experience entries.
-8. Output (original_text, tailored_text, reason) triples where original_text MUST be an EXACT verbatim string copied from the CURRENT CV TEXT (a full bullet, the title line, or a whole skill line). reason must state which job-description requirement the change now targets.
-9. BULLET MARKERS (HARD RULE): NEVER include a bullet or list marker character at the start of either original_text or tailored_text - no '•', '-', '*', 'o', '–' or '—'. Microsoft Word renders the list bullets automatically, so a leading marker produces a DOUBLE bullet. Provide ONLY the plain sentence text (e.g. "Led the migration of 50 desktop screens…", never "• Led the migration…"). In the provided CV text, highlight bullets are prefixed with a '•' purely for display in this plain-text dump - IGNORE that marker when you copy original_text and NEVER echo it into tailored_text.
+8. SINGLE-LINE (HARD RULE): original_text and tailored_text must each be EXACTLY ONE line and must NEVER contain a newline ('\n') or carriage return character. Each replacement targets exactly ONE paragraph/line of the DOCX. A SKILLS category label and its skills value are TWO separate single-line paragraphs - if you revise both, return TWO separate replacement entries (one for the label line, one for the value line). NEVER concatenate a category label with its value (or any two lines) into a single multi-line original_text - that can never match the DOCX.
+9. VERBATIM: original_text MUST be an EXACT verbatim single-line string copied from the CURRENT CV TEXT (a full bullet, the header/title line, a SKILLS category label, or a SKILLS value line). reason must state which job-description requirement the change now targets.
+10. BULLET MARKERS (HARD RULE): NEVER include a bullet or list marker character at the start of either original_text or tailored_text - no '•', '-', '*', 'o', '–' or '—'. Microsoft Word renders the list bullets automatically, so a leading marker produces a DOUBLE bullet. Provide ONLY the plain sentence text (e.g. "Led the migration of 50 desktop screens…", never "• Led the migration…"). In the provided CV text, highlight bullets are prefixed with a '•' purely for display in this plain-text dump - IGNORE that marker when you copy original_text and NEVER echo it into tailored_text.
 """
     if state.get("layout_feedback"):
         prompt += f"\nCRITICAL VISUAL FEEDBACK FROM PREVIOUS LAYOUT INSPECTION:\n{state['layout_feedback']}\nAdjust phrases to be more concise to fix page overflow and widow/orphan lines."
@@ -104,16 +105,11 @@ RULES:
     prompt += f"\n\nCURRENT CV TEXT:\n{cv_text}\n\nJOB DESCRIPTION:\n{state['job_description']}"
 
     mod_result = _call_gemini_text_adaptation(client, prompt)
-    replacements = [(m.original_text, m.tailored_text, getattr(m, "reason", "N/A")) for m in mod_result.modifications]
+    raw_replacements = [(m.original_text, m.tailored_text, getattr(m, "reason", "N/A")) for m in mod_result.modifications]
+    # Normalise so the model can never pass a concatenated (multi-line) label+value
+    # as a single replacement - those live in separate paragraphs and can never match.
+    replacements = normalize_replacements(raw_replacements)
 
-    print(f"\n💡 Generated {len(mod_result.modifications)} suggested modification(s) from LLM:")
-    for idx, m in enumerate(mod_result.modifications, 1):
-        r_reason = getattr(m, "reason", "N/A")
-        print(f"\n  [Suggested #{idx}]")
-        print(f"    • Original:    {m.original_text}")
-        print(f"    • Replacement: {m.tailored_text}")
-        print(f"    • Reason:      {r_reason}")
-    
     applied_count = apply_text_replacements(
         doc_path=state["cv_path"],
         replacements=replacements,
@@ -123,11 +119,11 @@ RULES:
 
     mod_dicts = [
         {
-            "original_text": m.original_text,
-            "tailored_text": m.tailored_text,
-            "reason": getattr(m, "reason", "N/A")
+            "original_text": r_orig,
+            "tailored_text": r_tail,
+            "reason": r_reason,
         }
-        for m in mod_result.modifications
+        for r_orig, r_tail, r_reason in replacements
     ]
 
     if applied_count == 0:
@@ -178,6 +174,7 @@ IMPORTANT LAYOUT GUIDELINES:
 * Layout & Page Flow: Accept two-column design with sidebar ending on page 1. Allow natural overflow to page 2 (even partial pages or multi-page entry splits). Never propose margin, font, or spacing tweaks for page fitting.
 * Ignore Design Non-Issues: Do not flag orphan lines, minor overflows, or the intentional overlap between 'AI & Agentic Workflows' and the 'RELEVANT SKILLS' header background bar.
 * Focus & Scope: Flag only severe structural or visual defects. Prioritize content readability, technical accuracy, and structural hierarchy over page count.
+* NEVER try to condense the content to fit comfortably onto a single page.
 
 Return json matching schema with fields:
 - is_layout_ok: boolean
