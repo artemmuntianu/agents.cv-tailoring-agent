@@ -1,4 +1,15 @@
 .env
 *.json
 __pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+artifacts/
+scratch/
+.env
+.idea/
+.vscode/
+model_state.json
 *.pyc

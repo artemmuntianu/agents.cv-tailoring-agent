@@ -1,11 +1,9 @@
 import os
+from dotenv import load_dotenv
 
-# Read API key from environment variable
-GCP_API_KEY = os.getenv("GCP_API_KEY")
+load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 
 MODEL_NAME = "gemini-3.5-flash"
 
