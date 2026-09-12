@@ -50,6 +50,30 @@ def jd_id_from_path(jd_path: str) -> str:
     return name[len("jd_"):-len(".txt")]
 
 
+def build_output_path(jd_path: str, output_dir: str = OUTPUT_DIR) -> str:
+    """Return the tailored-resume path (cv_{jd_id}.docx) for a given JD file."""
+    return os.path.join(output_dir, f"cv_{jd_id_from_path(jd_path)}.docx")
+
+
+def find_pending_job_descriptions(job_desc_paths, output_dir: str = OUTPUT_DIR):
+    """Pre-filter step: split JDs into ones that still need work vs. already done.
+
+    A JD is treated as already processed when its tailored resume
+    (cv_{jd_id}.docx) exists in the output folder, so we can skip redundant
+    processing. Returns two lists of (index, jd_path, output_cv), where index is
+    the 1-based position in the original input list.
+    """
+    pending = []
+    skipped = []
+    for index, jd_path in enumerate(job_desc_paths, start=1):
+        output_cv = build_output_path(jd_path, output_dir)
+        if os.path.exists(output_cv):
+            skipped.append((index, jd_path, output_cv))
+        else:
+            pending.append((index, jd_path, output_cv))
+    return pending, skipped
+
+
 def run_cv_tailoring(cv_path: str, job_desc_path: str, output_path: str, temp_dir: str) -> None:
     print("🚀 Starting Automated CV Tailoring Agent...")
     print(f"📂 CV Path: {cv_path}")
@@ -113,18 +137,25 @@ def main() -> None:
     total = len(job_desc_paths)
     print(f"📂 Found {total} job description file(s) in {INPUT_DIR}.\n")
 
-    for index, job_desc_path in enumerate(job_desc_paths, start=1):
-        jd_id = jd_id_from_path(job_desc_path)
-        output_cv = os.path.join(OUTPUT_DIR, f"cv_{jd_id}.docx")
-        run_temp_dir = os.path.join(TEMP_DIR, jd_id)
+    # Pre-filter: skip JDs whose tailored .docx already exists in the output
+    # folder so we never redo work that is already done.
+    pending_jds, skipped_jds = find_pending_job_descriptions(job_desc_paths, OUTPUT_DIR)
 
-        # Skip JDs whose tailored .docx already exists in the output folder.
-        if os.path.exists(output_cv):
-            print("=" * 72)
-            print(f"⏭️  Skipping JD {index}/{total}: {os.path.basename(job_desc_path)}")
-            print(f"   ✅ Output CV already exists, skipping: {output_cv}")
-            print("=" * 72)
-            continue
+    for index, job_desc_path, output_cv in skipped_jds:
+        print("=" * 72)
+        print(f"⏭️  Skipping JD {index}/{total}: {os.path.basename(job_desc_path)}")
+        print(f"   ✅ Output CV already exists, skipping: {output_cv}")
+        print("=" * 72)
+
+    if not pending_jds:
+        print(f"✅ Nothing to do: all {total} job description file(s) already have a tailored CV.")
+        print(f"📁 Tailored CVs written to: {OUTPUT_DIR}")
+        return
+
+    print(f"🔄 {len(pending_jds)} of {total} job description file(s) need processing.\n")
+
+    for index, job_desc_path, output_cv in pending_jds:
+        run_temp_dir = os.path.join(TEMP_DIR, jd_id_from_path(job_desc_path))
 
         print("=" * 72)
         print(f"🔄 Processing JD {index}/{total}: {os.path.basename(job_desc_path)}")
@@ -138,7 +169,7 @@ def main() -> None:
             temp_dir=run_temp_dir,
         )
 
-    print(f"\n🎉 Finished processing {total} job description file(s).")
+    print(f"\n🎉 Finished processing {len(pending_jds)} job description file(s).")
     print(f"📁 Tailored CVs written to: {OUTPUT_DIR}")
 
 
