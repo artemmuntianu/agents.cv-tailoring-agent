@@ -135,24 +135,19 @@ def main() -> None:
         sys.exit(1)
 
     total = len(job_desc_paths)
-    print(f"📂 Found {total} job description file(s) in {INPUT_DIR}.\n")
 
-    # Pre-filter: skip JDs whose tailored .docx already exists in the output
-    # folder so we never redo work that is already done.
+    # Pre-filter step: check /output and skip every jd_{n}.txt whose tailored
+    # resume (cv_{jd_id}.docx) already exists, so already-done work is never
+    # repeated. Console output is intentionally limited to the three summary
+    # counts below (total / already tailored / remaining).
     pending_jds, skipped_jds = find_pending_job_descriptions(job_desc_paths, OUTPUT_DIR)
 
-    for index, job_desc_path, output_cv in skipped_jds:
-        print("=" * 72)
-        print(f"⏭️  Skipping JD {index}/{total}: {os.path.basename(job_desc_path)}")
-        print(f"   ✅ Output CV already exists, skipping: {output_cv}")
-        print("=" * 72)
+    print(f"📋 Total jobs: {total}")
+    print(f"✅ Already tailored: {len(skipped_jds)}")
+    print(f"🔄 Remaining: {len(pending_jds)}")
 
     if not pending_jds:
-        print(f"✅ Nothing to do: all {total} job description file(s) already have a tailored CV.")
-        print(f"📁 Tailored CVs written to: {OUTPUT_DIR}")
         return
-
-    print(f"🔄 {len(pending_jds)} of {total} job description file(s) need processing.\n")
 
     for index, job_desc_path, output_cv in pending_jds:
         run_temp_dir = os.path.join(TEMP_DIR, jd_id_from_path(job_desc_path))
