@@ -2,11 +2,21 @@
 
 One command installs the whole in-cluster side of the architecture:
 
-| Pod group | Subchart | Source |
+| Pod group | Source | Note |
 |---|---|---|
-| ① RabbitMQ broker (`rabbitmq-0`) | `rabbitmq` | **Bitnami** `charts.bitnami.com/bitnami` |
-| ③ Autoscaler (`keda-operator`, `keda-metrics-server`) | `keda` | **kedacore** `kedacore.github.io/charts` |
-| ② AI worker (`ai-agent-worker-*`) | `cv-tailoring-worker` | this repo (`file://../cv-tailoring-worker`) |
+| ① RabbitMQ broker (`rabbitmq-0`) | **this chart** (`templates/rabbitmq.yaml`) | StatefulSet on the official `rabbitmq:3.13-management` image |
+| ③ Autoscaler (`keda-operator`, `keda-metrics-server`) | **kedacore** `kedacore.github.io/charts` | only upstream dependency |
+| ② AI worker (`ai-agent-worker-*`) | this repo (`file://../cv-tailoring-worker`) | |
+
+### Why the broker is not the Bitnami subchart
+
+In 2025 Bitnami moved its chart index behind `repo.broadcom.com` and emptied the
+free `bitnami/*` image repositories, so a stock Bitnami RabbitMQ release fails
+with `ImagePullBackOff`. The design document allows either a **StatefulSet** or a
+Bitnami chart, so the broker is rendered here directly: durable queue, management
+plugin (for the KEDA scaler), persistent volume, and the queue definitions from
+`rabbitmqDefinitions`. Credentials live in one Secret shared with the worker and
+the KEDA TriggerAuthentication.
 
 ```bash
 helm dependency update ./charts/cv-tailoring-platform

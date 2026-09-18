@@ -32,6 +32,11 @@ config:
   modelStateBackend: postgres
   queueName: resumes.generate
   prefetchCount: 1
+  # Broker address; credentials come from `rabbitmqCredentials` below so the
+  # password is defined once (shared with the KEDA TriggerAuthentication).
+  rabbitmqHost: rabbitmq
+  rabbitmqPort: 5672
+  rabbitmqVhost: "/"
   maxAttempts: 3
   queueRetryTtlMs: 300000
   logLevel: INFO
@@ -69,6 +74,13 @@ secrets:
 # Name of a pre-existing Secret holding the keys above (GEMINI_API_KEY,
 # DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RABBITMQ_URL).
 existingSecret: ""
+
+# Secret holding the broker credentials (also used by KEDA). When
+# `existingSecret` supplies RABBITMQ_URL, that value wins over these parts.
+rabbitmqCredentials:
+  secretName: rabbitmq-credentials
+  usernameKey: rabbitmq-username
+  passwordKey: rabbitmq-password
 
 # Extra env vars / envFrom entries for advanced overrides.
 extraEnv: []

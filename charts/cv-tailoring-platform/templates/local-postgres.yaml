@@ -1,0 +1,105 @@
+{{- if .Values.localPostgres.enabled }}
+{{/*
+  Local-development Postgres: gives the worker the REAL Postgres code path
+  (schema bootstrap, claim/idempotency SQL, shared model-state ledger) without
+  any cloud database. Deliberately single-replica and unmanaged - never enable
+  this in a production values file.
+
+  The worker runs `create table if not exists ...` on startup, so no init
+  scripts are needed here.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.localPostgres.secretName }}
+  labels:
+    app.kubernetes.io/part-of: cv-tailoring-platform
+    app.kubernetes.io/component: local-development
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.localPostgres.user | quote }}
+  POSTGRES_PASSWORD: {{ .Values.localPostgres.password | quote }}
+  POSTGRES_DB: {{ .Values.localPostgres.database | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  labels:
+    app.kubernetes.io/part-of: cv-tailoring-platform
+    app.kubernetes.io/component: local-development
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.localPostgres.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: cv-tailoring-platform
+    app.kubernetes.io/component: local-development
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.localPostgres.image | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: {{ .Values.localPostgres.secretName }}
+          env:
+            # Sub-directory: the volume root may contain provider files.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.localPostgres.user | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.localPostgres.serviceName }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: cv-tailoring-platform
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}

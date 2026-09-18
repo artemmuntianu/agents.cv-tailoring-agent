@@ -157,7 +157,31 @@ MODEL_STATE_BACKEND = os.getenv("MODEL_STATE_BACKEND", "file").strip().lower()
 # --------------------------------------------------------------------------- #
 # RabbitMQ / AMQP
 # --------------------------------------------------------------------------- #
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
+# Either set RABBITMQ_URL directly, or set the parts and let the URL be
+# composed. Composing is preferable in Kubernetes: the username/password can then
+# come from the *same* Secret the KEDA TriggerAuthentication reads, so the broker
+# password exists in one place only.
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
+RABBITMQ_PORT = _env_int("RABBITMQ_PORT", 5672)
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME", "guest")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "")
+RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
+
+
+def _rabbitmq_url() -> str:
+    explicit = os.getenv("RABBITMQ_URL")
+    if explicit:
+        return explicit
+    if RABBITMQ_PASSWORD:
+        vhost = "%2F" if RABBITMQ_VHOST in ("/", "") else RABBITMQ_VHOST
+        return (
+            f"amqp://{RABBITMQ_USERNAME}:{RABBITMQ_PASSWORD}"
+            f"@{RABBITMQ_HOST}:{RABBITMQ_PORT}/{vhost}"
+        )
+    return "amqp://guest:guest@localhost:5672/%2F"
+
+
+RABBITMQ_URL = _rabbitmq_url()
 RABBITMQ_MANAGEMENT_URL = os.getenv(
     "RABBITMQ_MANAGEMENT_URL", "http://localhost:15672"
 )

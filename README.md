@@ -53,6 +53,33 @@ docker compose up worker                 # consumes resumes.generate
 open http://localhost:15672              # RabbitMQ management UI (cvt/cvt)
 ```
 
+## Run it on your own PC (no cloud, EUR 0)
+
+Prerequisites, once:
+1. Docker Desktop -> **Settings -> Kubernetes -> Enable Kubernetes** (give Docker ~6 GB of RAM).
+2. `winget install Helm.Helm`, then open a **new** terminal.
+
+```powershell
+.\scripts\local-deploy.ps1        # build image -> secret -> helm install -> wait
+```
+
+That brings up, inside your own cluster: RabbitMQ (`rabbitmq-0`), KEDA, a local
+Postgres, and the worker (0 replicas until there is work). Only two things stay
+external, and both are free: the **Gemini API** and **Supabase Storage** (your
+master CV already lives there). The Postgres path is the real one - the worker
+creates its schema on startup.
+
+Send one vacancy and watch KEDA wake a pod and put it back to sleep:
+
+```powershell
+kubectl port-forward svc/rabbitmq 5672:5672
+$env:RABBITMQ_URL = (kubectl get secret rabbitmq-credentials -o jsonpath={.data.rabbitmq-url} | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
+python publisher.py --jd your_job.txt
+kubectl get pods -w                     # 0 -> 1 -> 0
+```
+
+Teardown: `.\scripts\local-deploy.ps1 -Uninstall`
+
 ## Deploy to Kubernetes (Helm)
 
 ```bash

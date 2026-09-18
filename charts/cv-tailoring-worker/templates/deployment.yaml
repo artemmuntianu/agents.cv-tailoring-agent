@@ -54,6 +54,27 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
+            {{- if eq .Values.config.queueBackend "amqp" }}
+            # Composed with RABBITMQ_HOST/PORT/VHOST into RABBITMQ_URL. The
+            # credentials come from the same Secret the KEDA TriggerAuthentication
+            # reads, so the broker password is defined in exactly one place.
+            - name: RABBITMQ_HOST
+              value: {{ .Values.config.rabbitmqHost | quote }}
+            - name: RABBITMQ_PORT
+              value: {{ .Values.config.rabbitmqPort | quote }}
+            - name: RABBITMQ_VHOST
+              value: {{ .Values.config.rabbitmqVhost | quote }}
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rabbitmqCredentials.secretName }}
+                  key: {{ .Values.rabbitmqCredentials.usernameKey }}
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rabbitmqCredentials.secretName }}
+                  key: {{ .Values.rabbitmqCredentials.passwordKey }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

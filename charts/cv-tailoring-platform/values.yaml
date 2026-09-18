@@ -9,6 +9,9 @@
 # --------------------------------------------------------------------------- #
 rabbitmq:
   enabled: true
+  # Official image (Bitnami's free registry was emptied in 2025).
+  image: rabbitmq:3.13-management
+  imagePullPolicy: IfNotPresent
   # -> StatefulSet/pod named `rabbitmq-0`, DNS `rabbitmq.<ns>.svc.cluster.local`
   fullnameOverride: rabbitmq
   replicaCount: 1
@@ -19,11 +22,9 @@ rabbitmq:
     # Provide either `existingPasswordSecret` (recommended) or a plain password.
     existingPasswordSecret: ""
     password: ""
-  plugins: rabbitmq_management
-  # Pre-declared queues/exchange/bindings (see `rabbitmqDefinitions` below).
-  loadDefinition:
-    enabled: true
-    existingSecret: rabbitmq-definitions
+  # The management plugin (needed by the KEDA scaler) is already enabled by the
+  # `-management` image tag, and the queues are loaded from
+  # `rabbitmqDefinitions` below - no extra configuration required here.
   persistence:
     enabled: true
     size: 4Gi
@@ -36,10 +37,6 @@ rabbitmq:
     limits:
       cpu: 500m
       memory: 512Mi
-  metrics:
-    enabled: true
-    serviceMonitor:
-      enabled: false
 
 # Pre-declares the three queues from the design doc. The worker also declares
 # its retry ladder (TTL queues) on connect, so this is a convenience, not a

@@ -1,5 +1,24 @@
-# Local cluster (kind / Docker Desktop / k3s) overrides.
-# Credentials are NOT stored here: create the Secret first (see `make dev-secret`).
+# Local cluster (Docker Desktop Kubernetes / kind / k3d / k3s) overrides.
+# Nothing here costs money and nothing talks to Azure.
+#
+#   powershell -ExecutionPolicy Bypass -File .\scripts\local-deploy.ps1
+#
+# Only two things stay external (both free): the Gemini API and Supabase Storage
+# (your master CV already lives there). Everything else - RabbitMQ, KEDA,
+# Postgres - runs inside your own cluster, exercising the production code paths.
+
+# Local development Postgres: real Postgres, no cloud database needed.
+# The worker creates its own tables on startup.
+localPostgres:
+  enabled: true
+  image: postgres:16-alpine
+  secretName: local-postgres
+  serviceName: postgres
+  user: cvt
+  password: cvt
+  database: cvt
+  size: 1Gi
+
 rabbitmq:
   enabled: true
   persistence:
@@ -30,8 +49,10 @@ cv-tailoring-worker:
     repository: cv-tailoring-worker
     tag: dev
     pullPolicy: IfNotPresent
-  # Point this at the Secret created by `make dev-secret`
-  # (GEMINI_API_KEY, DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RABBITMQ_URL).
+  # Created by .\scripts\worker-secret.ps1:
+  #   GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL
+  # RABBITMQ_USERNAME/PASSWORD come from the broker Secret (shared with KEDA),
+  # so no AMQP URL is stored anywhere.
   existingSecret: cv-tailoring-secrets
   config:
     logLevel: DEBUG

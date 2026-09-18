@@ -1,0 +1,139 @@
+{{- if .Values.rabbitmq.enabled }}
+{{/*
+  RabbitMQ as a StatefulSet - pod `rabbitmq-0`, exactly as the architecture
+  document describes (durable queue, management plugin for KEDA, persistent
+  volume, 100m/500m CPU and 256Mi/512Mi RAM by default).
+
+  Why not the Bitnami subchart? In 2025 Bitnami moved their chart repo behind
+  repo.broadcom.com and emptied the free `bitnami/*` image repositories, so a
+  stock Bitnami RabbitMQ release now fails with ImagePullBackOff. The official
+  `rabbitmq` image is unaffected and is what we use here.
+*/}}
+{{- $name := include "cv-tailoring-platform.rabbitmqName" . -}}
+{{- $credentials := include "cv-tailoring-platform.rabbitmqCredentialsSecret" . -}}
+{{- if .Values.rabbitmqDefinitions.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: cv-tailoring-platform
+data:
+  # Loads the pre-declared queues from the definitions Secret below.
+  10-cv-tailoring.conf: |
+    load_definitions = /etc/rabbitmq/definitions/definitions.json
+    management.tcp.port = 15672
+{{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: cv-tailoring-platform
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+    spec:
+      # RabbitMQ needs a moment to flush its queue on shutdown.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.rabbitmq.image | quote }}
+          imagePullPolicy: {{ .Values.rabbitmq.imagePullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials }}
+                  key: {{ .Values.rabbitmqCredentials.usernameKey }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials }}
+                  key: {{ .Values.rabbitmqCredentials.passwordKey }}
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+            {{- if .Values.rabbitmqDefinitions.create }}
+            - name: config
+              mountPath: /etc/rabbitmq/conf.d
+            - name: definitions
+              mountPath: /etc/rabbitmq/definitions
+            {{- end }}
+      volumes:
+        {{- if .Values.rabbitmqDefinitions.create }}
+        - name: config
+          configMap:
+            name: rabbitmq-config
+        - name: definitions
+          secret:
+            secretName: {{ .Values.rabbitmqDefinitions.secretName }}
+        {{- end }}
+      {{- with .Values.rabbitmq.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.rabbitmq.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.rabbitmq.persistence.size | default "1Gi" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: cv-tailoring-platform
+spec:
+  type: {{ .Values.rabbitmq.service.type | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+{{- end }}

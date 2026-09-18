@@ -9,12 +9,13 @@ version: 0.2.0
 appVersion: "0.2.0"
 kubeVersion: ">=1.27.0-0"
 dependencies:
-  # Standard upstream charts - pinned ranges, resolved into Chart.lock by
-  # `helm dependency update`.
-  - name: rabbitmq
-    version: "14.6.x"
-    repository: https://charts.bitnami.com/bitnami
-    condition: rabbitmq.enabled
+  # Only KEDA comes from an upstream chart (its repository is healthy).
+  #
+  # RabbitMQ is rendered by this chart instead of the Bitnami subchart: Bitnami
+  # moved their chart index behind repo.broadcom.com and emptied the free
+  # `bitnami/*` image repositories in 2025, so a stock Bitnami release fails with
+  # ImagePullBackOff. The design document allows either "StatefulSet or Bitnami
+  # Helm chart"; we use a StatefulSet with the official `rabbitmq` image.
   - name: keda
     version: "2.15.x"
     repository: https://kedacore.github.io/charts
