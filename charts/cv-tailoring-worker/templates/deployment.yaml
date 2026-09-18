@@ -103,9 +103,18 @@ spec:
           volumeMounts:
             - name: work
               mountPath: /tmp/cvt
+            {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
+            - name: artifacts
+              mountPath: {{ .Values.persistence.mountPath | default "/data" }}
+            {{- end }}
       volumes:
         - name: work
           emptyDir: {}
+        {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-artifacts" (include "cv-tailoring-worker.fullname" .)) }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -17,6 +17,9 @@ data:
   LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   LOG_FORMAT: {{ .Values.config.logFormat | quote }}
   TEMP_ROOT: {{ .Values.config.tempRoot | quote }}
+  {{- if .Values.config.artifactsDir }}
+  ARTIFACTS_DIR: {{ .Values.config.artifactsDir | quote }}
+  {{- end }}
   HEARTBEAT_FILE: {{ printf "%s/heartbeat" .Values.config.tempRoot | quote }}
   HEARTBEAT_MAX_AGE_SECONDS: {{ .Values.config.heartbeatMaxAgeSeconds | quote }}
   KEEP_TEMP_DIRS: {{ .Values.config.keepTempDirs | quote }}

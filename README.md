@@ -64,10 +64,25 @@ Prerequisites, once:
 ```
 
 That brings up, inside your own cluster: RabbitMQ (`rabbitmq-0`), KEDA, a local
-Postgres, and the worker (0 replicas until there is work). Only two things stay
-external, and both are free: the **Gemini API** and **Supabase Storage** (your
-master CV already lives there). The Postgres path is the real one - the worker
-creates its schema on startup.
+Postgres, the worker (0 replicas until there is work) **and the artifact
+storage** - a PersistentVolumeClaim called `cv-artifacts`, not a cloud bucket.
+The only external dependency left is the **Gemini API**.
+
+Files live on that volume, and are moved in/out through a tiny `cv-files` pod
+(the worker is usually scaled to zero):
+
+```powershell
+.\scripts\storage-files.ps1 -Action seed       # push cv.docx + cv_data.json (+ any jd_*.txt)
+.\scripts\storage-files.ps1 -Action list       # what is on the volume
+.\scripts\storage-files.ps1 -Action download   # pull tailored PDFs into artifacts\output
+```
+
+```
+/data/cv_data.json     structured CV model (must match cv.docx exactly)
+/data/input/cv.docx    master CV
+/data/input/jd_*.txt   job descriptions for `python main.py` batches
+/data/output/*.pdf     tailored results
+```
 
 Send one vacancy and watch KEDA wake a pod and put it back to sleep:
 

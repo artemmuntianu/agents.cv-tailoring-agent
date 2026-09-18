@@ -60,6 +60,9 @@ config:
   renderDpi: 70
   # Supabase's pooled connection cannot use server-side prepared statements.
   dbPrepareStatements: false
+  # Where artifacts live when `STORAGE_BACKEND=local` (input/cv.docx,
+  # input/jd_*.txt, output/cv_*.docx|pdf). Set together with `persistence`.
+  artifactsDir: ""
 
 # Secret values. `create: false` is the recommended production setting: create a
 # Secret out-of-band and point `existingSecret` at it.
@@ -74,6 +77,16 @@ secrets:
 # Name of a pre-existing Secret holding the keys above (GEMINI_API_KEY,
 # DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RABBITMQ_URL).
 existingSecret: ""
+
+# Artifact storage that survives pod restarts and scale-to-zero.
+# `existingClaim` points at a PVC owned by another release (the platform chart
+# creates `cv-artifacts`); `enabled` makes this chart create its own.
+persistence:
+  enabled: false
+  existingClaim: ""
+  mountPath: /data
+  size: 2Gi
+  storageClassName: ""
 
 # Secret holding the broker credentials (also used by KEDA). When
 # `existingSecret` supplies RABBITMQ_URL, that value wins over these parts.

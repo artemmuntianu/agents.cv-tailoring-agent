@@ -131,6 +131,25 @@ keda:
       enabled: true
 
 # --------------------------------------------------------------------------- #
+# Artifact storage: one volume for the master CV, job descriptions and results.
+# --------------------------------------------------------------------------- #
+persistence:
+  create: true
+  name: cv-artifacts
+  mountPath: /data
+  size: 2Gi
+  storageClassName: ""
+
+# A tiny always-on pod with the same volume mounted, so files can be pushed in
+# and pulled out with `kubectl cp` even while the worker is scaled to zero:
+#   kubectl cp .\cv.docx cv-files:/data/input/cv.docx
+#   kubectl cp cv-files:/data/output/cv_848944.pdf .\
+fileManager:
+  enabled: true
+  name: cv-files
+  image: busybox:1.36
+
+# --------------------------------------------------------------------------- #
 # AI worker (pod group ②): Deployment + ScaledObject.
 # --------------------------------------------------------------------------- #
 cv-tailoring-worker:

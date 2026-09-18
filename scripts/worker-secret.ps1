@@ -1,4 +1,10 @@
 # Create the worker's Kubernetes Secret from .env (values never touch git).
+#
+# Required: GEMINI_API_KEY and DATABASE_URL.
+# Supabase keys are optional - they are only used when
+# STORAGE_BACKEND=supabase. With the all-local setup (PVC storage) you can leave
+# them out entirely.
+#
 # The broker credentials are NOT here: the chart injects RABBITMQ_USERNAME /
 # RABBITMQ_PASSWORD from the same Secret KEDA uses, so the password lives in one
 # place only.
@@ -50,13 +56,18 @@ foreach ($key in @('GEMINI_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'
 if (-not [string]::IsNullOrWhiteSpace($DatabaseUrl)) { $settings['DATABASE_URL'] = $DatabaseUrl }
 
 $missing = @()
-foreach ($required in @('GEMINI_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'DATABASE_URL')) {
+foreach ($required in @('GEMINI_API_KEY', 'DATABASE_URL')) {
     if ([string]::IsNullOrWhiteSpace($settings[$required])) { $missing += $required }
 }
 if ($missing.Count -gt 0) {
     Fail ("missing in " + $EnvFile + ": " + ($missing -join ', '))
 }
-Ok 'GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL present'
+Ok 'GEMINI_API_KEY and DATABASE_URL present'
+
+# Supabase is optional (only for STORAGE_BACKEND=supabase).
+if ([string]::IsNullOrWhiteSpace($settings['SUPABASE_URL']) -or [string]::IsNullOrWhiteSpace($settings['SUPABASE_SERVICE_ROLE_KEY'])) {
+    Warn 'no Supabase keys - fine for STORAGE_BACKEND=local (artifacts on the cluster volume)'
+}
 
 if ($settings['DATABASE_URL'] -match 'postgres\.supabase\.co' ) { Ok 'database looks like Supabase' }
 elseif ($settings['DATABASE_URL'] -notmatch 'sslmode=') {
@@ -67,11 +78,15 @@ $kubectlArgs = @(
     'create', 'secret', 'generic', $Name,
     '--namespace', $Namespace,
     '--from-literal=GEMINI_API_KEY=' + $settings['GEMINI_API_KEY'],
-    '--from-literal=SUPABASE_URL=' + $settings['SUPABASE_URL'],
-    '--from-literal=SUPABASE_SERVICE_ROLE_KEY=' + $settings['SUPABASE_SERVICE_ROLE_KEY'],
     '--from-literal=DATABASE_URL=' + $settings['DATABASE_URL'],
     '--dry-run=client', '-o', 'yaml'
 )
+# Only ship the Supabase keys when they exist, so the Secret stays minimal.
+foreach ($optional in @('SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY')) {
+    if (-not [string]::IsNullOrWhiteSpace($settings[$optional])) {
+        $kubectlArgs += '--from-literal=' + $optional + '=' + $settings[$optional]
+    }
+}
 
 if ($DryRun) {
     # Never echo the values themselves.

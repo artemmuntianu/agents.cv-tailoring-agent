@@ -3,9 +3,15 @@
 #
 #   powershell -ExecutionPolicy Bypass -File .\scripts\local-deploy.ps1
 #
-# Only two things stay external (both free): the Gemini API and Supabase Storage
-# (your master CV already lives there). Everything else - RabbitMQ, KEDA,
-# Postgres - runs inside your own cluster, exercising the production code paths.
+# Everything runs inside your cluster: RabbitMQ, KEDA, Postgres AND the artifact
+# storage (a PersistentVolumeClaim, not Supabase). The only external dependency
+# left is the Gemini API.
+#
+# Files live on the `cv-artifacts` volume:
+#   /data/cv_data.json     structured CV model
+#   /data/input/cv.docx    master CV
+#   /data/output/*.pdf     tailored results
+# Push/pull them with:  .\scripts\storage-files.ps1 -Action seed | list | download
 
 # Local development Postgres: real Postgres, no cloud database needed.
 # The worker creates its own tables on startup.
@@ -54,10 +60,15 @@ cv-tailoring-worker:
   # RABBITMQ_USERNAME/PASSWORD come from the broker Secret (shared with KEDA),
   # so no AMQP URL is stored anywhere.
   existingSecret: cv-tailoring-secrets
+  # Artifacts on the shared volume instead of Supabase Storage.
+  persistence:
+    existingClaim: cv-artifacts
+    mountPath: /data
   config:
     logLevel: DEBUG
     logFormat: text
-    storageBackend: supabase
+    storageBackend: local
+    artifactsDir: /data
     dbBackend: postgres
     modelStateBackend: postgres
   keda:
