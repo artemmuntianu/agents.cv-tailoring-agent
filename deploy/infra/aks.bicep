@@ -24,7 +24,7 @@ param systemNodeSize string = 'Standard_B2s' // 2 vCPU, 4 GB per the design doc
 param systemNodeCount int = 1
 
 @description('Dynamic pool for AI worker pods, autoscaled 0..N')
-param userNodeSize string = 'Standard_D4s_v5'
+param userNodeSize string = 'Standard_D2s_v5'
 param userMinCount int = 0
 param userMaxCount int = 5
 
@@ -71,7 +71,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
         vmSize: userNodeSize
         minCount: userMinCount
         maxCount: userMaxCount
-        count: userMinCount // Cluster Autoscaler grows this from zero
+        count: 1 // Cluster Autoscaler moves this between minCount (0) and maxCount
         enableAutoScaling: true
         osType: 'Linux'
         osDiskSizeGB: 40
@@ -82,11 +82,9 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
       networkPlugin: 'azure'
       loadBalancerSku: 'standard'
     }
-    addonProfiles: {
-      // Cheap metrics pipeline for KEDA's HPA upgrades.
-      azureMonitorProfile: {
-        metrics: { enabled: true }
-      }
+    // Managed Prometheus: the metrics pipeline KEDA's HPAs rely on.
+    azureMonitorProfile: {
+      metrics: { enabled: true }
     }
   }
 }
