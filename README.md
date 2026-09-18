@@ -18,6 +18,7 @@ publisher / extension ──► RabbitMQ (rabbitmq-0, resumes.generate)
               cv-artifacts volume (PDF/DOCX)  +  Postgres (status)
 ```
 
+* `docs/PROJECT_STATE.md` - **current state, resume point and open tasks** (read this first)
 * `docs/ARCHITECTURE.md` — how the code maps onto the design documents
 * `docs/MESSAGE_CONTRACT.md` — payload, ack/retry/DLQ semantics, idempotency
 * `docs/RUNBOOK.md` — operations (queue backlog, DLQ, quota, rollback)
