@@ -79,14 +79,40 @@ if ($SkipBuild) {
 }
 
 Step '5. make the image visible to the cluster'
-if ($context -like 'kind-*') {
-    & kind load docker-image $Image --name ($context -replace '^kind-', '')
-    Ok 'loaded into kind'
-} elseif ($context -like 'k3d-*') {
+$nodeNames = ((& kubectl get nodes -o jsonpath='{.items[*].metadata.name}') 2>$null)
+$nodes = @($nodeNames -split '\s+' | Where-Object { $_ })
+if ($nodes.Count -gt 0) { Ok ("nodes: " + ($nodes -join ', ')) }
+
+# kind names its nodes "<cluster>-control-plane" / "<cluster>-worker", and those
+# nodes keep their own image store - so a locally built image must be loaded.
+$kindNode = $nodes | Where-Object { $_ -match '-(control-plane|worker[0-9]*)$' } | Select-Object -First 1
+$kindCluster = ''
+if ($kindNode) { $kindCluster = $kindNode -replace '-(control-plane|worker[0-9]*)$', '' }
+elseif ($context -like 'kind-*') { $kindCluster = $context -replace '^kind-', '' }
+
+if ($kindCluster) {
+    if (-not (Get-Command kind -ErrorAction SilentlyContinue)) {
+        Warn 'This cluster was provisioned with kind, whose nodes cannot see images built by Docker.'
+        Warn 'Fix it either way:'
+        Warn '    winget install Kubernetes.kind        # then re-run this script'
+        Warn '    Docker Desktop -> Kubernetes -> Edit cluster -> provisioner: kubeadm'
+        Warn '      (kubeadm nodes share the Docker image store: no loading needed)'
+        Fail 'cannot load the image into this kind cluster'
+    }
+    & kind load docker-image $Image --name $kindCluster
+    if ($LASTEXITCODE -ne 0) { Fail 'kind load docker-image failed' }
+    Ok ("loaded into kind cluster '" + $kindCluster + "'")
+}
+elseif ($context -like 'k3d-*') {
+    if (-not (Get-Command k3d -ErrorAction SilentlyContinue)) {
+        Fail 'this is a k3d cluster, but the k3d CLI is not on PATH'
+    }
     & k3d image import $Image -c ($context -replace '^k3d-', '')
+    if ($LASTEXITCODE -ne 0) { Fail 'k3d image import failed' }
     Ok 'imported into k3d'
-} else {
-    Ok 'nothing to do: a local single-node cluster shares the Docker image store'
+}
+else {
+    Ok 'nothing to do: this node shares the Docker image store (kubeadm / docker-desktop)'
 }
 
 Step '6. chart dependencies'
