@@ -110,6 +110,8 @@ If step 2 fails, debug in this order: `kubectl get pods`,
 | Probes | `healthcheck.py --mode render/liveness` healthy; readiness correctly fails before the first heartbeat |
 | Batch CLI skip path | `python main.py` -> `Total 1 / Already tailored 1 / Remaining 0` without calling Gemini |
 | Secrets hygiene | `.env` is gitignored and untracked; `.env.example` holds only placeholders; no secret ever staged |
+| CI ran (first push) | the `ci` workflow's **lint + tests** job passed on `main`, including the 6 Postgres integration tests in a `postgres:16` service container |
+| Rendered manifests are schema-valid | `kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0` on the rendered dev manifest -> 45 resources, 0 invalid |
 
 ## Not yet verified (the honest gaps)
 
@@ -118,11 +120,11 @@ If step 2 fails, debug in this order: `kubectl get pods`,
 3. **A real Gemini tailoring run** (every run used a dummy key): the prompt, the
    vision-revision loop, and per-vacancy timing (docs claim 15-45 s) are
    unmeasured.
-4. **Postgres job store + shared model-state ledger against a real server** - the
-   6 integration tests skip locally; they run in CI with a `postgres:16` service.
-5. The removed Supabase path was never exercised against real Supabase (deleted
+4. The removed Supabase path was never exercised against real Supabase (deleted
    before we got there). Do not assume it worked.
-6. CI has never run (nothing has been pushed yet).
+5. Everything downstream of `helm install` (pods actually starting, the broker
+   accepting connections, the ScaledObject firing) is still unproven - the
+   manifests are schema-valid, but nothing has been applied to a cluster yet.
 
 ## Environment facts (this machine)
 
@@ -134,6 +136,7 @@ If step 2 fails, debug in this order: `kubectl get pods`,
 | helm | **4.3.0** via winget, at `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Helm.Helm_Microsoft.Winget.Source_8wekyb3d8bbwe\windows-amd64\helm.exe`, on the user PATH |
 | kubectl | from Docker Desktop (`C:\Program Files\Docker\Docker\resources\bin\kubectl.exe`) |
 | Kubernetes | Docker Desktop cluster being created, provisioner **kubeadm** |
+| kubeconform | **0.8.0** via winget (`YannHamon.kubeconform`) - validates rendered manifests offline |
 | az CLI | 2.90.0, logged in (`artemmuntianu@gmail.com`, Main Subscription) - **no longer used** |
 | Python | 3.14.6 (repo targets 3.11+; the image uses python:3.12-slim) |
 | LibreOffice / poppler | `C:\Program Files\LibreOffice\program\soffice.exe`, `C:\Tools\poppler\poppler-26.07.0\Library\bin` |
@@ -250,7 +253,16 @@ docs/RUNBOOK.md                 ops: backlog, DLQ, quota, rollback, cost knobs
    cloud code plus every reference to it.
 4. Installed **winget** (absent on LTSC) and **Helm 4.3.0**, which immediately
    exposed and fixed three chart bugs that would have broken the first deploy.
-5. Wrote this handoff and merged the branch into `main`.
+5. Wrote the handoff, merged the branch into `main` (fast-forward) and pushed.
+6. The first CI run went green for lint + tests (Postgres integration tests
+   included) and **failed kubeconform**, which found a real deploy-breaking bug:
+   the RabbitMQ StatefulSet rendered `secretKeyRef.key: null` because the umbrella
+   values never defined the credential key names. Fixed with `| default` in the
+   template plus explicit keys in values.yaml.
+
+> Lesson: `helm lint` and `helm template` cannot catch null/invalid field values.
+> Always render and run `kubeconform` (or `kubectl apply --dry-run=server` on a
+> live cluster) before trusting a chart change.
 
 ## How a new session should start
 
@@ -260,6 +272,8 @@ git log --oneline -3                     # expect the merge on top
 python -m pytest -q                      # 35 pass, 6 skip
 python -m ruff check .
 helm lint charts/cv-tailoring-worker ; helm lint charts/cv-tailoring-platform
+helm template cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml > rendered.yaml
+kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 rendered.yaml
 kubectl get nodes                        # is the cluster up?
 ```
 

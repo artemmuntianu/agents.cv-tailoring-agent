@@ -60,12 +60,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $credentials }}
-                  key: {{ .Values.rabbitmqCredentials.usernameKey }}
+                  key: {{ .Values.rabbitmqCredentials.usernameKey | default "rabbitmq-username" }}
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef:
                   name: {{ $credentials }}
-                  key: {{ .Values.rabbitmqCredentials.passwordKey }}
+                  key: {{ .Values.rabbitmqCredentials.passwordKey | default "rabbitmq-password" }}
           readinessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
