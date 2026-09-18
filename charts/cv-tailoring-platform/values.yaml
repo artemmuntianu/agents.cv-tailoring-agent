@@ -1,0 +1,177 @@
+# Umbrella values: upstream subcharts + our worker.
+#
+# NOTE on key names: the top-level `keda:` key configures the **KEDA operator
+# subchart**, while `cv-tailoring-worker.keda:` configures the worker's
+# ScaledObject. They are different things on purpose.
+
+# --------------------------------------------------------------------------- #
+# RabbitMQ (pod group ① in the architecture doc): StatefulSet, always on.
+# --------------------------------------------------------------------------- #
+rabbitmq:
+  enabled: true
+  # -> StatefulSet/pod named `rabbitmq-0`, DNS `rabbitmq.<ns>.svc.cluster.local`
+  fullnameOverride: rabbitmq
+  replicaCount: 1
+  clustering:
+    enabled: false
+  auth:
+    username: cvt
+    # Provide either `existingPasswordSecret` (recommended) or a plain password.
+    existingPasswordSecret: ""
+    password: ""
+  plugins: rabbitmq_management
+  # Pre-declared queues/exchange/bindings (see `rabbitmqDefinitions` below).
+  loadDefinition:
+    enabled: true
+    existingSecret: rabbitmq-definitions
+  persistence:
+    enabled: true
+    size: 4Gi
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+
+# Pre-declares the three queues from the design doc. The worker also declares
+# its retry ladder (TTL queues) on connect, so this is a convenience, not a
+# correctness requirement.
+rabbitmqCredentials:
+  # Create a `rabbitmq-credentials` Secret consumed by the worker
+  # (RABBITMQ_URL) and by the KEDA TriggerAuthentication.
+  create: true
+  secretName: rabbitmq-credentials
+  username: cvt
+  password: ""
+
+rabbitmqDefinitions:
+  create: true
+  secretName: rabbitmq-definitions
+  definitions:
+    rabbit_version: "3.13.0"
+    users: []
+    vhosts: []
+    permissions: []
+    parameters: []
+    global_parameters: []
+    policies:
+      - vhost: /
+        name: dlx-policy
+        pattern: "^resumes\\.generate$"
+        apply-to: queues
+        definition:
+          dead-letter-exchange: resumes.generate.dlx
+        priority: 0
+    exchanges:
+      - name: resumes.generate.dlx
+        vhost: /
+        type: direct
+        durable: true
+        auto_delete: false
+        internal: false
+        arguments: {}
+    queues:
+      - name: resumes.generate
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
+      - name: resumes.generate.dlq
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
+      - name: vacancies.parse
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
+      - name: applications.submit
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
+    bindings:
+      - source: resumes.generate.dlx
+        vhost: /
+        destination: resumes.generate.dlq
+        destination_type: queue
+        routing_key: resumes.generate.dlq
+        arguments: {}
+
+# --------------------------------------------------------------------------- #
+# KEDA (pod group ③): operator + metrics server.
+# --------------------------------------------------------------------------- #
+keda:
+  enabled: true
+  resources:
+    operator:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    metricServer:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  prometheus:
+    metricServer:
+      enabled: true
+    operator:
+      enabled: true
+
+# --------------------------------------------------------------------------- #
+# AI worker (pod group ②): Deployment + ScaledObject.
+# --------------------------------------------------------------------------- #
+cv-tailoring-worker:
+  enabled: true
+  fullnameOverride: ai-agent-worker
+  image:
+    repository: ghcr.io/artemmuntianu/agents-cv-tailoring-agent/cv-tailoring-worker
+    tag: "" # set by CI: --set cv-tailoring-worker.image.tag=$GITHUB_SHA
+  # Secrets are created outside Helm in production; the values below are only
+  # used when `existingSecret` is empty and `secrets.create` is true.
+  existingSecret: ""
+  secrets:
+    create: false
+    geminiApiKey: ""
+    databaseUrl: ""
+    supabaseUrl: ""
+    supabaseServiceRoleKey: ""
+    rabbitmqUrl: ""
+  config:
+    queueName: resumes.generate
+    supabaseBucket: resumes
+  keda:
+    enabled: true
+    host: http://rabbitmq.default.svc.cluster.local:15672
+    auth:
+      secretName: rabbitmq-credentials
+      usernameKey: rabbitmq-username
+      passwordKey: rabbitmq-password
+    minReplicaCount: 0
+    maxReplicaCount: 20
+    mode: QueueLength
+    queueLength: "1"
+    cooldownPeriod: 300
+    pollingInterval: 15
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

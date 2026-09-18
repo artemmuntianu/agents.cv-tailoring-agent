@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "cv-tailoring-worker.fullname" . }}-health-test
+  labels:
+    {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "cv-tailoring-worker.serviceAccountName" . }}
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: healthcheck
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      # Proves the image ships poppler + LibreOffice, and that the broker is
+      # reachable from inside the cluster.
+      command: ["sh", "-c", "python healthcheck.py --mode render && python healthcheck.py --mode amqp"]
+      envFrom:
+        - configMapRef:
+            name: {{ include "cv-tailoring-worker.fullname" . }}
+        - secretRef:
+            name: {{ include "cv-tailoring-worker.secretName" . }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}

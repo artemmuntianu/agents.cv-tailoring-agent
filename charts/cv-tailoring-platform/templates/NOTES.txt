@@ -1,0 +1,21 @@
+cv-tailoring-platform {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}" in namespace {{ .Release.Namespace }}.
+
+Pods to expect (architecture doc groups):
+  1) rabbitmq-0                     always on  (StatefulSet, {{ .Values.rabbitmq.resources.requests.cpu }} / {{ .Values.rabbitmq.resources.limits.cpu }} CPU)
+  2) ai-agent-worker-*              0..{{ .Values.cv-tailoring-worker.keda.maxReplicaCount }} (KEDA, scale to zero)
+  3) keda-operator / keda-metrics-* always on  (KEDA)
+
+Verify:
+  kubectl get pods,scaledobject,statefulset -n {{ .Release.Namespace }}
+  kubectl exec -it rabbitmq-0 -- rabbitmqctl list_queues name messages messages_ready messages_unacknowledged
+  helm test {{ .Release.Name }}
+
+Publish a task (dev): kubectl exec deploy/ai-agent-worker -- python publisher.py --all
+
+Secrets you must provide out-of-band (production):
+  GEMINI_API_KEY, DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  then install with: --set cv-tailoring-worker.existingSecret=<secret-name>
+
+{{- if not .Values.rabbitmqDefinitions.create }}
+Note: RabbitMQ definitions are disabled - queues are created by the worker on first connect.
+{{- end }}

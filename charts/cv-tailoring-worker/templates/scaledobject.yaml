@@ -1,0 +1,39 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "cv-tailoring-worker.fullname" . }}
+  labels:
+    {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "cv-tailoring-worker.fullname" . }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  # Wait for the task to finish (15-45s each) before scaling back to zero.
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  {{- if .Values.keda.fallback.enabled }}
+  fallback:
+    failureThreshold: {{ .Values.keda.fallback.failureThreshold }}
+    replicas: {{ .Values.keda.fallback.replicas }}
+  {{- end }}
+  {{- with .Values.keda.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+  triggers:
+    - type: rabbitmq
+      metadata:
+        # The scaler uses the RabbitMQ management HTTP API, not AMQP.
+        host: {{ .Values.keda.host | quote }}
+        protocol: {{ .Values.keda.protocol | quote }}
+        queueName: {{ .Values.config.queueName | quote }}
+        mode: {{ .Values.keda.mode | quote }}
+        value: {{ .Values.keda.queueLength | quote }}
+        activationValue: {{ .Values.keda.activationQueueLength | quote }}
+      authenticationRef:
+        name: {{ include "cv-tailoring-worker.fullname" . }}-rabbitmq
+{{- end }}

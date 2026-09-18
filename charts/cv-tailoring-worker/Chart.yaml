@@ -1,0 +1,18 @@
+apiVersion: v2
+name: cv-tailoring-worker
+description: |
+  AI CV tailoring worker: consumes `resumes.generate` messages from RabbitMQ,
+  adapts the master CV with a LangGraph pipeline (Gemini + python-docx AST
+  mutation + LibreOffice/poppler render + Vision QA), uploads the artifacts and
+  writes the final state to Postgres. Scales 0..N via a KEDA ScaledObject.
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - ai
+  - langgraph
+  - rabbitmq
+  - keda
+maintainers:
+  - name: artemmuntianu

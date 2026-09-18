@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "cv-tailoring-worker values",
+  "type": "object",
+  "required": ["image", "config", "keda"],
+  "additionalProperties": true,
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 0 },
+    "fullnameOverride": { "type": "string" },
+    "existingSecret": { "type": "string" },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 30 },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "config": {
+      "type": "object",
+      "required": ["queueBackend", "storageBackend", "dbBackend", "queueName"],
+      "properties": {
+        "queueBackend": { "enum": ["amqp", "directory"] },
+        "storageBackend": { "enum": ["supabase", "local"] },
+        "dbBackend": { "enum": ["postgres", "local"] },
+        "modelStateBackend": { "enum": ["postgres", "file"] },
+        "queueName": { "type": "string", "minLength": 1 },
+        "prefetchCount": { "type": "integer", "minimum": 1 },
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "logFormat": { "enum": ["json", "text"] },
+        "maxRevisions": { "type": "integer", "minimum": 1 },
+        "renderDpi": { "type": "integer", "minimum": 30, "maximum": 300 }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "requests": { "type": "object" },
+        "limits": { "type": "object" }
+      }
+    },
+    "keda": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicaCount": { "type": "integer", "minimum": 0 },
+        "maxReplicaCount": { "type": "integer", "minimum": 1 },
+        "pollingInterval": { "type": "integer", "minimum": 1 },
+        "cooldownPeriod": { "type": "integer", "minimum": 0 },
+        "mode": { "enum": ["QueueLength", "Ready", "Unacked"] },
+        "host": { "type": "string" },
+        "auth": {
+          "type": "object",
+          "required": ["secretName"],
+          "properties": {
+            "secretName": { "type": "string", "minLength": 1 },
+            "usernameKey": { "type": "string" },
+            "passwordKey": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

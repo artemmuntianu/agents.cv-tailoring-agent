@@ -1,0 +1,15 @@
+{{- if .Values.rabbitmqDefinitions.create }}
+# Queue/exchange definitions loaded by the Bitnami RabbitMQ chart
+# (`loadDefinition.existingSecret`). Keeping them in values.yaml means the
+# queue topology is reviewable and diffable.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.rabbitmqDefinitions.secretName }}
+  labels:
+    app.kubernetes.io/part-of: cv-tailoring-platform
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+type: Opaque
+stringData:
+  definitions.json: {{ .Values.rabbitmqDefinitions.definitions | toJson | quote }}
+{{- end }}

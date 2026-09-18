@@ -1,0 +1,38 @@
+# Staging: production topology, reduced blast radius and cheaper caps.
+rabbitmq:
+  enabled: true
+  auth:
+    username: cvt
+    existingPasswordSecret: rabbitmq-password
+  persistence:
+    enabled: true
+    size: 2Gi
+
+rabbitmqCredentials:
+  create: false # managed by the platform team
+
+rabbitmqDefinitions:
+  create: true
+
+keda:
+  enabled: true
+
+cv-tailoring-worker:
+  enabled: true
+  existingSecret: cv-tailoring-secrets
+  image:
+    tag: "" # set by CI: --set cv-tailoring-worker.image.tag=$GITHUB_SHA
+  config:
+    logLevel: INFO
+    logFormat: json
+  keda:
+    minReplicaCount: 0
+    maxReplicaCount: 5
+    cooldownPeriod: 300
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

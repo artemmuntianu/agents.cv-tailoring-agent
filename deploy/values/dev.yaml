@@ -1,0 +1,53 @@
+# Local cluster (kind / Docker Desktop / k3s) overrides.
+# Credentials are NOT stored here: create the Secret first (see `make dev-secret`).
+rabbitmq:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 384Mi
+
+rabbitmqCredentials:
+  create: true
+  # Dev-only password; production uses an externally managed Secret.
+  password: dev-only-change-me
+
+rabbitmqDefinitions:
+  create: true
+
+keda:
+  enabled: true
+
+cv-tailoring-worker:
+  enabled: true
+  image:
+    repository: cv-tailoring-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  # Point this at the Secret created by `make dev-secret`
+  # (GEMINI_API_KEY, DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RABBITMQ_URL).
+  existingSecret: cv-tailoring-secrets
+  config:
+    logLevel: DEBUG
+    logFormat: text
+    storageBackend: supabase
+    dbBackend: postgres
+    modelStateBackend: postgres
+  keda:
+    minReplicaCount: 0
+    maxReplicaCount: 3
+    cooldownPeriod: 60
+    pollingInterval: 10
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi

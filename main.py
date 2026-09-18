@@ -1,21 +1,32 @@
 # 2026-09-11 # System Healthcheck
+"""Local batch CLI (unchanged UX).
+
+    python main.py
+
+Cloud runs use `worker.py` (queue-driven). Both share `agent/pipeline.py`, so
+there is exactly one implementation of the tailoring flow.
+"""
+
 import fnmatch
 import os
 import shutil
 import sys
 
-from agent.graph import create_graph
-from agent.state import State
-from utils.model_state import init_model_state
+import config
+from agent.pipeline import run_cv_tailoring
+from utils.docx_mutator import load_cv_data
+from utils.logging_setup import get_logger, setup_logging
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
-INPUT_DIR = os.path.join(ARTIFACTS_DIR, "input")
-OUTPUT_DIR = os.path.join(ARTIFACTS_DIR, "output")
-TEMP_DIR = os.path.join(ARTIFACTS_DIR, "temp")
+log = get_logger(__name__)
+
+BASE_DIR = config.BASE_DIR
+ARTIFACTS_DIR = config.ARTIFACTS_DIR
+INPUT_DIR = config.INPUT_DIR
+OUTPUT_DIR = config.OUTPUT_DIR
+TEMP_DIR = config.TEMP_DIR
 
 JD_FILE_PATTERN = "jd_*.txt"
 
@@ -74,59 +85,51 @@ def find_pending_job_descriptions(job_desc_paths, output_dir: str = OUTPUT_DIR):
     return pending, skipped
 
 
-def run_cv_tailoring(cv_path: str, job_desc_path: str, output_path: str, temp_dir: str) -> None:
+def run_single_job(cv_path: str, job_desc_path: str, output_path: str, temp_dir: str, cv_data) -> dict:
     print("🚀 Starting Automated CV Tailoring Agent...")
     print(f"📂 CV Path: {cv_path}")
     print(f"📋 Job Description Path: {job_desc_path}")
     print(f"🎯 Target Output Path: {output_path}")
     print(f"🛠️  Temp Dir: {temp_dir}")
 
-    if not os.path.exists(cv_path):
-        print(f"❌ Error: Resume file not found at {cv_path}")
-        sys.exit(1)
-
     if not os.path.exists(job_desc_path):
         print(f"❌ Error: Job description file not found at {job_desc_path}")
         sys.exit(1)
 
-    with open(job_desc_path, "r", encoding="utf-8") as f:
-        job_description_text = f.read()
+    with open(job_desc_path, encoding="utf-8") as handle:
+        job_description_text = handle.read()
 
-    initial_state: State = {
-        "cv_path": cv_path,
-        "job_description": job_description_text,
-        "output_path": output_path,
-        "temp_dir": temp_dir,
-        "target_role_title": "",
-        "current_cv_text": "",
-        "modifications": [],
-        "layout_feedback": "",
-        "revision_count": 0,
-        "image_paths": [],
-        "is_approved": False,
-    }
-
-    # Restore persistence: resume from the last known-good model and skip models
-    # that recently failed, so we don't waste retries on a rate-limited model.
-    init_model_state()
-
-    graph = create_graph()
-    final_state = graph.invoke(initial_state)
+    final_state = run_cv_tailoring(
+        cv_path=cv_path,
+        job_description=job_description_text,
+        output_path=output_path,
+        temp_dir=temp_dir,
+        cv_data=cv_data,
+    )
 
     print("\n✨ Process finished!")
     print(f"📄 Tailored document saved to: {final_state['output_path']}")
     print(f"🏆 Final Layout Approved: {final_state['is_approved']}")
     print(f"🔄 Total Revisions: {final_state['revision_count']}")
+    return final_state
 
 
 def main() -> None:
+    setup_logging()
     ensure_directories()
     reset_temp_dir()
 
-    cv_path = os.path.join(INPUT_DIR, "cv.docx")
+    cv_path = os.path.join(INPUT_DIR, config.MASTER_CV_FILENAME)
     if not os.path.exists(cv_path):
         print(f"❌ Error: Base CV not found at {cv_path}")
-        print(f"   Place the etalon CV at: {os.path.join(INPUT_DIR, 'cv.docx')}")
+        print(f"   Place the etalon CV at: {cv_path}")
+        sys.exit(1)
+
+    try:
+        cv_data = load_cv_data()
+    except FileNotFoundError:
+        print(f"❌ Error: cv_data.json not found at {config.CV_DATA_PATH}")
+        print("   It must describe the master cv.docx (see docs/MESSAGE_CONTRACT.md).")
         sys.exit(1)
 
     job_desc_paths = find_job_descriptions(INPUT_DIR)
@@ -157,11 +160,12 @@ def main() -> None:
         print(f"   📄 Output CV: {output_cv}")
         print("=" * 72)
 
-        run_cv_tailoring(
+        run_single_job(
             cv_path=cv_path,
             job_desc_path=job_desc_path,
             output_path=output_cv,
             temp_dir=run_temp_dir,
+            cv_data=cv_data,
         )
 
     print(f"\n🎉 Finished processing {len(pending_jds)} job description file(s).")

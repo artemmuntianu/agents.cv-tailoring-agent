@@ -1,0 +1,25 @@
+apiVersion: v2
+name: cv-tailoring-platform
+description: |
+  Umbrella chart for the event-driven CV tailoring platform: RabbitMQ (broker
+  pod rabbitmq-0), KEDA (operator + metrics server) and the AI worker
+  deployment, installed with a single `helm upgrade --install`.
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+kubeVersion: ">=1.27.0-0"
+dependencies:
+  # Standard upstream charts - pinned ranges, resolved into Chart.lock by
+  # `helm dependency update`.
+  - name: rabbitmq
+    version: "14.6.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: rabbitmq.enabled
+  - name: keda
+    version: "2.15.x"
+    repository: https://kedacore.github.io/charts
+    condition: keda.enabled
+  - name: cv-tailoring-worker
+    version: "0.2.0"
+    repository: "file://../cv-tailoring-worker"
+    condition: cv-tailoring-worker.enabled

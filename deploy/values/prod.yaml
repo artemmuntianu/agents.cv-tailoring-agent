@@ -1,0 +1,87 @@
+# Production: mirror of the architecture doc (0 -> M workers, ~250MB broker,
+# system vs. user workload node pools, scale-to-zero cost profile).
+rabbitmq:
+  enabled: true
+  replicaCount: 1
+  clustering:
+    enabled: false
+  auth:
+    username: cvt
+    existingPasswordSecret: rabbitmq-password # managed outside Helm
+  persistence:
+    enabled: true
+    size: 8Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Keep the broker on the system node pool.
+  nodeSelector:
+    nodepool: system
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: system
+      effect: NoSchedule
+
+rabbitmqCredentials:
+  create: false
+
+rabbitmqDefinitions:
+  create: true
+
+keda:
+  enabled: true
+  nodeSelector:
+    nodepool: system
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: system
+      effect: NoSchedule
+
+cv-tailoring-worker:
+  enabled: true
+  # Secret created from Key Vault via external-secrets/CSI (no secrets in git).
+  existingSecret: cv-tailoring-secrets
+  image:
+    tag: "" # set by CI: --set cv-tailoring-worker.image.tag=$GITHUB_SHA
+  config:
+    logLevel: INFO
+    logFormat: json
+    keepTempDirs: false
+  keda:
+    minReplicaCount: 0
+    # "20 vacancies -> 20 pods"; also caps Gemini free-tier RPD exposure.
+    maxReplicaCount: 20
+    mode: QueueLength
+    queueLength: "1"
+    cooldownPeriod: 300
+    pollingInterval: 15
+    fallback:
+      enabled: true
+      failureThreshold: 3
+      replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # Run on the dynamic user-workload node pool (Cluster Autoscaler 0 -> N).
+  nodeSelector:
+    nodepool: workload
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: ai-worker
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 0

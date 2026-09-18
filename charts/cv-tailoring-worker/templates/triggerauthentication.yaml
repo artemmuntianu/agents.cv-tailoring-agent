@@ -1,0 +1,18 @@
+{{- if .Values.keda.enabled }}
+# Credentials live in a Secret and are referenced here, never inlined into the
+# ScaledObject.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "cv-tailoring-worker.fullname" . }}-rabbitmq
+  labels:
+    {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: username
+      name: {{ .Values.keda.auth.secretName }}
+      key: {{ .Values.keda.auth.usernameKey }}
+    - parameter: password
+      name: {{ .Values.keda.auth.secretName }}
+      key: {{ .Values.keda.auth.passwordKey }}
+{{- end }}

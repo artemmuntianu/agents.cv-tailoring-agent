@@ -1,0 +1,70 @@
+name: helm smoke
+
+# Installs the worker chart into a throwaway kind cluster, with the *offline*
+# backends (`directory` queue, local storage/db) so the test needs no broker,
+# no Supabase and no Gemini key. It proves the chart renders, the image ships
+# poppler + LibreOffice, the exec probes work and the container starts.
+on:
+  pull_request:
+    paths:
+      - "charts/**"
+      - "deploy/**"
+      - "Dockerfile"
+      - "worker.py"
+      - "healthcheck.py"
+  workflow_dispatch:
+
+jobs:
+  kind-install:
+    name: kind install + probes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Build worker image
+        run: docker build -t cv-tailoring-worker:smoke .
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: cvtailoring
+
+      - name: Load image into kind
+        run: kind load docker-image cv-tailoring-worker:smoke --name cvtailoring
+
+      - name: Install the worker chart with offline backends
+        run: |
+          helm upgrade --install ai-agent-worker charts/cv-tailoring-worker \
+            --set image.repository=cv-tailoring-worker \
+            --set image.tag=smoke \
+            --set image.pullPolicy=Never \
+            --set keda.enabled=false \
+            --set replicaCount=1 \
+            --set config.queueBackend=directory \
+            --set config.storageBackend=local \
+            --set config.dbBackend=local \
+            --set config.modelStateBackend=file \
+            --set config.logFormat=text \
+            --wait --timeout 5m
+
+      - name: Assert the pod is Ready (probes passed)
+        run: |
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=cv-tailoring-worker --timeout=180s
+          kubectl get pods -o wide
+          kubectl logs -l app.kubernetes.io/name=cv-tailoring-worker --tail=50
+
+      - name: Run the chart probe (render tools + dirs)
+        run: |
+          POD=$(kubectl get pod -l app.kubernetes.io/name=cv-tailoring-worker -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec "$POD" -- python healthcheck.py --mode render
+          kubectl exec "$POD" -- python healthcheck.py --mode readiness
+
+      - name: Pull diagnostics on failure
+        if: failure()
+        run: |
+          kubectl describe pods || true
+          kubectl logs -l app.kubernetes.io/name=cv-tailoring-worker --tail=200 || true

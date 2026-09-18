@@ -1,0 +1,22 @@
+cv-tailoring-worker {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}".
+
+  Deployment : {{ include "cv-tailoring-worker.fullname" . }} (replicas are managed by KEDA)
+  Queue      : {{ .Values.config.queueName }} @ {{ if .Values.keda.enabled }}{{ .Values.keda.host }}{{ else }}<keda disabled>{{ end }}
+  KEDA       : min {{ .Values.keda.minReplicaCount }} / max {{ .Values.keda.maxReplicaCount }}, mode {{ .Values.keda.mode }}, cooldown {{ .Values.keda.cooldownPeriod }}s
+  Storage    : {{ .Values.config.storageBackend }} (bucket {{ .Values.config.supabaseBucket }})
+  Job store  : {{ .Values.config.dbBackend }}
+
+Check the scaling behaviour:
+  kubectl get scaledobject {{ include "cv-tailoring-worker.fullname" . }}
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+
+Run the bundled probe (image tooling + broker reachability):
+  helm test {{ .Release.Name }}
+
+Tail the worker logs:
+  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+{{- if .Values.secrets.create }}
+WARNING: a Secret was rendered from chart values. Prefer `--set existingSecret=...`
+with a Secret managed outside of Helm (Kubernetes Secret / Key Vault / ESO).
+{{- end }}

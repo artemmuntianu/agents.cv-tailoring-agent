@@ -1,22 +1,63 @@
-import time
 import functools
-from datetime import datetime, timezone, timedelta
+import sys
+import time
+from datetime import UTC, datetime, timedelta
+
 from google.genai.errors import APIError
+
 import config
 from utils import model_state
+from utils.logging_setup import get_logger
+
+log = get_logger(__name__)
+
+
+class RetryLater(Exception):
+    """Raised when work cannot proceed now but should be retried later.
+
+    The worker converts this into a delayed re-publish on the queue instead of
+    blocking a pod on interactive input (containers have no TTY).
+    """
+
+    def __init__(self, reason: str, delay_seconds: float | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.delay_seconds = delay_seconds
+
+
+def _interactive_quota_wait_enabled() -> bool:
+    """Quota waiting is interactive only when a human is actually attached."""
+    if config.INTERACTIVE_QUOTA_WAIT is None:
+        try:
+            return sys.stdin is not None and sys.stdin.isatty()
+        except (AttributeError, ValueError):
+            return False
+    return bool(config.INTERACTIVE_QUOTA_WAIT)
+
 
 def wait_until_midnight_utc():
-    now_utc = datetime.now(timezone.utc)
-    tomorrow_utc = (now_utc + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    now_utc = datetime.now(UTC)
+    tomorrow_utc = (now_utc + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     seconds_remaining = int((tomorrow_utc - now_utc).total_seconds())
-    
-    print(f"\n⚠️  Daily Quota (RPD) Exhausted! Reset at 00:00 UTC ({seconds_remaining} seconds remaining).")
-    
-    user_choice = input("👉 Enter 'w' to wait until 00:00 UTC, or any other key to abort: ").strip().lower()
-    if user_choice != 'w':
-        print("❌ Operation cancelled by user.")
+
+    log.warning(
+        "daily quota (RPD) exhausted - resets at 00:00 UTC",
+        seconds_remaining=seconds_remaining,
+    )
+
+    if not _interactive_quota_wait_enabled():
+        # Headless (pod) mode: hand the task back to the queue for a later retry.
+        raise RetryLater("daily quota exhausted", delay_seconds=seconds_remaining)
+
+    user_choice = input(
+        "👉 Enter 'w' to wait until 00:00 UTC, or any other key to abort: "
+    ).strip().lower()
+    if user_choice != "w":
+        log.error("operation cancelled by user")
         raise SystemExit(1)
-        
+
     while seconds_remaining > 0:
         mins, secs = divmod(seconds_remaining, 60)
         hours, mins = divmod(mins, 60)
@@ -26,6 +67,7 @@ def wait_until_midnight_utc():
         seconds_remaining -= 1
     print("\n✅ Midnight UTC reached! Resuming operation...")
 
+
 def _advance_model():
     """Advance config.MODEL_NAME to the next available preferred model.
 
@@ -33,12 +75,14 @@ def _advance_model():
     future runs resume from a known-good model. Returns True if a fallback model
     was selected, False if no further model is available.
     """
-    next_model = model_state.advance_after_failure(config.MODEL_NAME, "retry ceiling reached")
+    next_model = model_state.advance_after_failure(
+        config.MODEL_NAME, "retry ceiling reached"
+    )
     if next_model is None:
-        print("⚠️  All preferred models exhausted; re-raising the rate-limit error.")
+        log.warning("all preferred models exhausted; re-raising the rate-limit error")
         return False
     config.MODEL_NAME = next_model
-    print(f"\n🔁 Rate limit on previous model — switching MODEL_NAME to '{config.MODEL_NAME}'.")
+    log.warning("rate limited on previous model - switching model", model=config.MODEL_NAME)
     return True
 
 
@@ -46,15 +90,17 @@ def _is_retryable(error_msg, status_code=None):
     """Return True for transient 429 / 503 style errors that warrant a retry."""
     if status_code is not None and str(status_code) in ("429", "503"):
         return True
+    haystack = str(error_msg).lower()
     retryable_tokens = (
         "429", "503", "resourceexhausted", "toomanyrequests",
         "unavailable", "high demand", "try again later", "rate limit",
     )
-    return any(t in error_msg for t in retryable_tokens)
+    return any(t in haystack for t in retryable_tokens)
 
 
 def _is_daily_quota(error_msg):
-    return any(t in error_msg for t in ("daily", "per_day", "rpd"))
+    haystack = str(error_msg).lower()
+    return any(t in haystack for t in ("daily", "per_day", "rpd"))
 
 
 def _handle_transient(error_msg, retries, delay, exc):
@@ -74,12 +120,17 @@ def _handle_transient(error_msg, retries, delay, exc):
         if _advance_model():
             return 0, config.BACKOFF_INITIAL_DELAY
         if "503" in error_msg or "unavailable" in error_msg or "high demand" in error_msg:
-            print(f"❌ Max retries ({config.BACKOFF_MAX_RETRIES}) reached for 503 UNAVAILABLE error.")
+            log.error("max retries reached for 503 UNAVAILABLE error", retries=config.BACKOFF_MAX_RETRIES)
         else:
-            print(f"❌ Max retries ({config.BACKOFF_MAX_RETRIES}) reached for 429 Rate Limit error.")
+            log.error("max retries reached for 429 rate-limit error", retries=config.BACKOFF_MAX_RETRIES)
         raise exc
 
-    print(f"⚠️  Transient API error encountered. Backing off for {delay:.1f}s (Retry {retries}/{config.BACKOFF_MAX_RETRIES})...")
+    log.warning(
+        "transient API error - backing off",
+        retry=retries,
+        max_retries=config.BACKOFF_MAX_RETRIES,
+        delay_seconds=round(delay, 1),
+    )
     time.sleep(delay)
     return retries, min(delay * config.BACKOFF_FACTOR, config.BACKOFF_MAX_DELAY)
 

@@ -1,13 +1,52 @@
 import os
-from PIL import Image
+from datetime import datetime
+from types import SimpleNamespace
+
 from google import genai
 from google.genai import types
+from PIL import Image
+
 import config
+from agent.contracts import JobStatus
+from agent.models import JobRoleExtraction, LayoutCheckResult, TextModificationList
 from agent.state import State
-from agent.models import TextModificationList, LayoutCheckResult, JobRoleExtraction
-from utils.retry import retry_with_exponential_backoff
-from utils.docx_mutator import extract_doc_text, apply_text_replacements, normalize_replacements
+from utils import db as db_module
+from utils import storage as storage_module
+from utils.docx_mutator import (
+    apply_text_replacements,
+    extract_doc_text,
+    normalize_replacements,
+    validate_cv_data_against_docx,
+)
+from utils.logging_setup import get_logger
 from utils.renderer import convert_docx_to_pdf, convert_pdf_to_images
+from utils.retry import retry_with_exponential_backoff
+
+log = get_logger(__name__)
+
+
+def _job_log(state: State):
+    return log.bind(
+        job_id=state.get("job_id") or "-",
+        external_id=state.get("external_id") or "-",
+        attempt=state.get("attempt", 0),
+    )
+
+
+def _set_status(state: State, status: str, **extra) -> None:
+    """Persist a status transition so Supabase Realtime can push it.
+
+    Never fatal: local CLI runs have no job_id and a DB hiccup must not kill a
+    task that is otherwise making progress.
+    """
+    job_id = state.get("job_id")
+    if not job_id:
+        return
+    try:
+        db_module.get_db().update_job(job_id, status=status, **extra)
+    except Exception as exc:  # noqa: BLE001
+        _job_log(state).warning("could not persist job status", status=status, error=str(exc))
+
 
 @retry_with_exponential_backoff
 def _call_gemini_extract_role(client, job_description: str) -> str:
@@ -28,6 +67,7 @@ JOB DESCRIPTION:
     res = JobRoleExtraction.model_validate_json(response.text)
     return res.target_role_title.strip()
 
+
 @retry_with_exponential_backoff
 def _call_gemini_text_adaptation(client, prompt):
     response = client.models.generate_content(
@@ -40,6 +80,7 @@ def _call_gemini_text_adaptation(client, prompt):
         ),
     )
     return TextModificationList.model_validate_json(response.text)
+
 
 @retry_with_exponential_backoff
 def _call_gemini_vision_eval(client, contents):
@@ -54,20 +95,37 @@ def _call_gemini_vision_eval(client, contents):
     )
     return LayoutCheckResult.model_validate_json(response.text)
 
+
 def get_genai_client():
     if getattr(config, "GEMINI_API_KEY", None):
         return genai.Client(api_key=config.GEMINI_API_KEY)
     return genai.Client()
 
+
 def adapt_text(state: State) -> State:
-    print(f"\n✏️  [Node: adapt_text] Starting revision #{state['revision_count'] + 1}...")
+    job_log = _job_log(state)
+    job_log.info("node started", node="adapt_text", revision=state["revision_count"] + 1)
+    _set_status(state, JobStatus.PROCESSING)
     client = get_genai_client()
-    cv_text = extract_doc_text(state["cv_path"])
-    
+
+    cv_data = state.get("cv_data") or None
+    cv_text = extract_doc_text(cv_data)
+
+    # Contract check from the architecture doc: cv_data.json must describe the
+    # master cv.docx, otherwise AST mutations could target the wrong paragraph.
+    if cv_data and not state.get("skip_cv_sync_check"):
+        missing = validate_cv_data_against_docx(cv_data, state["cv_path"])
+        if missing:
+            job_log.error("master cv sync check failed", missing=missing[:5])
+            raise ValueError(
+                "cv_data.json is out of sync with the master cv.docx "
+                f"({len(missing)} line(s) not found, e.g. {missing[:2]!r})"
+            )
+
     target_role_title = state.get("target_role_title")
     if not target_role_title:
         target_role_title = _call_gemini_extract_role(client, state["job_description"])
-        print(f"🎯 [Role Extraction] Extracted Target Role Title: '{target_role_title}'")
+        job_log.info("target role extracted", target_role_title=target_role_title)
 
     prompt = f"""You are a professional CV tailoring expert optimising a candidate's resume to maximise alignment with a target job description AND to pass Applicant Tracking System (ATS) screening - while NEVER fabricating anything.
 
@@ -105,7 +163,10 @@ RULES:
     prompt += f"\n\nCURRENT CV TEXT:\n{cv_text}\n\nJOB DESCRIPTION:\n{state['job_description']}"
 
     mod_result = _call_gemini_text_adaptation(client, prompt)
-    raw_replacements = [(m.original_text, m.tailored_text, getattr(m, "reason", "N/A")) for m in mod_result.modifications]
+    raw_replacements = [
+        (m.original_text, m.tailored_text, getattr(m, "reason", "N/A"))
+        for m in mod_result.modifications
+    ]
     # Normalise so the model can never pass a concatenated (multi-line) label+value
     # as a single replacement - those live in separate paragraphs and can never match.
     replacements = normalize_replacements(raw_replacements)
@@ -113,9 +174,13 @@ RULES:
     applied_count = apply_text_replacements(
         doc_path=state["cv_path"],
         replacements=replacements,
-        output_path=state["output_path"]
+        output_path=state["output_path"],
     )
-    print(f"\n✅ Total Applied: {applied_count}/{len(replacements)} text replacement(s) successfully written to DOCX.")
+    job_log.info(
+        "text replacements written to docx",
+        applied=applied_count,
+        suggested=len(replacements),
+    )
 
     mod_dicts = [
         {
@@ -127,7 +192,7 @@ RULES:
     ]
 
     if applied_count == 0:
-        print("⚠️  No text replacements could be applied to the DOCX. Stopping process.")
+        job_log.warning("no text replacements could be applied to the docx - stopping")
         return {
             **state,
             "target_role_title": target_role_title,
@@ -135,7 +200,8 @@ RULES:
             "modifications": mod_dicts,
             "revision_count": state["revision_count"] + 1,
             "is_approved": True,
-            "layout_feedback": "Stopped: No text replacements applied to DOCX."
+            "status_hint": JobStatus.SKIPPED,
+            "layout_feedback": "Stopped: No text replacements applied to DOCX.",
         }
 
     return {
@@ -143,31 +209,49 @@ RULES:
         "target_role_title": target_role_title,
         "current_cv_text": cv_text,
         "modifications": mod_dicts,
-        "revision_count": state["revision_count"] + 1
+        "revision_count": state["revision_count"] + 1,
     }
+
 
 def render(state: State) -> State:
-    print(f"📄 [Node: render] Converting DOCX to PDF and rendering low-res PNGs...")
-    temp_dir = state.get("temp_dir", "temp")
+    job_log = _job_log(state)
+    _set_status(state, JobStatus.RENDERING)
+    temp_dir = state.get("temp_dir") or "temp"
     os.makedirs(temp_dir, exist_ok=True)
     pdf_path = os.path.join(temp_dir, "temp_rendered.pdf")
-    
-    convert_docx_to_pdf(state["output_path"], pdf_path)
+    # Per-job LibreOffice profile: avoids profile locks if two conversions ever
+    # share a node.
+    profile_dir = os.path.join(temp_dir, "lo-profile")
+
+    convert_docx_to_pdf(state["output_path"], pdf_path, profile_dir=profile_dir)
     images_dir = os.path.join(temp_dir, "rendered_pages")
     image_paths = convert_pdf_to_images(pdf_path, images_dir, dpi=config.RENDER_DPI)
-    print(f"🖼️  Generated {len(image_paths)} page preview PNG(s) at {config.RENDER_DPI} DPI.")
-    
+    job_log.info(
+        "pages rendered",
+        pages=len(image_paths),
+        dpi=config.RENDER_DPI,
+        pdf_path=pdf_path,
+    )
+
     return {
         **state,
-        "image_paths": image_paths
+        "image_paths": image_paths,
+        "pdf_path": pdf_path,
     }
 
+
 def vision_check(state: State) -> State:
-    print(f"👁️  [Node: vision_check] Evaluating visual document layout with Gemini Vision...")
+    job_log = _job_log(state)
+    _set_status(state, JobStatus.VALIDATING)
+    job_log.info("node started", node="vision_check")
     client = get_genai_client()
-    
-    pil_images = [Image.open(p) for p in state["image_paths"]]
-    
+
+    images = []
+    for path in state["image_paths"]:
+        with Image.open(path) as image:
+            image.load()
+            images.append(image.copy())
+
     prompt = """Analyze the rendered CV page images for formatting quality and visual layout.
 
 IMPORTANT LAYOUT GUIDELINES:
@@ -180,16 +264,85 @@ Return json matching schema with fields:
 - is_layout_ok: boolean
 - feedback: string explanation of layout issues (if any) or confirmation of clean layout.
 """
-    contents = [*pil_images, prompt]
-    result = _call_gemini_vision_eval(client, contents)
-    
+    try:
+        result = _call_gemini_vision_eval(client, [*images, prompt])
+    finally:
+        for image in images:
+            image.close()
+
     if result.is_layout_ok:
-        print(f"✅ Visual check passed! Feedback: {result.feedback}")
+        job_log.info("visual check passed", feedback=result.feedback)
     else:
-        print(f"⚠️  Visual check flagged layout issues: {result.feedback}")
+        job_log.warning("visual check flagged layout issues", feedback=result.feedback)
 
     return {
         **state,
         "is_approved": result.is_layout_ok,
-        "layout_feedback": result.feedback
+        "layout_feedback": result.feedback,
+    }
+
+
+def persist(state: State) -> State:
+    """Terminal node: upload artifacts and write the final row.
+
+    The message is only acked after this node returns, so a crash here simply
+    re-delivers the task instead of losing the result.
+    """
+    job_log = _job_log(state)
+    job_log.info("node started", node="persist")
+    _set_status(state, JobStatus.UPLOADING)
+
+    status = state.get("status_hint") or JobStatus.COMPLETED
+    pdf_url = state.get("pdf_url") or ""
+    docx_url = state.get("docx_url") or ""
+
+    if state.get("job_id"):
+        task = SimpleNamespace(
+            job_id=state.get("job_id"),
+            user_id=state.get("user_id") or None,
+            external_id=state.get("external_id") or "cv",
+        )
+        storage = storage_module.get_storage()
+        pdf_path = state.get("pdf_path")
+        if pdf_path and os.path.exists(pdf_path):
+            pdf_url = storage.upload(
+                pdf_path, storage_module.output_key_for(task, ".pdf"), storage_module.PDF_MIME
+            )
+        if state.get("output_path") and os.path.exists(state["output_path"]):
+            docx_url = storage.upload(
+                state["output_path"],
+                storage_module.output_key_for(task, ".docx"),
+                storage_module.DOCX_MIME,
+            )
+
+    duration_ms = None
+    if state.get("started_at"):
+        try:
+            started = datetime.fromisoformat(state["started_at"])
+            duration_ms = int((datetime.now(started.tzinfo) - started).total_seconds() * 1000)
+        except Exception:  # noqa: BLE001
+            duration_ms = None
+
+    _set_status(
+        state,
+        status,
+        revision_count=state.get("revision_count"),
+        is_approved=bool(state.get("is_approved")),
+        pdf_url=pdf_url or None,
+        docx_path=docx_url or None,
+        duration_ms=duration_ms,
+    )
+    job_log.info(
+        "job finished",
+        status=status,
+        pdf_url=pdf_url,
+        duration_ms=duration_ms,
+        revisions=state.get("revision_count"),
+    )
+
+    return {
+        **state,
+        "pdf_url": pdf_url,
+        "docx_url": docx_url,
+        "status_hint": status,
     }

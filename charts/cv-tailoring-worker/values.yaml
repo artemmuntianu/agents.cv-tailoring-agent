@@ -1,0 +1,154 @@
+# Default values for cv-tailoring-worker.
+# IMPORTANT: never put real secrets in this file - use `existingSecret`
+# (Kubernetes Secret / Key Vault via external-secrets) or `--set` from CI.
+
+# KEDA owns the replica count (0 -> N -> 0), so the Deployment starts at zero.
+replicaCount: 0
+
+# Matches the pod names in the architecture document (ai-agent-worker-*).
+fullnameOverride: ai-agent-worker
+
+image:
+  repository: ghcr.io/artemmuntianu/agents-cv-tailoring-agent/cv-tailoring-worker
+  tag: "" # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {} # e.g. azure.workload.identity/client-id for Key Vault access
+
+podAnnotations: {}
+podLabels: {}
+
+# Non-secret runtime configuration -> ConfigMap.
+config:
+  serviceName: cv-tailoring-worker
+  queueBackend: amqp
+  storageBackend: supabase
+  dbBackend: postgres
+  modelStateBackend: postgres
+  queueName: resumes.generate
+  prefetchCount: 1
+  maxAttempts: 3
+  queueRetryTtlMs: 300000
+  logLevel: INFO
+  logFormat: json
+  tempRoot: /tmp/cvt
+  heartbeatMaxAgeSeconds: 300
+  keepTempDirs: false
+  interactiveQuotaWait: false
+  supabaseBucket: resumes
+  supabaseOutputPrefix: tailored
+  # master CV / CV-data object keys inside the bucket
+  supabaseMasterCvKey: master/cv.docx
+  supabaseCvDataKey: master/cv_data.json
+  # WARNING: replace with the model IDs your API key can access. The worker
+  # refuses to start when MODEL_NAME is missing from models.list(), because a
+  # wrong id is a non-retryable 400 that would send every task to the DLQ.
+  modelName: gemini-3.5-flash
+  # Comma-separated fallback ladder, most preferred first (empty = built-in).
+  preferredModels: ""
+  maxRevisions: 3
+  renderDpi: 70
+  # Supabase's pooled connection cannot use server-side prepared statements.
+  dbPrepareStatements: false
+
+# Secret values. `create: false` is the recommended production setting: create a
+# Secret out-of-band and point `existingSecret` at it.
+secrets:
+  create: false
+  geminiApiKey: ""
+  databaseUrl: ""
+  supabaseUrl: ""
+  supabaseServiceRoleKey: ""
+  rabbitmqUrl: ""
+
+# Name of a pre-existing Secret holding the keys above (GEMINI_API_KEY,
+# DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RABBITMQ_URL).
+existingSecret: ""
+
+# Extra env vars / envFrom entries for advanced overrides.
+extraEnv: []
+extraEnvFrom: []
+
+service:
+  # Exposed only if a health endpoint is ever added; the worker needs no Service.
+  enabled: false
+  port: 8080
+
+resources:
+  # Sized per the architecture doc: PDF conversion is the CPU spike.
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# A 15-45s task (x3 revisions) must be allowed to finish before the pod dies.
+terminationGracePeriodSeconds: 120
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 20
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+keda:
+  enabled: true
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 300
+  # 1 pod per pending message ("20 vacancies -> 20 pods" in the design docs).
+  queueLength: "1"
+  activationQueueLength: "0"
+  # QueueLength == ready + unacked, which is what we want for 15-45s tasks.
+  mode: QueueLength
+  # RabbitMQ management API (the KEDA rabbitmq scaler talks HTTP, not AMQP).
+  host: http://rabbitmq.default.svc.cluster.local:15672
+  protocol: amqp
+  # Credentials come from a Secret via TriggerAuthentication (never inline).
+  auth:
+    secretName: rabbitmq-credentials
+    usernameKey: rabbitmq-username
+    passwordKey: rabbitmq-password
+  fallback:
+    enabled: true
+    failureThreshold: 3
+    replicas: 1
+  behavior: {}
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 0
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false # /tmp is an emptyDir; /app stays read-only-safe
+  capabilities:
+    drop:
+      - ALL

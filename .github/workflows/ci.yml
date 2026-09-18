@@ -1,0 +1,85 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: lint + tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cvt
+          POSTGRES_PASSWORD: cvt
+          POSTGRES_DB: cvt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cvt"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: python -m ruff check .
+
+      - name: Pytest
+        # Postgres comes from the service container so the production-store tests
+        # really run; everything else is hermetic (no network, no Gemini,
+        # LibreOffice rendering is stubbed).
+        env:
+          TEST_DATABASE_URL: postgresql://cvt:cvt@localhost:5432/cvt
+        run: python -m pytest -q
+
+  charts:
+    name: helm lint + render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Lint worker chart
+        run: helm lint charts/cv-tailoring-worker
+
+      - name: Resolve umbrella dependencies
+        run: helm dependency update charts/cv-tailoring-platform
+
+      - name: Lint umbrella chart
+        run: helm lint charts/cv-tailoring-platform
+
+      - name: Render manifests (dev + prod)
+        run: |
+          helm template cv-tailoring charts/cv-tailoring-platform \
+            -f deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci \
+            > /tmp/rendered-dev.yaml
+          helm template cv-tailoring charts/cv-tailoring-platform \
+            -f deploy/values/prod.yaml --set cv-tailoring-worker.image.tag=ci \
+            > /tmp/rendered-prod.yaml
+          wc -l /tmp/rendered-*.yaml
+
+      - name: Validate rendered manifests (kubeconform)
+        run: |
+          docker run --rm -v /tmp:/manifests ghcr.io/yannh/kubeconform:v0.6.7 \
+            -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.30.0 /manifests/rendered-dev.yaml

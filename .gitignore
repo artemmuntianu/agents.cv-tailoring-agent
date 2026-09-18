@@ -8,8 +8,23 @@ venv/
 ENV/
 artifacts/
 scratch/
-.env
 .idea/
 .vscode/
 model_state.json
 *.pyc
+
+# `*.json` above must not hide versioned, non-secret descriptors.
+!charts/**/*.json
+!deploy/**/*.json
+!tests/**/*.json
+!**/values.schema.json
+!.github/**/*.json
+
+# Runtime data
+queue/
+heartbeat
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
