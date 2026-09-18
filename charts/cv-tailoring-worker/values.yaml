@@ -9,8 +9,10 @@ replicaCount: 0
 fullnameOverride: ai-agent-worker
 
 image:
-  repository: ghcr.io/artemmuntianu/agents-cv-tailoring-agent/cv-tailoring-worker
-  tag: "" # defaults to .Chart.AppVersion
+  # Locally built image (no registry): the cluster reads it from Docker's
+  # image store. Set repository/tag to a registry path if you ever push it.
+  repository: cv-tailoring-worker
+  tag: dev
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -18,7 +20,7 @@ nameOverride: ""
 serviceAccount:
   create: true
   name: ""
-  annotations: {} # e.g. azure.workload.identity/client-id for Key Vault access
+  annotations: {} # e.g. for external secret stores / workload identity
 
 podAnnotations: {}
 podLabels: {}
@@ -27,7 +29,6 @@ podLabels: {}
 config:
   serviceName: cv-tailoring-worker
   queueBackend: amqp
-  storageBackend: supabase
   dbBackend: postgres
   modelStateBackend: postgres
   queueName: resumes.generate
@@ -45,11 +46,6 @@ config:
   heartbeatMaxAgeSeconds: 300
   keepTempDirs: false
   interactiveQuotaWait: false
-  supabaseBucket: resumes
-  supabaseOutputPrefix: tailored
-  # master CV / CV-data object keys inside the bucket
-  supabaseMasterCvKey: master/cv.docx
-  supabaseCvDataKey: master/cv_data.json
   # WARNING: replace with the model IDs your API key can access. The worker
   # refuses to start when MODEL_NAME is missing from models.list(), because a
   # wrong id is a non-retryable 400 that would send every task to the DLQ.
@@ -58,10 +54,10 @@ config:
   preferredModels: ""
   maxRevisions: 3
   renderDpi: 70
-  # Supabase's pooled connection cannot use server-side prepared statements.
+  # A pooled Postgres connection cannot use prepared statements.
   dbPrepareStatements: false
-  # Where artifacts live when `STORAGE_BACKEND=local` (input/cv.docx,
-  # input/jd_*.txt, output/cv_*.docx|pdf). Set together with `persistence`.
+  # Where artifacts live (input/cv.docx, input/jd_*.txt, output/cv_*.docx|pdf).
+  # In the cluster this is the mounted volume, e.g. /data - see `persistence`.
   artifactsDir: ""
 
 # Secret values. `create: false` is the recommended production setting: create a
@@ -70,12 +66,10 @@ secrets:
   create: false
   geminiApiKey: ""
   databaseUrl: ""
-  supabaseUrl: ""
-  supabaseServiceRoleKey: ""
   rabbitmqUrl: ""
 
 # Name of a pre-existing Secret holding the keys above (GEMINI_API_KEY,
-# DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RABBITMQ_URL).
+# DATABASE_URL, RABBITMQ_URL - see scripts/worker-secret.ps1).
 existingSecret: ""
 
 # Artifact storage that survives pod restarts and scale-to-zero.

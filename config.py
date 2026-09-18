@@ -146,11 +146,9 @@ MODEL_UNAVAILABLE_TTL_HOURS = _env_int("MODEL_UNAVAILABLE_TTL_HOURS", 24)
 # Backend selection (local vs cloud)
 # --------------------------------------------------------------------------- #
 # queue:       directory | amqp
-# storage:     local | supabase
 # db:          local | postgres
 # model_state: file | postgres
 QUEUE_BACKEND = os.getenv("QUEUE_BACKEND", "directory").strip().lower()
-STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").strip().lower()
 DB_BACKEND = os.getenv("DB_BACKEND", "local").strip().lower()
 MODEL_STATE_BACKEND = os.getenv("MODEL_STATE_BACKEND", "file").strip().lower()
 
@@ -198,28 +196,24 @@ HEARTBEAT_MAX_AGE_SECONDS = _env_int("HEARTBEAT_MAX_AGE_SECONDS", 300)
 KEEP_TEMP_DIRS = _env_bool("KEEP_TEMP_DIRS", False)
 
 # --------------------------------------------------------------------------- #
-# Postgres / Supabase
+# Postgres
 # --------------------------------------------------------------------------- #
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DATABASE_SSLMODE = os.getenv("DATABASE_SSLMODE", "require")
 
-# Supabase's *pooled* connection (pgbouncer, port 6543, transaction mode) does
-# not support server-side prepared statements - psycopg would start failing on
-# the second execution of the same statement. They are therefore disabled by
-# default; set DB_PREPARE_STATEMENTS=true when pointing at a direct/session
-# connection (port 5432).
+# A *pooled* connection (pgbouncer in transaction mode, e.g. a managed
+# Postgres pooler on port 6543) does not support server-side prepared
+# statements - psycopg would fail on the second execution of the same
+# statement. Disabled by default; set DB_PREPARE_STATEMENTS=true for a
+# direct/session connection.
 DB_PREPARE_STATEMENTS = _env_bool("DB_PREPARE_STATEMENTS", False)
 DB_PREPARE_THRESHOLD = _env_int("DB_PREPARE_THRESHOLD", 5)
 # Shows up in pg_stat_activity, which makes the runbook queries useful.
 DB_APPLICATION_NAME = os.getenv("DB_APPLICATION_NAME", "cv-tailoring-worker")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "resumes")
-# Object keys inside the bucket.
-SUPABASE_MASTER_CV_KEY = os.getenv("SUPABASE_MASTER_CV_KEY", "master/cv.docx")
-SUPABASE_CV_DATA_KEY = os.getenv("SUPABASE_CV_DATA_KEY", "master/cv_data.json")
-SUPABASE_OUTPUT_PREFIX = os.getenv("SUPABASE_OUTPUT_PREFIX", "tailored")
-SUPABASE_URL_TTL_SECONDS = _env_int("SUPABASE_URL_TTL_SECONDS", 604800)
+# Artifacts are stored locally: everything lives under ARTIFACTS_DIR, which is
+# a PersistentVolumeClaim in Kubernetes (`/data`) and `artifacts/` for the CLI.
+# Object keys are flattened to a file name by `utils.storage.LocalStorage`.
+OUTPUT_KEY_PREFIX = os.getenv("OUTPUT_KEY_PREFIX", "tailored")
 
 # --------------------------------------------------------------------------- #
 # Logging

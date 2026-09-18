@@ -1,6 +1,6 @@
 -- Core schema for the CV tailoring platform.
--- Safe on plain Postgres (docker-compose initdb) and on Supabase.
--- Supabase-only RLS / Realtime / Storage bits live in SUPABASE_POLICIES.sql.
+-- Runs on any Postgres: the in-cluster instance, docker-compose, or a managed
+-- service. Plain SQL only - no RLS, no extensions beyond gen_random_uuid().
 --
 -- The worker also runs `create table if not exists` on startup (utils/db.py),
 -- so this file is the declarative source of truth, not a hard prerequisite.

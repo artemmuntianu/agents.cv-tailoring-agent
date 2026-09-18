@@ -45,6 +45,9 @@ helm upgrade --install cv-tailoring ./charts/cv-tailoring-platform \
 
 ## Not in this chart
 
-Node pools / cluster autoscaler are provider infrastructure — see
-`deploy/infra/`. The Vercel API gateway, Astro dashboard and Chrome extension are
-separate deliverables; `publisher.py` emulates the gateway for testing.
+* **Node pools / cluster autoscaler** — provider infrastructure. This chart
+  targets a single-node local cluster; on a managed cluster you would add a
+  `nodeSelector`/tolerations pair per pool (broker + KEDA on the system pool,
+  workers on the autoscaled one).
+* The **API gateway**, dashboard and browser extension are separate deliverables;
+  `publisher.py` emulates the gateway for testing.

@@ -23,7 +23,6 @@
       "required": ["queueBackend", "storageBackend", "dbBackend", "queueName"],
       "properties": {
         "queueBackend": { "enum": ["amqp", "directory"] },
-        "storageBackend": { "enum": ["supabase", "local"] },
         "dbBackend": { "enum": ["postgres", "local"] },
         "modelStateBackend": { "enum": ["postgres", "file"] },
         "queueName": { "type": "string", "minLength": 1 },

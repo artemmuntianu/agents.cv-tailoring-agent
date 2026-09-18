@@ -156,7 +156,7 @@ cv-tailoring-worker:
   enabled: true
   fullnameOverride: ai-agent-worker
   image:
-    repository: ghcr.io/artemmuntianu/agents-cv-tailoring-agent/cv-tailoring-worker
+    repository: cv-tailoring-worker
     tag: "" # set by CI: --set cv-tailoring-worker.image.tag=$GITHUB_SHA
   # Secrets are created outside Helm in production; the values below are only
   # used when `existingSecret` is empty and `secrets.create` is true.
@@ -165,12 +165,9 @@ cv-tailoring-worker:
     create: false
     geminiApiKey: ""
     databaseUrl: ""
-    supabaseUrl: ""
-    supabaseServiceRoleKey: ""
     rabbitmqUrl: ""
   config:
     queueName: resumes.generate
-    supabaseBucket: resumes
   keda:
     enabled: true
     host: http://rabbitmq.default.svc.cluster.local:15672

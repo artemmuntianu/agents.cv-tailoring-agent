@@ -34,7 +34,7 @@ def _job_log(state: State):
 
 
 def _set_status(state: State, status: str, **extra) -> None:
-    """Persist a status transition so Supabase Realtime can push it.
+    """Persist a status transition so the dashboard can pick it up.
 
     Never fatal: local CLI runs have no job_id and a DB hiccup must not kill a
     task that is otherwise making progress.
@@ -306,13 +306,11 @@ def persist(state: State) -> State:
         pdf_path = state.get("pdf_path")
         if pdf_path and os.path.exists(pdf_path):
             pdf_url = storage.upload(
-                pdf_path, storage_module.output_key_for(task, ".pdf"), storage_module.PDF_MIME
+                pdf_path, storage_module.output_key_for(task, ".pdf")
             )
         if state.get("output_path") and os.path.exists(state["output_path"]):
             docx_url = storage.upload(
-                state["output_path"],
-                storage_module.output_key_for(task, ".docx"),
-                storage_module.DOCX_MIME,
+                state["output_path"], storage_module.output_key_for(task, ".docx")
             )
 
     duration_ms = None

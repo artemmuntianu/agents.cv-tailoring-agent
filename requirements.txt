@@ -9,5 +9,4 @@ python-dotenv>=1.0.0
 
 # --- cloud worker additions ---
 pika>=1.3.2                 # RabbitMQ (resumes.generate queue)
-psycopg[binary]>=3.2.0      # Supabase / Postgres job + model-state store
-httpx>=0.27.0               # Supabase Storage REST calls
+psycopg[binary]>=3.2.0      # Postgres job store + shared model-state ledger

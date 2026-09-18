@@ -1,9 +1,7 @@
 # Create the worker's Kubernetes Secret from .env (values never touch git).
 #
-# Required: GEMINI_API_KEY and DATABASE_URL.
-# Supabase keys are optional - they are only used when
-# STORAGE_BACKEND=supabase. With the all-local setup (PVC storage) you can leave
-# them out entirely.
+# Only GEMINI_API_KEY and DATABASE_URL are needed: artifacts live on the
+# cluster's own volume, so there is no bucket or cloud storage to configure.
 #
 # The broker credentials are NOT here: the chart injects RABBITMQ_USERNAME /
 # RABBITMQ_PASSWORD from the same Secret KEDA uses, so the password lives in one
@@ -49,7 +47,7 @@ foreach ($line in Get-Content -LiteralPath $EnvFile) {
 }
 
 # Real environment variables win over the file, so CI can override.
-foreach ($key in @('GEMINI_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'DATABASE_URL')) {
+foreach ($key in @('GEMINI_API_KEY', 'DATABASE_URL')) {
     $fromEnv = [Environment]::GetEnvironmentVariable($key)
     if (-not [string]::IsNullOrWhiteSpace($fromEnv)) { $settings[$key] = $fromEnv }
 }
@@ -64,13 +62,7 @@ if ($missing.Count -gt 0) {
 }
 Ok 'GEMINI_API_KEY and DATABASE_URL present'
 
-# Supabase is optional (only for STORAGE_BACKEND=supabase).
-if ([string]::IsNullOrWhiteSpace($settings['SUPABASE_URL']) -or [string]::IsNullOrWhiteSpace($settings['SUPABASE_SERVICE_ROLE_KEY'])) {
-    Warn 'no Supabase keys - fine for STORAGE_BACKEND=local (artifacts on the cluster volume)'
-}
-
-if ($settings['DATABASE_URL'] -match 'postgres\.supabase\.co' ) { Ok 'database looks like Supabase' }
-elseif ($settings['DATABASE_URL'] -notmatch 'sslmode=') {
+if ($settings['DATABASE_URL'] -notmatch 'sslmode=') {
     Warn 'DATABASE_URL has no sslmode parameter; for the in-cluster Postgres use ?sslmode=disable'
 }
 
@@ -81,19 +73,12 @@ $kubectlArgs = @(
     '--from-literal=DATABASE_URL=' + $settings['DATABASE_URL'],
     '--dry-run=client', '-o', 'yaml'
 )
-# Only ship the Supabase keys when they exist, so the Secret stays minimal.
-foreach ($optional in @('SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY')) {
-    if (-not [string]::IsNullOrWhiteSpace($settings[$optional])) {
-        $kubectlArgs += '--from-literal=' + $optional + '=' + $settings[$optional]
-    }
-}
-
 if ($DryRun) {
     # Never echo the values themselves.
     Write-Host 'would create Secret:'
     Write-Host ("  name      : " + $Name)
     Write-Host ("  namespace : " + $Namespace)
-    Write-Host '  keys      : GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL'
+    Write-Host '  keys      : GEMINI_API_KEY, DATABASE_URL'
     Write-Host ("  db host   : " + (($settings['DATABASE_URL'] -split '@')[-1]))
     exit 0
 }

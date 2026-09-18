@@ -106,7 +106,6 @@ def isolated_config(tmp_dir, cv_data=None):
         "MODEL_STATE_FILE": os.path.join(artifacts, "model_state.json"),
         "HEARTBEAT_FILE": os.path.join(temp_root, "heartbeat"),
         "QUEUE_BACKEND": "directory",
-        "STORAGE_BACKEND": "local",
         "DB_BACKEND": "local",
         "MODEL_STATE_BACKEND": "file",
     }

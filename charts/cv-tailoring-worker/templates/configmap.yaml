@@ -11,7 +11,6 @@ data:
   PREFETCH_COUNT: {{ .Values.config.prefetchCount | quote }}
   MAX_ATTEMPTS: {{ .Values.config.maxAttempts | quote }}
   QUEUE_RETRY_TTL_MS: {{ .Values.config.queueRetryTtlMs | quote }}
-  STORAGE_BACKEND: {{ .Values.config.storageBackend | quote }}
   DB_BACKEND: {{ .Values.config.dbBackend | quote }}
   MODEL_STATE_BACKEND: {{ .Values.config.modelStateBackend | quote }}
   LOG_LEVEL: {{ .Values.config.logLevel | quote }}
@@ -30,7 +29,3 @@ data:
   DB_APPLICATION_NAME: {{ include "cv-tailoring-worker.fullname" . | quote }}
   MAX_REVISIONS: {{ .Values.config.maxRevisions | quote }}
   RENDER_DPI: {{ .Values.config.renderDpi | quote }}
-  SUPABASE_BUCKET: {{ .Values.config.supabaseBucket | quote }}
-  SUPABASE_OUTPUT_PREFIX: {{ .Values.config.supabaseOutputPrefix | quote }}
-  SUPABASE_MASTER_CV_KEY: {{ .Values.config.supabaseMasterCvKey | quote }}
-  SUPABASE_CV_DATA_KEY: {{ .Values.config.supabaseCvDataKey | quote }}

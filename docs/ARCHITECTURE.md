@@ -11,14 +11,14 @@ Chrome Extension ──HTTPS──► Vercel API Gateway ──AMQP──► Rab
                             ai-agent-worker pod(s)  ── prefetch_count = 1
                               adapt_text → render → vision_check → persist
                                                               │
-                       Supabase Storage (PDF/DOCX) + Postgres (status) ──► Realtime ──► UI
+                    artifacts volume (PDF/DOCX) + Postgres (status) ──► UI
 ```
 
 ## Pod groups ↔ this repo
 
 | Doc group | Objects | Where |
 |---|---|---|
-| ① Broker | `rabbitmq-0` StatefulSet, 100m/500m CPU, 256Mi/512Mi, always on | Bitnami `rabbitmq` subchart (`helm/cv-tailoring-platform`) |
+| ① Broker | `rabbitmq-0` StatefulSet, 100m/500m CPU, 256Mi/512Mi, always on | `charts/cv-tailoring-platform/templates/rabbitmq.yaml` |
 | ② Workers | `ai-agent-worker-*` Deployment + ScaledObject, 250m/1000m CPU, 512Mi/1024Mi, **0 → M → 0** | `charts/cv-tailoring-worker` |
 | ③ Autoscaler | `keda-operator`, `keda-metrics-server` | `kedacore/keda` subchart |
 
@@ -27,12 +27,19 @@ Chrome Extension ──HTTPS──► Vercel API Gateway ──AMQP──► Rab
 15–45 s tasks: in-flight work still counts, so KEDA cannot scale to zero while
 messages are being processed.
 
-## Node pools ↔ `deploy/infra/aks.bicep`
+## Where it runs today
 
-| Pool | Size | Contents |
-|---|---|---|
-| `system` (tainted `workload=system`) | `Standard_B2s` (2 vCPU / 4 GB), always on | RabbitMQ, KEDA, ingress |
-| `workload` | autoscaled **0 → N** | `ai-agent-worker` pods (`nodeSelector: nodepool=workload`) |
+Everything runs inside a **local single-node Kubernetes cluster** (Docker Desktop,
+kind, k3d or k3s), installed with `./scripts/local-deploy.ps1`: RabbitMQ
+(`rabbitmq-0`), KEDA, Postgres, the `cv-artifacts` volume, the `cv-files` helper
+pod and the worker. No cloud account is involved, and the only outbound call is
+to the Gemini API.
+
+The design documents describe a managed variant (Azure Container Apps / AKS,
+with a small system node pool for the broker and an autoscaled workload pool for
+the workers). The same charts can be pointed at such a cluster later — add a
+`nodeSelector`/tolerations pair per pool — and nothing in the worker code assumes
+either topology.
 
 ## Per-task pipeline (Doc B steps a–g)
 
@@ -43,8 +50,8 @@ messages are being processed.
 | c) AST/XML mutation of master `cv.docx` | `utils/docx_mutator.apply_text_replacements` |
 | d) render DOCX → PDF → images | `utils/renderer` (LibreOffice + poppler, per-job profile) |
 | e) Vision QA | `agent/nodes.vision_check` (loop ≤ `MAX_REVISIONS`) |
-| f) upload result to Supabase Storage | `agent/nodes.persist` → `utils/storage.SupabaseStorage` |
-| g) update PostgreSQL state | `agent/nodes.persist` → `utils/db.PostgresDb` → Realtime |
+| f) store the result | `agent/nodes.persist` → `utils.storage.LocalStorage` (the `cv-artifacts` volume) |
+| g) update PostgreSQL state | `agent/nodes.persist` → `utils/db.PostgresDb` |
 
 The message is acked only after (f) and (g) succeed.
 
@@ -56,7 +63,6 @@ graph runs three ways:
 | Backend | Local dev / tests | Cluster |
 |---|---|---|
 | queue | `directory` (JSON files) | `amqp` (RabbitMQ) |
-| storage | `local` (artifacts/) | `supabase` |
 | db | `local` (JSON file) | `postgres` |
 | model state | `file` | `postgres` (shared ledger) |
 
@@ -74,5 +80,5 @@ implementation of the tailoring flow.
   global; the payload now carries it (or it is fetched per task), which also
   removes a cross-tenant staleness bug.
 * **No ingress/service.** The worker only pulls work; probes are exec-based.
-* **Storage over REST (`httpx`)** rather than the Supabase SDK, keeping the image
-  lean and the surface small.
+* **Storage is a local volume**, not a cloud bucket: one PVC holds the master CV,
+  the job descriptions and every tailored result.

@@ -247,7 +247,6 @@ def main(argv=None) -> int:
     log.info(
         "worker starting",
         queue_backend=config.QUEUE_BACKEND,
-        storage_backend=config.STORAGE_BACKEND,
         db_backend=config.DB_BACKEND,
         model_state_backend=config.MODEL_STATE_BACKEND,
         queue=config.QUEUE_NAME,

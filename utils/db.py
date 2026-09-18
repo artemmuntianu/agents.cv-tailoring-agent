@@ -4,9 +4,9 @@ Two interchangeable backends:
 
 * ``local``    - a JSON file under ``artifacts/`` (keeps `python main.py` and
   the tests fully offline).
-* ``postgres`` - the Supabase/Postgres database the dashboard reads from. The
-  worker writes status transitions here, and Supabase Realtime pushes them to
-  the UI (doc: "worker updates PostgreSQL state" -> "Realtime push").
+* ``postgres`` - the Postgres database the dashboard reads from. The worker
+  writes status transitions here so the UI can show progress (doc: "worker
+  updates PostgreSQL state").
 
 The worker is single-threaded per pod (``prefetch_count = 1``), so one lazily
 opened psycopg connection per process is enough.
@@ -255,7 +255,7 @@ end $ddl$;
 
 
 class PostgresDb:
-    """Supabase/Postgres job store."""
+    """Postgres job store."""
 
     backend = "postgres"
 
@@ -288,8 +288,8 @@ class PostgresDb:
         from psycopg.rows import dict_row
 
         if self._conn is None or getattr(self._conn, "closed", False):
-            # Supabase's *pooled* endpoint (pgbouncer, transaction mode) cannot
-            # use server-side prepared statements, so they are opt-in
+            # A *pooled* endpoint (pgbouncer, transaction mode) cannot use
+            # server-side prepared statements, so they are opt-in
             # (DB_PREPARE_STATEMENTS=true for a direct/session connection).
             prepare_threshold = (
                 config.DB_PREPARE_THRESHOLD if config.DB_PREPARE_STATEMENTS else None

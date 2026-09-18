@@ -33,7 +33,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./docs/SUPABASE_SCHEMA.sql:/docker-entrypoint-initdb.d/00_schema.sql:ro
+      - ./docs/postgres_schema.sql:/docker-entrypoint-initdb.d/00_schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cvt"]
       interval: 10s
@@ -53,7 +53,6 @@ services:
       DATABASE_URL: postgresql://cvt:cvt@postgres:5432/cvt
       DATABASE_SSLMODE: disable
       MODEL_STATE_BACKEND: ${MODEL_STATE_BACKEND:-postgres}
-      STORAGE_BACKEND: local
       LOG_FORMAT: json
       HEARTBEAT_FILE: /tmp/cvt/heartbeat
     volumes:

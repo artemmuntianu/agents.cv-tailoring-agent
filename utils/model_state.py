@@ -6,7 +6,7 @@ KEDA scales the deployment back to zero. The ledger therefore lives behind a
 small store interface:
 
 * ``file``     - the original local JSON behaviour (CLI / dev).
-* ``postgres`` - shared, atomic upserts in Supabase/Postgres (cloud).
+* ``postgres`` - shared, atomic upserts in Postgres (the cluster).
 
 The public API (``init_model_state`` / ``advance_after_failure`` ...) is
 unchanged so callers do not care which backend is active.

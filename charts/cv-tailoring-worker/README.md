@@ -28,12 +28,11 @@ helm upgrade --install ai-agent-worker ./charts/cv-tailoring-worker \
 | `replicaCount` | `0` | ignored while `keda.enabled=true` |
 | `fullnameOverride` | `ai-agent-worker` | matches the pod names in the design doc |
 | `config.queueBackend` | `amqp` | `amqp` in cluster, `directory` for k8s-free POCs |
-| `config.storageBackend` | `supabase` | `supabase` \| `local` |
 | `config.dbBackend` | `postgres` | `postgres` \| `local` |
 | `keda.mode` | `QueueLength` | ready **+ unacked**, so 15-45 s tasks count while in flight |
 | `keda.queueLength` | `"1"` | 1 pod per pending message → "20 vacancies → 20 pods" |
 | `keda.fallback.replicas` | `1` | keeps a working floor if the RabbitMQ metrics API is down |
-| `existingSecret` | `""` | Secret with `GEMINI_API_KEY`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RABBITMQ_URL` |
+| `existingSecret` | `""` | Secret with `GEMINI_API_KEY`, `DATABASE_URL` (broker credentials come from the KEDA Secret) |
 
 ## Why the worker needs no Service or Ingress
 

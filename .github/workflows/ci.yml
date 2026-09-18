@@ -68,15 +68,12 @@ jobs:
       - name: Lint umbrella chart
         run: helm lint charts/cv-tailoring-platform
 
-      - name: Render manifests (dev + prod)
+      - name: Render manifests
         run: |
           helm template cv-tailoring charts/cv-tailoring-platform \
             -f deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci \
             > /tmp/rendered-dev.yaml
-          helm template cv-tailoring charts/cv-tailoring-platform \
-            -f deploy/values/prod.yaml --set cv-tailoring-worker.image.tag=ci \
-            > /tmp/rendered-prod.yaml
-          wc -l /tmp/rendered-*.yaml
+          wc -l /tmp/rendered-dev.yaml
 
       - name: Validate rendered manifests (kubeconform)
         run: |

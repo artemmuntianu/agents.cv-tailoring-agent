@@ -72,9 +72,13 @@ chart-template: ## Render manifests locally (no cluster needed)
 	helm template $(RELEASE) $(CHART_PLATFORM) -f $(VALUES) \
 	  --set cv-tailoring-worker.image.tag=$(IMAGE_TAG) > /dev/null
 
-.PHONY: dev-secret
-dev-secret: ## Create the Kubernetes Secret from .env (GEMINI key, DB, Supabase)
-	bash scripts/dev-secret.sh
+.PHONY: local-deploy
+local-deploy: ## Deploy everything into the local cluster (build + secret + helm)
+	powershell -ExecutionPolicy Bypass -File scripts/local-deploy.ps1
+
+.PHONY: storage-files
+storage-files: ## List artifacts on the cluster volume (see -Action seed|download)
+	powershell -ExecutionPolicy Bypass -File scripts/storage-files.ps1 -Action list
 
 .PHONY: deploy
 deploy: ## helm upgrade --install into the current kube-context
@@ -98,9 +102,9 @@ status: ## Show pods, ScaledObject state and queue depth
 helm-test: ## Run the chart's in-cluster probe
 	helm test $(RELEASE) --namespace $(NAMESPACE)
 
-.PHONY: prod-secrets
-prod-secrets: ## Create the three production Secrets from .env (never from git)
-	bash scripts/prod-secrets.sh
+.PHONY: worker-secret
+worker-secret: ## Create the worker Secret from .env (never from git)
+	powershell -ExecutionPolicy Bypass -File scripts/worker-secret.ps1
 
 .PHONY: check-models
 check-models: ## Verify MODEL_NAME against the models this Gemini key can use
@@ -114,14 +118,6 @@ test-postgres: ## Run the production-store tests against the local Postgres
 # --------------------------------------------------------------------------- #
 # infrastructure
 # --------------------------------------------------------------------------- #
-.PHONY: cluster-create
-cluster-create: ## Create the AKS cluster (system + workload pools)
-	bash scripts/create-cluster.sh
-
-.PHONY: cluster-delete
-cluster-delete: ## Delete the resource group
-	az group delete -n rg-cvtailoring --yes --no-wait
-
 .PHONY: kind-create
 kind-create: ## Create a local kind cluster for dev/CI
 	kind create cluster --name cvtailoring

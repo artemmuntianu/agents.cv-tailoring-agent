@@ -79,7 +79,7 @@ paragraph.
 Key property: the worker **acks only after `persist` succeeded**, so a crash,
 OOM-kill or scale-down mid-task simply redelivers the message.
 
-## Status lifecycle (Postgres → Supabase Realtime → UI)
+## Status lifecycle (Postgres → dashboard)
 
 ```
 queued → processing → rendering → validating → uploading → completed
@@ -88,8 +88,9 @@ queued → processing → rendering → validating → uploading → completed
                                      ↘ skipped        (no replacement matched)
 ```
 
-`resumes.pdf_url` / `docx_path` receive a long-lived signed URL, and Supabase
-Realtime pushes the row change to the dashboard/extension.
+`resumes.pdf_url` / `docx_path` receive the artifact's path on the cluster
+volume (`/data/output/...`); pull files out with
+`scripts/storage-files.ps1 -Action download`.
 
 ## Idempotency
 

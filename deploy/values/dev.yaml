@@ -1,11 +1,11 @@
 # Local cluster (Docker Desktop Kubernetes / kind / k3d / k3s) overrides.
-# Nothing here costs money and nothing talks to Azure.
+# Nothing here costs money and nothing talks to the cloud.
 #
 #   powershell -ExecutionPolicy Bypass -File .\scripts\local-deploy.ps1
 #
 # Everything runs inside your cluster: RabbitMQ, KEDA, Postgres AND the artifact
-# storage (a PersistentVolumeClaim, not Supabase). The only external dependency
-# left is the Gemini API.
+# storage (a PersistentVolumeClaim). The only external dependency left is the
+# Gemini API.
 #
 # Files live on the `cv-artifacts` volume:
 #   /data/cv_data.json     structured CV model
@@ -56,11 +56,11 @@ cv-tailoring-worker:
     tag: dev
     pullPolicy: IfNotPresent
   # Created by .\scripts\worker-secret.ps1:
-  #   GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL
+  #   GEMINI_API_KEY, DATABASE_URL
   # RABBITMQ_USERNAME/PASSWORD come from the broker Secret (shared with KEDA),
   # so no AMQP URL is stored anywhere.
   existingSecret: cv-tailoring-secrets
-  # Artifacts on the shared volume instead of Supabase Storage.
+  # Artifacts on the shared cluster volume.
   persistence:
     existingClaim: cv-artifacts
     mountPath: /data

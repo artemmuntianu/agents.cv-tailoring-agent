@@ -3,7 +3,7 @@ cv-tailoring-worker {{ .Chart.AppVersion }} installed as release "{{ .Release.Na
   Deployment : {{ include "cv-tailoring-worker.fullname" . }} (replicas are managed by KEDA)
   Queue      : {{ .Values.config.queueName }} @ {{ if .Values.keda.enabled }}{{ .Values.keda.host }}{{ else }}<keda disabled>{{ end }}
   KEDA       : min {{ .Values.keda.minReplicaCount }} / max {{ .Values.keda.maxReplicaCount }}, mode {{ .Values.keda.mode }}, cooldown {{ .Values.keda.cooldownPeriod }}s
-  Storage    : {{ .Values.config.storageBackend }} (bucket {{ .Values.config.supabaseBucket }})
+  Artifacts  : {{ .Values.config.artifactsDir | default "artifacts (in-container)" }}
   Job store  : {{ .Values.config.dbBackend }}
 
 Check the scaling behaviour:

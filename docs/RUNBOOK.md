@@ -38,10 +38,10 @@ The worker refuses to start when preflight fails (by design — fail fast):
 | Symptom | Cause | Fix |
 |---|---|---|
 | `missing render tool(s): ...` | image built without poppler/libreoffice | rebuild from `Dockerfile` |
-| `SUPABASE_URL ... required` | missing Secret keys | `make dev-secret` / fix the Secret |
+| `GEMINI_API_KEY`/`DATABASE_URL` missing | Secret not created | `make worker-secret` |
 | `DATABASE_URL is not set` | missing Secret key | same as above |
 | `MODEL_NAME=... is not available for this API key` | placeholder model id | `python scripts/check_models.py --strict`, then set the real ids via `--set cv-tailoring-worker.config.modelName=...` |
-| `prepared statement ... does not exist` / pooler errors | prepared statements against Supabase's pooled endpoint | keep `DB_PREPARE_STATEMENTS=false` (default) or point `DATABASE_URL` at port 5432 |
+| `prepared statement ... does not exist` / pooler errors | prepared statements against a pooled endpoint | keep `DB_PREPARE_STATEMENTS=false` (default) |
 | liveness probe fails | `/tmp/cvt` not writable (fsGroup) | check `podSecurityContext` |
 
 ## Dead-letter queue
@@ -75,14 +75,13 @@ Requeue target: `resumes.generate`. Bump `cv_version` if the master CV changed.
 All three Secrets in one idempotent step (values come from `.env`, never git):
 
 ```bash
-NAMESPACE=default ./scripts/prod-secrets.sh   # or: make prod-secrets
+powershell -ExecutionPolicy Bypass -File scripts/worker-secret.ps1   # or: make worker-secret
 kubectl rollout restart deploy/ai-agent-worker
 ```
 
 ```bash
-kubectl create secret generic cv-tailoring-secrets --from-literal=GEMINI_API_KEY=... \
-  --from-literal=DATABASE_URL=... --from-literal=SUPABASE_URL=... \
-  --from-literal=SUPABASE_SERVICE_ROLE_KEY=... --from-literal=RABBITMQ_URL=... \
+kubectl create secret generic cv-tailoring-secrets \
+  --from-literal=GEMINI_API_KEY=... --from-literal=DATABASE_URL=... \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl rollout restart deploy/ai-agent-worker
 ```

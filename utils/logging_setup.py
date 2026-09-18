@@ -2,7 +2,7 @@
 
 `LOG_FORMAT=text` keeps the human-friendly console output the local CLI always
 had; `LOG_FORMAT=json` emits one JSON object per line for container log
-pipelines (Azure Monitor / Loki). Both carry the same context keys
+pipelines (Loki, journald, a log shipper). Both carry the same context keys
 (`job_id`, `attempt`, `node`, ...) so a task can be traced across pods.
 """
 

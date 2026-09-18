@@ -13,7 +13,7 @@ Verify:
 Publish a task (dev): kubectl exec deploy/ai-agent-worker -- python publisher.py --all
 
 Secrets you must provide out-of-band (production):
-  GEMINI_API_KEY, DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+  GEMINI_API_KEY, DATABASE_URL
   then install with: --set cv-tailoring-worker.existingSecret=<secret-name>
 
 {{- if not .Values.rabbitmqDefinitions.create }}

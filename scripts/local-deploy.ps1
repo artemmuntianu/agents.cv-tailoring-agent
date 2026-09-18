@@ -10,7 +10,7 @@
 #
 # What runs where after this:
 #   in your cluster : RabbitMQ (pod rabbitmq-0), KEDA, Postgres, the AI worker
-#   external, free  : Gemini API (tailoring) + Supabase Storage (your CV and PDFs)
+#   external, free  : only the Gemini API (the LLM that rewrites your CV)
 
 [CmdletBinding()]
 param(

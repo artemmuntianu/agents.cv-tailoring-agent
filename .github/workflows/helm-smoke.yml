@@ -2,7 +2,7 @@ name: helm smoke
 
 # Installs the worker chart into a throwaway kind cluster, with the *offline*
 # backends (`directory` queue, local storage/db) so the test needs no broker,
-# no Supabase and no Gemini key. It proves the chart renders, the image ships
+# no external services. It proves the chart renders, the image ships
 # poppler + LibreOffice, the exec probes work and the container starts.
 on:
   pull_request:
