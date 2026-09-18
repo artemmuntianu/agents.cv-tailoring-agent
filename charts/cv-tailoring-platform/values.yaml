@@ -131,6 +131,20 @@ keda:
       enabled: true
 
 # --------------------------------------------------------------------------- #
+# Local development Postgres. Off by default (deploy/values/dev.yaml enables it);
+# the worker creates its own tables on startup, so no init scripts are needed.
+# --------------------------------------------------------------------------- #
+localPostgres:
+  enabled: false
+  image: postgres:16-alpine
+  secretName: local-postgres
+  serviceName: postgres
+  user: cvt
+  password: cvt
+  database: cvt
+  size: 1Gi
+
+# --------------------------------------------------------------------------- #
 # Artifact storage: one volume for the master CV, job descriptions and results.
 # --------------------------------------------------------------------------- #
 persistence:

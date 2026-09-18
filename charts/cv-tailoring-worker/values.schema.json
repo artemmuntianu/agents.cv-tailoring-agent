@@ -20,7 +20,7 @@
     },
     "config": {
       "type": "object",
-      "required": ["queueBackend", "storageBackend", "dbBackend", "queueName"],
+      "required": ["queueBackend", "dbBackend", "queueName"],
       "properties": {
         "queueBackend": { "enum": ["amqp", "directory"] },
         "dbBackend": { "enum": ["postgres", "local"] },

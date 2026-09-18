@@ -1,0 +1,9 @@
+dependencies:
+- name: keda
+  repository: https://kedacore.github.io/charts
+  version: 2.15.2
+- name: cv-tailoring-worker
+  repository: file://../cv-tailoring-worker
+  version: 0.2.0
+digest: sha256:8f37bb0d64f582be7de224ee4748c87aeb9b528b92ef0c7703e7ed434966d91e
+generated: "2026-09-18T23:43:26.0653705+01:00"

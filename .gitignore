@@ -24,6 +24,10 @@ model_state.json
 queue/
 heartbeat
 
+# Helm: keep Chart.lock (pins upstream versions) but not the vendored packages -
+# a stale .tgz silently shadows the local subchart source.
+charts/*/charts/*.tgz
+
 # Tooling caches
 .ruff_cache/
 .pytest_cache/

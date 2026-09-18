@@ -2,7 +2,7 @@ cv-tailoring-platform {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}"
 
 Pods to expect (architecture doc groups):
   1) rabbitmq-0                     always on  (StatefulSet, {{ .Values.rabbitmq.resources.requests.cpu }} / {{ .Values.rabbitmq.resources.limits.cpu }} CPU)
-  2) ai-agent-worker-*              0..{{ .Values.cv-tailoring-worker.keda.maxReplicaCount }} (KEDA, scale to zero)
+  2) ai-agent-worker-*              0..{{ (index .Values "cv-tailoring-worker").keda.maxReplicaCount }} (KEDA, scale to zero)
   3) keda-operator / keda-metrics-* always on  (KEDA)
 
 Verify:
@@ -10,11 +10,17 @@ Verify:
   kubectl exec -it rabbitmq-0 -- rabbitmqctl list_queues name messages messages_ready messages_unacknowledged
   helm test {{ .Release.Name }}
 
-Publish a task (dev): kubectl exec deploy/ai-agent-worker -- python publisher.py --all
+Send one vacancy from your machine:
+  kubectl port-forward svc/rabbitmq 5672:5672
+  $env:RABBITMQ_URL=(kubectl get secret rabbitmq-credentials -o jsonpath={.data.rabbitmq-url})
+  python publisher.py --jd your_job.txt
 
-Secrets you must provide out-of-band (production):
+Files on the artifact volume:
+  .\scripts\storage-files.ps1 -Action seed      # push cv.docx + cv_data.json
+  .\scripts\storage-files.ps1 -Action download  # pull the tailored PDFs
+
+Secrets expected by the worker (scripts/worker-secret.ps1 creates them):
   GEMINI_API_KEY, DATABASE_URL
-  then install with: --set cv-tailoring-worker.existingSecret=<secret-name>
 
 {{- if not .Values.rabbitmqDefinitions.create }}
 Note: RabbitMQ definitions are disabled - queues are created by the worker on first connect.

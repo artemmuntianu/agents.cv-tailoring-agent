@@ -17,6 +17,6 @@ Tail the worker logs:
   kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
 
 {{- if .Values.secrets.create }}
-WARNING: a Secret was rendered from chart values. Prefer `--set existingSecret=...`
-with a Secret managed outside of Helm (Kubernetes Secret / Key Vault / ESO).
+WARNING: a Secret was rendered from chart values. Prefer `existingSecret` pointing
+at a Secret created out-of-band (scripts/worker-secret.ps1).
 {{- end }}
