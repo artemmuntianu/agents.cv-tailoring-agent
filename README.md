@@ -18,10 +18,8 @@ publisher / extension ──► RabbitMQ (rabbitmq-0, resumes.generate)
               cv-artifacts volume (PDF/DOCX)  +  Postgres (status)
 ```
 
-* `docs/PROJECT_STATE.md` - **current state, resume point and open tasks** (read this first)
-* `docs/ARCHITECTURE.md` — how the code maps onto the design documents
-* `docs/MESSAGE_CONTRACT.md` — payload, ack/retry/DLQ semantics, idempotency
-* `docs/RUNBOOK.md` — operations (queue backlog, DLQ, quota, rollback)
+* `AGENTS.md` — the project map: layers, commands, conventions (read this first)
+* `CONSTITUTION.md` — canonical architecture, invariants and known discrepancies
 
 ## Quickstart: the whole platform on your PC
 
@@ -148,12 +146,12 @@ healthcheck.py  exec probes (liveness / readiness / render / amqp)
 charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker
 deploy/values/  environment values (dev.yaml = local cluster)
 scripts/        local-deploy.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
-docs/           architecture, message contract, runbook, Postgres schema
+docs/           the CommonAgentSDK layered-docs standard (template_agents.md)
 ```
 
 ## Optional: managed clusters
 
 The charts are not tied to a local cluster — point them at a managed Kubernetes
 cluster, give the worker a registry-hosted image and a `nodeSelector` for your
-node pools, and the same deployment works there (`docs/RUNBOOK.md` documents the
+node pools, and the same deployment works there (`charts/AGENTS.md` documents the
 scaling and cost knobs). Nothing in the worker code assumes either topology.
