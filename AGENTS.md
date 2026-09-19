@@ -223,7 +223,7 @@ Do not add a dependency just to answer a reference/dead-code question.
 - Add a dependency for something the pinned set already covers - and note that
   `pypdf` is currently unused.
 - Trust `helm lint` alone for a chart change.
-- Treat a point-in-time handoff as live status; the one that used to live in `docs/` was removed in `46a76fd` and stays recoverable from history (`CONSTITUTION.md` D10).
+- Treat `docs/PROJECT_STATE.md` as live status; it is a point-in-time handoff (restored deliberately so the first live deploy is readable from the tree - its counts are stale, see `CONSTITUTION.md` D7).
 
 ## When unsure
 

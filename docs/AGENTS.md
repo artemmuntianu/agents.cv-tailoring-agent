@@ -13,6 +13,7 @@ and the disagreement is recorded.
 | `CONSTITUTION.md` | Canonical architecture, invariants and the discrepancy table - read it before the layer files |
 | `AGENTS.md` (root) + one file per layer | The map, plus the mechanical detail for `agent/`, `utils/`, `charts/`, `scripts/`, `tests/`, `docs/`, `.github/` |
 | `docs/AGENTS.md` | This file: which document owns what, and what must not drift |
+| `docs/PROJECT_STATE.md` | A **point-in-time** session handoff (resume point for the first live deploy). Restored deliberately; its counts are already stale (D7), so never read it as live status |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
 
 Do not restate a layer's rules here - link to `charts/AGENTS.md`, `tests/AGENTS.md` and
@@ -20,14 +21,15 @@ the rest instead.
 
 ## Documents removed in 46a76fd (recoverable)
 
-Commit `46a76fd` deleted the previous `docs/` set: `ARCHITECTURE.md`,
-`MESSAGE_CONTRACT.md`, `PROJECT_STATE.md`, `RUNBOOK.md` and `postgres_schema.sql`.
+Commit `46a76fd` deleted most of the previous `docs/` set: `ARCHITECTURE.md`,
+`MESSAGE_CONTRACT.md`, `RUNBOOK.md` and `postgres_schema.sql`. The `PROJECT_STATE.md`
+handoff was restored afterwards, because the first live deploy is driven from it.
 Their topics are owned by the layer `AGENTS.md` files and by `CONSTITUTION.md` now, and
 the originals are one command away:
 
 ```sh
 git log --diff-filter=D --oneline -- docs/
-git show 46a76fd^:docs/RUNBOOK.md                 # or ARCHITECTURE / MESSAGE_CONTRACT / PROJECT_STATE
+git show 46a76fd^:docs/RUNBOOK.md                 # or ARCHITECTURE / MESSAGE_CONTRACT
 git show 46a76fd^:docs/postgres_schema.sql
 ```
 

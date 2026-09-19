@@ -20,6 +20,7 @@ publisher / extension ──► RabbitMQ (rabbitmq-0, resumes.generate)
 
 * `AGENTS.md` — the project map: layers, commands, conventions (read this first)
 * `CONSTITUTION.md` — canonical architecture, invariants and known discrepancies
+* `docs/PROJECT_STATE.md` — the point-in-time session handoff and resume point (history, not live status)
 
 ## Quickstart: the whole platform on your PC
 

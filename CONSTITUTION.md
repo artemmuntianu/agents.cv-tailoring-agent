@@ -133,10 +133,10 @@ so that a change which depends on them is a conscious one.
 | D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined and passed by `docker-compose.yml`, but never read by application code - KEDA talks to the RabbitMQ management API itself | **Unused config** |
 | D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
 | D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
-| D7 | Test counts in the removed `docs/PROJECT_STATE.md` handoff ("41 tests", "35 pass, 6 skip") | Actual: **45 collected, 6 skipped, 39 passed** (`python -m pytest -q`, 2026-09-19); the 6 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
-| D8 | The removed `docs/PROJECT_STATE.md` claimed the image was never built and `helm install` never ran | It was a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
+| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **45 collected, 6 skipped, 39 passed** (`python -m pytest -q`, 2026-09-19); the 6 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
+| D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
-| D10 | The previous `docs/` set (`ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`, `PROJECT_STATE.md`, `RUNBOOK.md`, `postgres_schema.sql`) was deleted in `46a76fd`, but two call sites still point at it | `docker-compose.yml` mounts the deleted DDL as its initdb script, and `main.py` prints a hint naming the removed `MESSAGE_CONTRACT.md` (`README.md`, the root `AGENTS.md` and the layer files were repointed in the same change) | **Dangling references** - drop the compose mount or restore the DDL with `git show 46a76fd^:docs/postgres_schema.sql`; the `main.py` hint can point at `README.md` instead |
+| D10 | The previous `docs/` set (`ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`, `RUNBOOK.md`, `postgres_schema.sql`) was deleted in `46a76fd`, but two call sites still point at it | `docker-compose.yml` mounts the deleted DDL as its initdb script, and `main.py` prints a hint naming the removed `MESSAGE_CONTRACT.md` (`README.md`, the root `AGENTS.md` and the layer files were repointed in the same change) | **Dangling references** - drop the compose mount or restore the DDL with `git show 46a76fd^:docs/postgres_schema.sql`; the `main.py` hint can point at `README.md` instead |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -147,11 +147,11 @@ so that a change which depends on them is a conscious one.
   `repo.broadcom.com` and its free images were emptied; see
   `charts/cv-tailoring-platform/Chart.yaml`).
 
-* **The previous `docs/` set** - `ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`,
-  `PROJECT_STATE.md`, `RUNBOOK.md`, `postgres_schema.sql` - deleted in `46a76fd`.
-  Their topics are owned by the layer `AGENTS.md` files and by this document now,
-  and the originals stay recoverable from history
-  (`git show 46a76fd^:docs/<file>`).
+* **Most of the previous `docs/` set** - `ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`,
+  `RUNBOOK.md`, `postgres_schema.sql` - deleted in `46a76fd`; their topics are owned by
+  the layer `AGENTS.md` files and by this document now, and the originals stay
+  recoverable from history (`git show 46a76fd^:docs/<file>`). The `PROJECT_STATE.md`
+  handoff was restored in the next commit because the first live deploy follows it.
 
 
 ## 6. Entry points (root files)
