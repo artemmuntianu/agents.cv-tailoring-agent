@@ -39,7 +39,7 @@ so the password lives in exactly one place.
   `utils/ -> agent/` rule.
 - Volume layout it maintains: `/data/cv_data.json`, `/data/input/cv.docx`,
   `/data/input/jd_*.txt`, `/data/output/*.docx|pdf` - the same paths
-  `README.md` documents.
+  `docs/RUNBOOK.md` and `README.md` document.
 
 ## Conventions
 

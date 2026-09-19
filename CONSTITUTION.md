@@ -136,7 +136,7 @@ so that a change which depends on them is a conscious one.
 | D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **45 collected, 6 skipped, 39 passed** (`python -m pytest -q`, 2026-09-19); the 6 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
-| D10 | The previous `docs/` set (`ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`, `RUNBOOK.md`, `postgres_schema.sql`) was deleted in `46a76fd`, but two call sites still point at it | `docker-compose.yml` mounts the deleted DDL as its initdb script, and `main.py` prints a hint naming the removed `MESSAGE_CONTRACT.md` (`README.md`, the root `AGENTS.md` and the layer files were repointed in the same change) | **Dangling references** - drop the compose mount or restore the DDL with `git show 46a76fd^:docs/postgres_schema.sql`; the `main.py` hint can point at `README.md` instead |
+| D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | The `.sql` file is the human-facing DDL (docker-compose mounts it as the initdb script) and additionally creates `vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx` and the `set_updated_at()` trigger; `SCHEMA_SQL` (what the worker runs on startup, and therefore what exists in the cluster) creates only `resumes` + its index/CHECK, `model_availability` and `app_settings`. Neither is generated from the other. The divergence was briefly "resolved" by deleting the `.sql` file in `46a76fd`; that deletion was reverted (the docs are back in the tree), so the question is open again | **Two sources of truth** - keep both in sync on a schema change (see `docs/AGENTS.md`) |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -147,11 +147,11 @@ so that a change which depends on them is a conscious one.
   `repo.broadcom.com` and its free images were emptied; see
   `charts/cv-tailoring-platform/Chart.yaml`).
 
-* **Most of the previous `docs/` set** - `ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`,
-  `RUNBOOK.md`, `postgres_schema.sql` - deleted in `46a76fd`; their topics are owned by
-  the layer `AGENTS.md` files and by this document now, and the originals stay
-  recoverable from history (`git show 46a76fd^:docs/<file>`). The `PROJECT_STATE.md`
-  handoff was restored in the next commit because the first live deploy follows it.
+* **The classic `docs/` set was deleted once, then restored.** `46a76fd` removed
+  `ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`, `PROJECT_STATE.md`, `RUNBOOK.md` and
+  `postgres_schema.sql`; they came back in `4678752` and the commit that follows it. They are
+  current documentation again - the layer `AGENTS.md` files own the mechanics and these
+  documents own the deep dives. Do not delete them again without moving their content.
 
 
 ## 6. Entry points (root files)

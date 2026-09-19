@@ -14,29 +14,32 @@ and the disagreement is recorded.
 | `AGENTS.md` (root) + one file per layer | The map, plus the mechanical detail for `agent/`, `utils/`, `charts/`, `scripts/`, `tests/`, `docs/`, `.github/` |
 | `docs/AGENTS.md` | This file: which document owns what, and what must not drift |
 | `docs/PROJECT_STATE.md` | A **point-in-time** session handoff (resume point for the first live deploy). Restored deliberately; its counts are already stale (D7), so never read it as live status |
+| `docs/ARCHITECTURE.md` | How the code maps onto the design documents: pod groups, the per-task step table (a-g), deliberate deviations, why the CLI still works |
+| `docs/MESSAGE_CONTRACT.md` | The queue contract: payload fields, `job_id` semantics, the ack/retry/DLQ matrix, status lifecycle, idempotency key, directory-backend behaviour |
+| `docs/RUNBOOK.md` | Operations: daily checks, queue backlog, CrashLoop, DLQ, Gemini quota, secret rotation, scaling/cost knobs, rollback |
+| `docs/postgres_schema.sql` | The declarative DDL for humans; docker-compose mounts it as the initdb script. The worker self-bootstraps from `utils/db.SCHEMA_SQL` (see D10) |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
 
 Do not restate a layer's rules here - link to `charts/AGENTS.md`, `tests/AGENTS.md` and
 the rest instead.
 
-## Documents removed in 46a76fd (recoverable)
+## Two Postgres schemas (D10)
 
-Commit `46a76fd` deleted most of the previous `docs/` set: `ARCHITECTURE.md`,
-`MESSAGE_CONTRACT.md`, `RUNBOOK.md` and `postgres_schema.sql`. The `PROJECT_STATE.md`
-handoff was restored afterwards, because the first live deploy is driven from it.
-Their topics are owned by the layer `AGENTS.md` files and by `CONSTITUTION.md` now, and
-the originals are one command away:
+`docs/postgres_schema.sql` and `utils/db.SCHEMA_SQL` describe the same core tables but are
+not generated from one another. The `.sql` file is the human-facing DDL (docker-compose mounts
+it as the initdb script) and additionally creates `vacancies`, `applications`, two indexes and
+the `set_updated_at()` trigger; `SCHEMA_SQL` - what the worker executes on startup, and
+therefore what exists in the cluster - creates only `resumes` + its index/CHECK,
+`model_availability` and `app_settings`. Keep both in sync on a schema change
+(`CONSTITUTION.md` D10).
 
-```sh
-git log --diff-filter=D --oneline -- docs/
-git show 46a76fd^:docs/RUNBOOK.md                 # or ARCHITECTURE / MESSAGE_CONTRACT
-git show 46a76fd^:docs/postgres_schema.sql
-```
+## History: the docs set was deleted once, then restored
 
-The leftovers of that removal are tracked as `CONSTITUTION.md` D10: `docker-compose.yml`
-still mounts the deleted DDL as its initdb script, and `main.py` still prints a hint
-naming `docs/MESSAGE_CONTRACT.md`. Everything else (this file, `README.md`, the root
-`AGENTS.md`, `charts/AGENTS.md`, `scripts/AGENTS.md`) was repointed in the same change.
+Commit `46a76fd` removed the whole classic `docs/` set; it was restored in `4678752` and the
+commit that followed, because the deploy handoff and the runbook are still in use. The layer
+`AGENTS.md` files own the mechanics and these documents own the deep dives - if a document
+ever looks obsolete, move its content instead of deleting the file (that deletion detour is
+what produced D10).
 
 ## Rules
 
@@ -56,5 +59,5 @@ naming `docs/MESSAGE_CONTRACT.md`. Everything else (this file, `README.md`, the 
 
 - Document a chart value that no template renders (`queueRetryTtlMs`, `storageBackend`
   - D1/D5); either wire it up or list it as inert.
-- Point a document, a script or a chart at a file that no longer exists - that is
-  exactly how D10 happened.
+- Delete a document instead of moving its content - the last time that happened
+  (`46a76fd`) it cost a restore cycle, and its metadata drifted (D10).

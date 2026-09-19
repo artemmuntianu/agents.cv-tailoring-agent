@@ -74,6 +74,5 @@ live API. `.github/workflows/ci.yml` runs the same steps.
   `config.py` never reads it (`CONSTITUTION.md` D1).
 - `config.modelName` ships as a placeholder; a wrong id is a non-retryable 400
   that would DLQ every task. Override it from `scripts/check_models.py --strict`.
-- A live deploy is `scripts/local-deploy.ps1`; when it fails collect
-  `kubectl get pods` / `describe` / `logs` before editing a template (the removed
-  runbook is recoverable from history - see `docs/AGENTS.md`).
+- A live deploy is `scripts/local-deploy.ps1`; when it fails read
+  `docs/RUNBOOK.md` before editing a template.
