@@ -91,17 +91,37 @@ if ($kindNode) { $kindCluster = $kindNode -replace '-(control-plane|worker[0-9]*
 elseif ($context -like 'kind-*') { $kindCluster = $context -replace '^kind-', '' }
 
 if ($kindCluster) {
-    if (-not (Get-Command kind -ErrorAction SilentlyContinue)) {
-        Warn 'This cluster was provisioned with kind, whose nodes cannot see images built by Docker.'
-        Warn 'Fix it either way:'
-        Warn '    winget install Kubernetes.kind        # then re-run this script'
-        Warn '    Docker Desktop -> Kubernetes -> Edit cluster -> provisioner: kubeadm'
-        Warn '      (kubeadm nodes share the Docker image store: no loading needed)'
-        Fail 'cannot load the image into this kind cluster'
+    if (Get-Command kind -ErrorAction SilentlyContinue) {
+        & kind load docker-image $Image --name $kindCluster
+        if ($LASTEXITCODE -ne 0) { Fail 'kind load docker-image failed' }
+        Ok ("loaded into kind cluster '" + $kindCluster + "'")
     }
-    & kind load docker-image $Image --name $kindCluster
-    if ($LASTEXITCODE -ne 0) { Fail 'kind load docker-image failed' }
-    Ok ("loaded into kind cluster '" + $kindCluster + "'")
+    else {
+        # No kind CLI on PATH: do what `kind load` does under the hood - save the
+        # image and import it into the node container with containerd's ctr.
+        $node = $nodes[0]
+        if (-not $node) { Fail 'no node reported by kubectl - is the cluster up?' }
+        Warn ("kind CLI not found - importing the image into node container '" + $node + "' via docker")
+        $tar = Join-Path $env:TEMP ('cv-worker-image-' + [guid]::NewGuid().ToString('N') + '.tar')
+        & docker save -o $tar $Image
+        if ($LASTEXITCODE -ne 0) { Fail 'docker save failed' }
+        & docker cp $tar ($node + ':/tmp/cv-image.tar')
+        if ($LASTEXITCODE -ne 0) {
+            Warn ("could not copy into '" + $node + "'. Either install the kind CLI:")
+            Warn '    winget install Kubernetes.kind'
+            Warn 'or switch Docker Desktop to the kubeadm provisioner (shared image store).'
+            Remove-Item -Force $tar -ErrorAction SilentlyContinue
+            Fail 'image import failed'
+        }
+        & docker exec $node ctr -n k8s.io images import /tmp/cv-image.tar | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -Force $tar -ErrorAction SilentlyContinue
+            Fail 'containerd import inside the node failed'
+        }
+        & docker exec $node rm -f /tmp/cv-image.tar | Out-Null
+        Remove-Item -Force $tar -ErrorAction SilentlyContinue
+        Ok ("imported into node '" + $node + "'")
+    }
 }
 elseif ($context -like 'k3d-*') {
     if (-not (Get-Command k3d -ErrorAction SilentlyContinue)) {
