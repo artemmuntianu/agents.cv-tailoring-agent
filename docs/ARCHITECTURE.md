@@ -5,12 +5,12 @@ described in the two source documents, plus the Helm/k8s deployment around it.
 
 ```
 Chrome Extension ──HTTPS──► Vercel API Gateway ──AMQP──► RabbitMQ (rabbitmq-0)
-                                                              │
+                                                               │
                                        KEDA ScaledObject (queue depth 0→M) │
-                                                              ▼
+                                                               ▼
                             ai-agent-worker pod(s)  ── prefetch_count = 1
                               adapt_text → render → vision_check → persist
-                                                              │
+                                                               │
                     artifacts volume (PDF/DOCX) + Postgres (status) ──► UI
 ```
 

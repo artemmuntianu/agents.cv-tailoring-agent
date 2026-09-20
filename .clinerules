@@ -1,0 +1,12 @@
+# Agent Behavior & Execution Rules
+
+- **Always respond in English**, regardless of the language used in the input (the operator may write in Russian; outputs are always in English).
+- **Mandatory Tooling Use**: Agents MUST use `python tools/analyze.py` (`context`, `impact`, `syntax-check`, `validate-docs`) during feature work instead of reading entire source files or doing ad-hoc text greps.
+- DO NOT rewrite an entire component or python file to make minor adjustments. Use surgical string replacements or line patches.
+- Prioritize structured, maintainable code over quick hacks.
+- Do not spend tokens generating heavy mock data fixtures unless types or data models are missing.
+- Keep components and modules modular. If a module exceeds 250 lines during an adjustment, proactively suggest breaking it down into sub-modules.
+
+# Shell (Windows PowerShell 5.1) — read `AGENTS.md` for full details
+- Chaining two commands with `&` or `&&` is a parse error here. **Only `;`** is valid as a separator.
+- Use `cmd /c "pgm > file.txt 2>&1"` for python/pytest/ruff/helm, then read `file.txt`. A wrapper `exit code 1` is NOT a failure — verify the log/artifact.

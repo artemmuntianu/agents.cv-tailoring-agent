@@ -47,14 +47,16 @@ The shared agent SDK lives outside this repo:
 | Path | What it is | Applies here? |
 |---|---|---|
 | `E:\CommonAgentSDK\instructions\template_agents.md` | The **layered-docs standard** this repo follows: a root `AGENTS.md` with an architecture map, plus one `AGENTS.md` per layer and a `CONSTITUTION.md` for canonical facts. | **Yes - this is the convention being applied.** Follow it when adding/renaming layers. |
-| `E:\CommonAgentSDK\tools\analyze.mjs` | A `ts-morph` CLI (outline / dead-exports / refs / imports / typecheck / move-symbols) built for a **TypeScript/Astro** codebase. | **No.** This repo is Python. Do not add Node/ts-morph and do not port the tool; use the Python tooling in "Shared analysis tooling" below. |
+| `E:\CommonAgentSDK\instructions\RULES.md` | Global execution & behavioral rules for LLM agents (English responses, surgical edits, token efficiency, PowerShell traps). | **Yes.** Enforced via `.clinerules` and root `AGENTS.md`. |
+| `E:\CommonAgentSDK\tools\py\analyze.py` | Python AST & layer validator CLI tool (`context`, `impact`, `syntax-check`, `validate-docs`, `outline`). | **Yes.** Linked via `/tools` junction to `E:\CommonAgentSDK\tools\py`. |
 
-Consequence for this repo: the SDK's *instructions* are authoritative for how the
-docs are organised, while its *tool* is not usable - keep the two decisions
-separate so nobody re-investigates it. Committed reference copies are
-`docs/template_agents.md` (the standard) and `tools/analyze.mjs` (the CLI); the
-copy of the tool ships without `package.json`/`node_modules`, so it cannot run
-here.
+Committed reference copy is `docs/template_agents.md` (the standard). Python analysis tooling is linked via `tools/analyze.py`.
+
+**Mandatory Tooling Expectation**: Agents MUST use `python tools/analyze.py` (`context`, `impact`, `syntax-check`, `validate-docs`) during feature work instead of dumping entire source files into context or doing ad-hoc text greps:
+- `python tools/analyze.py context <file.py>`: interface & type summary (saves up to 90% tokens).
+- `python tools/analyze.py impact <file.py>`: downstream dependent file analysis.
+- `python tools/analyze.py syntax-check <file.py>`: instant AST syntax check (<20ms).
+- `python tools/analyze.py validate-docs`: layer docs compliance validation.
 
 ## Commands
 

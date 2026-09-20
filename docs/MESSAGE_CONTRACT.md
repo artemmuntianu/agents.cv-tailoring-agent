@@ -31,7 +31,6 @@ batch; the gateway publishes **N individual messages**:
   "description_raw": "About the Role\nWe are looking for ...",
   "cv_version": "v1",
   "attempt": 0,
-  "enqueued_at": "2026-09-17T19:12:02+00:00",
   "cv_data": { "header": {...}, "summary": "...", "skills": {...}, "professional_experience": [...] }
 }
 ```
