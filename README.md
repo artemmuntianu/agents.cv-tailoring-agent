@@ -198,9 +198,16 @@ own.
 
 It is also the gateway the scraper posts to: `extension/` collects every vacancy card
 on a listing page and `POST /api/vacancies/batch` turns the batch into one
-`resumes.generate` message per vacancy, after validating the whole batch.
+`resumes.generate` message per vacancy, after validating the whole batch. Cards are
+created *before* the message is published, so a scraped vacancy appears in **Created**
+immediately - the worker's claim then adopts that same row (which is why the card turns
+from *Tailoring In Progress* to *Tailored* in place).
 
-There is **no signup**: an administrator creates accounts out of band.
+There is **no signup**: an administrator creates accounts out of band. An account
+provisioned with `--admin` also gets the **Vocabularies** page (`/admin`): the Action
+list the dialogs suggest and the Filters panel offers, editable - while the Actor list,
+the columns and the tailoring sub-states are shown read-only, because they are the
+database's constraints and the board's own shape.
 
 ```powershell
 kubectl port-forward svc/postgres 5432:5432      # keep both running
@@ -216,6 +223,15 @@ Then load `extension/` unpacked (`chrome://extensions` -> Developer mode -> Load
 unpacked), sign in there with the same account and press *Scrape & queue this page*.
 `extension/README.md` has the step-by-step.
 
+Refusing a vacancy is an **in-place archive**: the card keeps the column where it stopped
+and is only muted (rose accent, struck-through title, `⛔️ Rejected by Company • Salary
+mismatch`), so the board still shows where every application dropped out. A refused card
+cannot be dragged, `🔄 Restore` puts it back in one click, and both changes are recorded
+in the card's history with the actor and the reason. Archived cards are hidden until you
+turn **Archived vacancies** on in the top bar's **🎛 Filters** panel, which is also where
+the columns and the recorded Actions can be filtered - and the bar always reports
+`showing N of M`, because the date range opens on the last 30 days.
+
 ## Your files
 
 Everything the agent reads or writes lives on one volume, so nothing is lost when
@@ -230,6 +246,12 @@ the worker scales to zero:
 
 `scripts/storage-files.ps1` moves them in and out: `-Action seed` (push your CV),
 `-Action list`, `-Action download`, `-Action shell`.
+
+The board's *Tailored PDF / DOCX* links download through
+`GET /api/artifacts/<job_id>`, which resolves the worker's stored path
+(`/data/output/848944.pdf`) against `ARTIFACTS_DIR`/`OUTPUT_DIR`. A board running
+outside the cluster therefore needs the volume mirrored locally - `-Action download`
+writes exactly where the default root points (`artifacts\output\`).
 
 **The hard sync rule:** every line of `cv_data.json` must exist verbatim in
 `cv.docx`. The worker verifies this before touching the document and refuses the

@@ -16,8 +16,18 @@ from utils.db import job_key
 
 class JobStatus:
     """Values written to `resumes.status` (string constants, not an enum, so the
-    payload stays trivially JSON-serialisable and dashboard-friendly)."""
+    payload stays trivially JSON-serialisable and dashboard-friendly).
 
+    All but `SUBMITTED` are written by the worker. `SUBMITTED` is the one status the
+    *ingest* side writes (`backoffice` batch gateway): it creates a vacancy's row
+    before publishing, so the card is on the board the moment a page is scraped rather
+    than only after KEDA boots a worker. It is deliberately **not** in
+    `utils.db.ACTIVE_STATUSES` - the worker's claim finds such a row by business key
+    and *adopts* it (same `job_id`, status -> `processing`) instead of treating the
+    message as a duplicate delivery.
+    """
+
+    SUBMITTED = "submitted"
     QUEUED = "queued"
     PROCESSING = "processing"
     RENDERING = "rendering"

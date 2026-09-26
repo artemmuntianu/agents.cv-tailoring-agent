@@ -196,6 +196,11 @@ class LocalDb:
 # Statuses that mean "this vacancy is already being (or has been) handled".
 # Anything else (failed / rate_limited / dead_lettered / skipped) may be
 # re-claimed by a retry. Keep in sync with agent.contracts.JobStatus.
+#
+# `submitted` - the row the ingest gateway creates before publishing - is NOT here on
+# purpose: an active sibling makes `_claim_row` ack the message as a duplicate, which
+# would turn the gateway's own card into a no-op. Not being active makes the claim
+# adopt that row (same job_id, status -> processing) instead.
 ACTIVE_STATUSES = ("queued", "processing", "rendering", "validating", "uploading", "completed")
 
 # job_id is an OPAQUE CLIENT-SUPPLIED STRING (design decision "option A"):
@@ -213,6 +218,9 @@ create table if not exists resumes (
     company         text,
     source_url      text,
     cv_version      text not null default 'v1',
+    -- 'queued' is only a *default*: the ingest gateway (backoffice batch route)
+    -- creates the row with 'submitted' before it publishes, so the worker's claim
+    -- adopts it (see ACTIVE_STATUSES above).
     status          text not null default 'queued',
     attempts        integer not null default 0,
     revision_count  integer,
@@ -241,27 +249,73 @@ create table if not exists app_settings (
 );
 
 -- Board-owned state for the backoffice kanban (`backoffice/`). The worker never
--- touches these two tables, and the board never writes `resumes.status`: that
--- column is the worker's claim/idempotency state (see ACTIVE_STATUSES), so the
--- board's `created` sub-state is *derived* from it instead of stored.
+-- touches these tables, and the board never writes `resumes.status`: that column is
+-- the worker's claim/idempotency state (see ACTIVE_STATUSES), so the board's
+-- `created` sub-state is *derived* from it instead of stored.
+--
+-- `archived_*` is the board's **in-place soft delete**: a refused vacancy keeps its
+-- `stage`, so the funnel still shows where the application dropped out, and only the
+-- card's presentation is muted. The three columns are null together or set together
+-- (guard below), which is what makes "archive" and "restore" single-column updates.
 create table if not exists resume_board (
-    job_id     text primary key references resumes (job_id) on delete cascade,
-    stage      text not null default 'created',
-    updated_at timestamptz not null default now()
+    job_id          text primary key references resumes (job_id) on delete cascade,
+    stage           text not null default 'created',
+    archived_at     timestamptz,
+    archived_actor  text,
+    archived_reason text,
+    updated_at      timestamptz not null default now()
 );
+
+-- Databases created before the archive feature need the columns added in place.
+alter table resume_board add column if not exists archived_at timestamptz;
+alter table resume_board add column if not exists archived_actor text;
+alter table resume_board add column if not exists archived_reason text;
 
 create table if not exists resume_history (
     id         bigserial primary key,
     job_id     text not null references resumes (job_id) on delete cascade,
     at         timestamptz not null default now(),
-    actor      text not null check (actor in ('Me', 'Them')),
+    -- The dialog's Actor dropdown stores 'Candidate' | 'Company'. Rows written before
+    -- 2026-09-26 say 'Me' | 'Them' and are migrated by the guarded block below.
+    actor      text not null check (actor in ('Candidate', 'Company')),
     action     text not null check (char_length(action) between 1 and 500),
-    kind       text not null check (kind in ('move', 'tailoring')),
+    -- 'archive'/'restore' are the board's soft-delete transitions; from_state/to_state
+    -- are 'active'|'archived' for those, a stage id for 'move'.
+    kind       text not null check (kind in ('move', 'tailoring', 'archive', 'restore')),
     from_state text not null,
     to_state   text not null
 );
 
 create index if not exists resume_history_job_id_at_idx on resume_history (job_id, at);
+
+-- The Action vocabulary the dialogs offer as a combobox and the Filters dialog
+-- lists. It is *data*, not a code enum: typing a new action in a dialog persists it
+-- here (one upsert inside the same transaction as the change), so the operator's own
+-- wording is suggested next time. `kind` only decides what a dialog shows first.
+create table if not exists board_actions (
+    action       text primary key check (char_length(action) between 1 and 500),
+    kind         text not null default 'archive' check (kind in ('archive', 'move')),
+    uses         integer not null default 0,
+    created_at   timestamptz not null default now(),
+    last_used_at timestamptz not null default now()
+);
+
+-- Starting vocabulary; the operator extends it by typing. `do nothing` keeps the
+-- counters intact when the worker boots against an existing database.
+insert into board_actions (action, kind) values
+    ('Salary mismatch', 'archive'),
+    ('Rejected by company', 'archive'),
+    ('No response', 'archive'),
+    ('Position closed', 'archive'),
+    ('Withdrawn by me', 'archive'),
+    ('Location mismatch', 'archive'),
+    ('Other', 'archive'),
+    ('Applied via portal', 'move'),
+    ('Referral', 'move'),
+    ('Recruiter reached out', 'move'),
+    ('Take-home sent', 'move')
+on conflict (action) do nothing;
+
 
 -- Backoffice accounts. There is NO public signup: an administrator provisions
 -- users out of band (`backoffice/scripts/user.mjs`) exactly like the design's
@@ -286,6 +340,47 @@ begin
             add constraint resumes_job_id_shape
             check (char_length(job_id) between 4 and 80
                    and job_id !~ '[^A-Za-z0-9_.:-]');
+    end if;
+end $ddl$;
+
+-- Archiving is all-or-nothing: a row cannot claim to be refused without an actor and
+-- a reason, and both must satisfy what the dialogs can send.
+do $ddl$
+begin
+    if not exists (select 1 from pg_constraint where conname = 'resume_board_archive_shape') then
+        alter table resume_board
+            add constraint resume_board_archive_shape
+            check ((archived_at is null) = (archived_actor is null)
+                   and (archived_at is null) = (archived_reason is null)
+                   and (archived_actor is null or archived_actor in ('Candidate', 'Company'))
+                   and (archived_reason is null
+                        or char_length(archived_reason) between 1 and 500));
+    end if;
+end $ddl$;
+
+-- Vocabulary migrations for databases created before 2026-09-26: the Actor dropdown
+-- stored 'Me'/'Them', and the history only knew 'move'/'tailoring'. Both are rewritten
+-- in place, guard-first, so re-running this is a no-op.
+do $ddl$
+begin
+    if exists (select 1 from pg_constraint
+                where conname = 'resume_history_actor_check'
+                  and pg_get_constraintdef(oid) like '%''Me''%') then
+        alter table resume_history drop constraint resume_history_actor_check;
+        update resume_history set actor = 'Candidate' where actor = 'Me';
+        update resume_history set actor = 'Company' where actor = 'Them';
+        alter table resume_history
+            add constraint resume_history_actor_check
+            check (actor in ('Candidate', 'Company'));
+    end if;
+
+    if exists (select 1 from pg_constraint
+                where conname = 'resume_history_kind_check'
+                  and pg_get_constraintdef(oid) not like '%archive%') then
+        alter table resume_history drop constraint resume_history_kind_check;
+        alter table resume_history
+            add constraint resume_history_kind_check
+            check (kind in ('move', 'tailoring', 'archive', 'restore'));
     end if;
 end $ddl$;
 """

@@ -1,4 +1,4 @@
-import type { StageId, TailoringStateId } from './types';
+import type { Actor, BoardCard, HistoryKind, StageId, TailoringStateId } from './types';
 
 export interface StageMeta {
   id: StageId;
@@ -91,6 +91,52 @@ export function tailoringLabel(id: string): string {
   return TAILORING_STATES.find((state) => state.id === id)?.label ?? id;
 }
 
+/**
+ * The Actor dropdown is the stored vocabulary (`'Candidate' | 'Company'`, see
+ * `types.ts`); these hints are the only thing the UI adds to it.
+ */
+export const ACTOR_HINT: Record<Actor, string> = {
+  Candidate: 'you',
+  Company: 'the employer',
+};
+
+/** Short label for one history entry's kind, used as the line prefix. */
+export function historyKindLabel(kind: HistoryKind): string {
+  switch (kind) {
+    case 'move':
+      return 'stage';
+    case 'tailoring':
+      return 'tailoring';
+    case 'archive':
+      return 'archived';
+    case 'restore':
+      return 'restored';
+  }
+}
+
+/**
+ * Render one history transition: `stage: Applied → Interviewing`,
+ * `archived: active → refused`, `restored: refused → active`. The archive kinds use
+ * their own two-state vocabulary (`active`/`archived`), not column names.
+ */
+export function describeHistory(kind: HistoryKind, from: string, to: string): string {
+  const label = (state: string): string => {
+    if (kind === 'move') return stageLabel(state);
+    if (kind === 'tailoring') return tailoringLabel(state);
+    return state === 'archived' ? 'refused' : 'active';
+  };
+  return `${historyKindLabel(kind)}: ${label(from)} → ${label(to)}`;
+}
+
+/**
+ * `⛔️ Rejected by Company • Salary mismatch` - who ended the application, and why. Used
+ * by the muted card and by the modal's header.
+ */
+export function refusalLabel(card: BoardCard): string {
+  const who = card.archivedActor === 'Company' ? 'Rejected by Company' : 'Withdrawn by Candidate';
+  return card.archivedReason ? `${who} • ${card.archivedReason}` : who;
+}
+
 /** True when the string is one of the board's columns (used to validate requests). */
 export function isStageId(value: unknown): value is StageId {
   return typeof value === 'string' && STAGES.some((stage) => stage.id === value);
@@ -100,8 +146,11 @@ export function isStageId(value: unknown): value is StageId {
  * The `created` sub-state is derived from the worker's own `resumes.status` - the
  * board never writes that column, because it is the worker's claim/idempotency
  * state (`ACTIVE_STATUSES` in `utils/db.py`). Anything still in flight reads as
- * "Tailoring In Progress", a parked task as "Tailoring Failed", `completed` (or a
- * `skipped` row, which means the result already existed) as "Tailored".
+ * "Tailoring In Progress" (including `submitted`, the row the ingest gateway creates
+ * before the message is published - KEDA turns that into `processing` within
+ * seconds, so a separate "queued" chip would only flicker), a parked task as
+ * "Tailoring Failed", `completed` (or a `skipped` row, which means the result
+ * already existed) as "Tailored".
  */
 export function tailoringFromStatus(status: string): TailoringStateId {
   switch ((status || '').toLowerCase()) {
@@ -112,6 +161,8 @@ export function tailoringFromStatus(status: string): TailoringStateId {
     case 'rate_limited':
     case 'dead_lettered':
       return 'failed';
+    case 'submitted':
+      return 'in_progress';
     default:
       return 'in_progress';
   }

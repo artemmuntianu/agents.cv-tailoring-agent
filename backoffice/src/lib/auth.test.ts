@@ -31,14 +31,23 @@ describe('password hashing', () => {
 });
 
 describe('session tokens', () => {
-  const claims = { sub: 'u-1', email: 'andrei@example.com', name: 'Andrei' };
+  const claims = { sub: 'u-1', email: 'andrei@example.com', name: 'Andrei', admin: false };
+  const adminClaims = { ...claims, admin: true };
 
   it('verifies a token it issued and keeps the claims', () => {
     const token = createSessionToken(claims);
     const payload = verifySessionToken(token);
     expect(payload?.sub).toBe('u-1');
     expect(payload?.email).toBe('andrei@example.com');
+    expect(payload?.admin).toBe(false);
     expect(payload!.exp).toBeGreaterThan(payload!.iat);
+  });
+
+  it('carries the administrator claim, and defaults it to false', () => {
+    expect(verifySessionToken(createSessionToken(adminClaims))?.admin).toBe(true);
+    // A token minted before the claim existed must not be able to reach /admin.
+    const legacy = createSessionToken({ sub: 'u-1', email: 'me@example.com' } as typeof claims);
+    expect(verifySessionToken(legacy)?.admin).toBe(false);
   });
 
   it('rejects a tampered payload or signature', () => {

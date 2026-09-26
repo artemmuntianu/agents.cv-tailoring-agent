@@ -24,6 +24,13 @@ export interface SessionPayload {
   sub: string;
   email: string;
   name?: string;
+  /**
+   * `app_users.is_admin`, copied into the signed token so the middleware can gate the
+   * vocabulary admin surface without a database read per request. Tokens minted before
+   * 2026-09-26 have no such claim and are treated as **false** (`verifySessionToken`
+   * normalises it), which is the safe direction: a stale cookie cannot grow privileges.
+   */
+  admin: boolean;
   iat: number;
   exp: number;
 }
@@ -122,7 +129,9 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
     const payload = JSON.parse(fromB64url(claims).toString('utf8')) as SessionPayload;
     if (!payload.sub || !payload.email) return null;
     if (typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) return null;
-    return payload;
+    // Anything but an explicit `true` (including a token minted before the claim
+    // existed) is not an administrator.
+    return { ...payload, admin: payload.admin === true };
   } catch {
     return null;
   }

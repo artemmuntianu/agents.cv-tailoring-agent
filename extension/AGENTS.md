@@ -21,8 +21,11 @@ load as-is.
 3. Open a vacancy listing page (e.g. `djinni.co/jobs/`), click the extension icon,
    enter the gateway URL (`http://localhost:4321`), your provisioned email/password,
    **Sign in**, then **Scrape & queue this page**.
-4. The popup reports `Queued N message(s) on resumes.generate.`; the cards appear on
-   the board as the workers pick them up (KEDA scales 0 -> N).
+4. The popup reports `Queued N message(s) on resumes.generate.` The cards are already in
+   **Created** when it answers: the gateway creates the row *before* publishing
+   (`backoffice/AGENTS.md`, invariant 17 in `CONSTITUTION.md`), and the worker's claim
+   then adopts that row, so a card turns from *Tailoring In Progress* to *Tailored* in
+   place (KEDA scales 0 -> N).
 
 `host_permissions` in `manifest.json` lists `localhost:4321` / `127.0.0.1:4321`. A
 different gateway origin must be added there (Chrome does not allow a wildcard host

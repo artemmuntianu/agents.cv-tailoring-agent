@@ -73,7 +73,7 @@ python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the j
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
 ```
 
-The 9 Postgres integration tests only run when pointed at a throwaway database:
+The 17 Postgres integration tests only run when pointed at a throwaway database:
 
 ```sh
 make test-postgres

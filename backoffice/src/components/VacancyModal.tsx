@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
+import { artifactUrl, storedPathName } from '../lib/artifact-link';
+import { historyLine } from '../lib/board';
 import {
   STAGES,
-  stageLabel,
+  refusalLabel,
   tailoringFromStatus,
   tailoringLabel,
   tailoringMeta,
@@ -11,6 +13,9 @@ import type { BoardCard } from '../lib/types';
 interface VacancyModalProps {
   card: BoardCard;
   onClose: () => void;
+  /** Optional: the keyboard-accessible twin of the card's hover buttons. */
+  onArchive?: (jobId: string) => void;
+  onRestore?: (jobId: string) => void;
 }
 
 function formatDateTime(iso: string): string {
@@ -36,8 +41,13 @@ function duration(ms: number | null): string {
   return ms === null || ms === undefined ? '—' : `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** The stored artifact path reduced to its file name (`/data/output/848944.pdf`). */
+function resultField(storedPath: string | null): string {
+  return storedPathName(storedPath) ?? 'not stored yet';
+}
+
 /** Everything known about one vacancy, with the full change history at the bottom. */
-export default function VacancyModal({ card, onClose }: VacancyModalProps) {
+export default function VacancyModal({ card, onClose, onArchive, onRestore }: VacancyModalProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -85,6 +95,11 @@ export default function VacancyModal({ card, onClose }: VacancyModalProps) {
                 {tailoringLabel(tailoring)}
               </span>
             )}
+            {card.archived && (
+              <span className="rounded bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-rose-200">
+                ⛔️ {refusalLabel(card)}
+              </span>
+            )}
             <span className="text-xs text-slate-400">#{card.externalId}</span>
           </div>
 
@@ -103,9 +118,23 @@ export default function VacancyModal({ card, onClose }: VacancyModalProps) {
             <Field label="CV version" value={card.cvVersion} />
             <Field label="Created" value={formatDateTime(card.createdAt)} />
             <Field label="Last change" value={formatDateTime(card.updatedAt)} />
-            <Field label="Result (PDF)" value={card.pdfUrl ? 'available' : 'not stored yet'} />
-            <Field label="Result (DOCX)" value={card.docxPath ? 'available' : 'not stored yet'} />
+            {card.archived && <Field label="Refused by" value={card.archivedActor ?? 'unknown'} />}
+            {card.archived && (
+              <Field
+                label="Refused on"
+                value={formatDateTime(card.archivedAt ?? card.updatedAt)}
+              />
+            )}
+            <Field label="Result (PDF)" value={resultField(card.pdfUrl)} />
+            <Field label="Result (DOCX)" value={resultField(card.docxPath)} />
           </dl>
+
+          {(card.pdfUrl || card.docxPath) && (
+            <p className="mt-2 text-[11px] text-slate-500">
+              The worker records the artifact's <em>path on its volume</em>, so the links below go
+              through the board, which resolves that path against <code>ARTIFACTS_DIR</code>.
+            </p>
+          )}
 
           <div className="mt-4 flex flex-wrap gap-3 text-xs">
             {card.sourceUrl && (
@@ -120,13 +149,41 @@ export default function VacancyModal({ card, onClose }: VacancyModalProps) {
             )}
             {card.pdfUrl && (
               <a
-                href={card.pdfUrl}
+                href={artifactUrl(card.jobId)}
                 target="_blank"
                 rel="noreferrer"
                 className="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50"
               >
                 Tailored PDF
               </a>
+            )}
+            {card.docxPath && (
+              <a
+                href={artifactUrl(card.jobId, 'docx')}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50"
+              >
+                Tailored DOCX
+              </a>
+            )}
+            {!card.archived && onArchive && (
+              <button
+                type="button"
+                onClick={() => onArchive(card.jobId)}
+                className="rounded border border-rose-300 px-2 py-1 font-medium text-rose-700 hover:bg-rose-50"
+              >
+                ⛔️ Archive
+              </button>
+            )}
+            {card.archived && onRestore && (
+              <button
+                type="button"
+                onClick={() => onRestore(card.jobId)}
+                className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50"
+              >
+                🔄 Restore
+              </button>
             )}
           </div>
 
@@ -158,7 +215,7 @@ export default function VacancyModal({ card, onClose }: VacancyModalProps) {
                 <li key={item.id} className="flex gap-3">
                   <span
                     className={`mt-0.5 h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ring-1 ${
-                      item.actor === 'Me'
+                      item.actor === 'Candidate'
                         ? 'bg-slate-100 text-slate-600 ring-slate-200'
                         : 'bg-indigo-100 text-indigo-700 ring-indigo-200'
                     }`}
@@ -168,9 +225,7 @@ export default function VacancyModal({ card, onClose }: VacancyModalProps) {
                   <div className="min-w-0">
                     <p className="text-sm text-slate-800">{item.action}</p>
                     <p className="mt-0.5 text-[11px] text-slate-400">
-                      {item.kind === 'move'
-                        ? `stage: ${stageLabel(item.from)} → ${stageLabel(item.to)}`
-                        : `tailoring: ${tailoringLabel(item.from)} → ${tailoringLabel(item.to)}`}
+                      {historyLine(item)}
                       {' · '}
                       {formatDateTime(item.at)}
                     </p>

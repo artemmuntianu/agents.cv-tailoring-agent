@@ -129,6 +129,46 @@ automation         .github/workflows/
     `description_raw`, http(s) `source_url`, ≤25 cards) and emits exactly
     `ResumeTaskMessage`; the AMQP topology in `backoffice/src/lib/queue.ts` mirrors
     `utils/messaging.py` field for field (a mismatch is a 406 from the broker).
+17. **A scraped vacancy is a card immediately, and the worker's claim adopts it.** The
+    batch gateway inserts the `resumes` row (`status = 'submitted'`, `job_id` = the
+    one it puts in the message) *before* publishing, and deletes the rows it created if
+    the publish fails. `submitted` must stay out of `ACTIVE_STATUSES`, otherwise the
+    claim would ack the message as a duplicate and the card would never run; being
+    non-active makes `_claim_row` re-claim that exact row. The board's *move* path
+    still never writes `resumes.status`.
+18. **`resumes.pdf_url` / `docx_path` are storage paths, not URLs.** They are what
+    `utils/storage.LocalStorage.upload` returned (`/data/output/848944.pdf` in the
+    cluster), so nothing in a browser may link them: the board serves downloads from
+    `GET /api/artifacts/<job_id>` (keyed by `job_id`, resolved against `ARTIFACTS_DIR`,
+    traversal-refused) and reports "not on this machine" instead of a bare 404.
+19. **Refusing a vacancy is an in-place soft delete.** `resume_board.archived_at` /
+    `archived_actor` / `archived_reason` are set (or cleared) in one transaction with the
+    `resume_history` row (`kind` `archive`/`restore`, `from_state`/`to_state`
+    `active`/`archived`) and the `board_actions` upsert. `stage` is never touched - the
+    card stays in the column where it stopped, only muted - and `resumes.status` stays the
+    worker's alone. An archived vacancy counts as a *duplicate* for the ingest gateway:
+    re-scraping a page never re-queues a card the operator has closed, whatever its
+    tailoring status says. "Archived" is a state, never a column
+    (`isStageId('archived')` is false, and the DB enforces the three columns together).
+20. **The Actor vocabulary is `Candidate` | `Company`.** That is what the dialogs store
+    (`resume_history.actor`, `resume_board.archived_actor`); rows written before
+    2026-09-26 said `Me`/`Them` and were renamed in place by the guarded migration block in
+    `SCHEMA_SQL`. The *Action* vocabulary is data, not code: `board_actions` (seeded with
+    eleven starting values) is written by the same transaction as the change it describes
+    and read by both the dialog comboboxes and the Filters panel - so the operator's own
+    wording comes back as a suggestion and as a filter option.
+21. **The vocabularies have one admin surface, and it is gated.** `GET/POST/PATCH/DELETE
+    /api/admin/*` and the `/admin` page require `app_users.is_admin`, which is copied into
+    the signed session token at login (`lib/auth.ts`; a token without the claim counts as
+    false, so a stale cookie cannot grow privileges). The middleware is the gate - 403 for
+    the API, the `/403` page for the browser - and the routes re-check the claim.
+    **Only Actions are editable**: the Actor list is a DB CHECK, the columns are the board's
+    shape (`isStageId`) and the tailoring sub-states are derived from the worker's statuses,
+    so `/admin` renders those three from the code that defines them.
+    **A vocabulary edit is catalogue-only** - `resume_history` and `archived_reason` keep
+    the words they were recorded with, and a removed value stays filterable as
+    `catalogued: false` (dialog comboboxes stop suggesting it; the Filters panel keeps
+    offering it, because deleting a word must not make past cards unfindable).
 
 ## 5. Known discrepancies, dead code and legacy paths
 
@@ -144,11 +184,11 @@ so that a change which depends on them is a conscious one.
 | D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
 | D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
 | D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
-| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **48 collected, 9 skipped, 39 passed** (`python -m pytest -q`, 2026-09-26); the 9 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
+| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **56 collected, 17 skipped, 39 passed** (`python -m pytest -q`, 2026-09-26); the 17 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
 | D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
-| D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
+| D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
 | D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box |
 
 ### Legacy / removed (do not reintroduce)

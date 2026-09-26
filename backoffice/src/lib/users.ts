@@ -18,6 +18,8 @@ export interface Identity {
   sub: string;
   email: string;
   name?: string;
+  /** `app_users.is_admin` - gates the vocabulary admin surface. */
+  admin: boolean;
 }
 
 export async function findActiveUserByEmail(email: string): Promise<UserRow | null> {
@@ -55,6 +57,11 @@ export async function authenticate(
   if (!verifyPassword(password, user.password_hash)) return null;
 
   await touchLastLogin(user.id);
-  return { sub: user.id, email: user.email, name: user.display_name ?? undefined };
+  return {
+    sub: user.id,
+    email: user.email,
+    name: user.display_name ?? undefined,
+    admin: user.is_admin,
+  };
 }
 

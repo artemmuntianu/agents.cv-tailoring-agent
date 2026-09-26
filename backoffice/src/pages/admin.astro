@@ -1,8 +1,9 @@
 ---
-import App from '../components/App.tsx';
+import AdminApp from '../components/AdminApp.tsx';
 import '../styles/global.css';
 
-// The middleware guarantees a session on this route; `session` is name + email only.
+// The middleware guarantees a session *and* that it is an administrator: /admin is gated
+// on the signed `is_admin` claim (a non-admin is redirected to /403).
 const session = Astro.locals.session!;
 ---
 
@@ -11,11 +12,11 @@ const session = Astro.locals.session!;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CV tailoring backoffice</title>
-    <meta name="description" content="Kanban board for tracking tailored vacancies" />
+    <title>Vocabularies · CV tailoring backoffice</title>
+    <meta name="description" content="Administrator: the vocabularies the board uses" />
   </head>
   <body class="bg-slate-100 antialiased">
-    <App
+    <AdminApp
       client:load
       session={{ email: session.email, name: session.name ?? null, admin: session.admin }}
     />

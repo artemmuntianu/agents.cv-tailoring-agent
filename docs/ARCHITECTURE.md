@@ -127,6 +127,31 @@ Queue topology as declared (chart definitions, byte-identical in intent to
 
 The message is acked only after (f) and (g) succeed.
 
+### Ingest: how a message gets there, and why the card is instant
+
+| Step | Code |
+|---|---|
+| scrape the listing page | `extension/` (`div[id^="job-item-"]`, injected function) |
+| authenticate, validate the whole batch | `POST /api/vacancies/batch` → `backoffice/src/lib/vacancies.ts` (pure) |
+| **create the board card** | `resumes` row, `status='submitted'` → `backoffice/src/lib/ingest.ts` |
+| publish one message per vacancy | `backoffice/src/lib/queue.ts` (mirrors `utils/messaging.py`) |
+
+The row is committed *before* the message, which is what puts a scraped vacancy in
+Created immediately instead of only after KEDA boots a worker - and the worker's claim
+then **adopts** that same row (`job_id` unchanged), because `submitted` is deliberately
+outside `ACTIVE_STATUSES`. If the publish fails the gateway deletes the rows it created
+(`on conflict do nothing` + a `status='submitted'` guard make both steps safe against a
+concurrent scrape).
+
+Results come back the same way: `resumes.pdf_url`/`docx_path` are paths on the
+`cv-artifacts` volume, so the board serves `GET /api/artifacts/<job_id>` (resolved
+against `ARTIFACTS_DIR`; mirror the volume with `scripts/storage-files.ps1 -Action
+download` when the board runs outside the cluster).
+
+An **archived** (refused) vacancy is a duplicate too, whatever its tailoring status says:
+`findExistingVacancies` reads `resume_board.archived_at`, so re-scraping a page can never
+re-queue a card the operator has closed (invariant 19).
+
 ## 5. Scaling and lifecycle invariants (values as deployed by `deploy/values/dev.yaml`)
 
 | Knob | Value | Why it matters here |

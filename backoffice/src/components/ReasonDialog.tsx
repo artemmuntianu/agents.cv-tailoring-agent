@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Actor } from '../lib/types';
+import { useEffect, useState } from 'react';
+import { ACTORS } from '../lib/board';
+import { ACTOR_HINT } from '../lib/stages';
+import type { Actor, BoardAction } from '../lib/types';
+import ActionCombobox from './ActionCombobox';
 
 interface ReasonDialogProps {
   title: string;
@@ -7,29 +10,46 @@ interface ReasonDialogProps {
   toLabel: string;
   /** Extra hint under the title (e.g. the vacancy being changed). */
   subtitle: string;
+  /** The Action vocabulary; omit it and the field is plain free text. */
+  actions?: BoardAction[];
+  /** Which vocabulary to rank first (refusals vs. progress notes). */
+  actionsKind?: BoardAction['kind'];
+  actionLabel?: string;
+  confirmLabel?: string;
+  /** 'danger' paints the confirm button the way the refusal it confirms reads. */
+  tone?: 'neutral' | 'danger';
+  defaultActor?: Actor;
   onProceed: (actor: Actor, action: string) => void;
   onCancel: () => void;
 }
 
 /**
- * The dialog every manual change goes through: a fixed Actor dropdown (Me / Them)
- * plus the free-text reason. Nothing is committed until "Proceed" - "Cancel" just
- * closes, so the card stays where it was.
+ * The dialog every manual change goes through - a move **and** a refusal: a fixed Actor
+ * dropdown (Candidate / Company, the stored vocabulary) plus the reason. The reason
+ * field is the Action combobox, so it offers the persisted vocabulary and accepts new
+ * wording; typing a new one stores it for next time.
+ *
+ * Nothing is committed until the confirm button - Cancel/Escape just closes, so the
+ * card stays where it was.
  */
 export default function ReasonDialog({
   title,
   fromLabel,
   toLabel,
   subtitle,
+  actions = [],
+  actionsKind = 'move',
+  actionLabel = 'Action',
+  confirmLabel = 'Proceed',
+  tone = 'neutral',
+  defaultActor = 'Candidate',
   onProceed,
   onCancel,
 }: ReasonDialogProps) {
-  const [actor, setActor] = useState<Actor>('Me');
+  const [actor, setActor] = useState<Actor>(defaultActor);
   const [action, setAction] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCancel();
     };
@@ -64,21 +84,22 @@ export default function ReasonDialog({
             onChange={(event) => setActor(event.target.value as Actor)}
             className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900"
           >
-            <option value="Me">Me</option>
-            <option value="Them">Them</option>
+            {ACTORS.map((value) => (
+              <option key={value} value={value}>
+                {value} ({ACTOR_HINT[value]})
+              </option>
+            ))}
           </select>
         </label>
 
-        <label className="mt-3 block text-xs font-medium uppercase tracking-wide text-slate-500">
-          Action
-          <input
-            ref={inputRef}
-            value={action}
-            onChange={(event) => setAction(event.target.value)}
-            placeholder="What happened? (required)"
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900 placeholder:text-slate-400"
-          />
-        </label>
+        <ActionCombobox
+          value={action}
+          onChange={setAction}
+          kind={actionsKind}
+          actions={actions}
+          label={actionLabel}
+          autoFocus
+        />
 
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -91,9 +112,13 @@ export default function ReasonDialog({
           <button
             type="submit"
             disabled={!canProceed}
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+            className={
+              tone === 'danger'
+                ? 'rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300'
+                : 'rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300'
+            }
           >
-            Proceed
+            {confirmLabel}
           </button>
         </div>
       </form>

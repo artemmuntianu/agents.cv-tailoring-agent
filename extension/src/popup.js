@@ -73,9 +73,11 @@ async function scrapeAndQueue() {
       return status(response.error || 'publish failed', 'error');
     }
     const parts = [`Queued ${response.published} message(s) on ${response.queue}.`];
-    if (response.duplicates) parts.push(`${response.duplicates} duplicate card(s) collapsed.`);
+    if (response.duplicates) parts.push(`${response.duplicates} already on the board.`);
+    if (response.retries) parts.push(`${response.retries} failed card(s) re-queued.`);
     if (result.skipped) parts.push(`${result.skipped} card(s) skipped (no id or no text).`);
     if (typeof response.depth === 'number') parts.push(`Queue depth now ${response.depth}.`);
+    parts.push('The cards are in Created - open the board to watch them.');
     status(parts.join('\n'), 'ok');
   } catch (error) {
     status(error && error.message ? error.message : String(error), 'error');

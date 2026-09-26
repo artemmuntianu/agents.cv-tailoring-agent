@@ -1,0 +1,30 @@
+---
+import '../styles/global.css';
+
+const session = Astro.locals.session!;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Administrators only · CV tailoring backoffice</title>
+  </head>
+  <body class="flex min-h-screen items-center justify-center bg-slate-100 p-6 antialiased">
+    <main class="w-full max-w-md rounded-xl bg-white p-6 shadow-sm">
+      <h1 class="text-lg font-semibold text-slate-900">Not an administrator</h1>
+      <p class="mt-2 text-sm text-slate-600">
+        <strong>{session.email}</strong> is signed in, but the vocabulary admin surface is
+        limited to accounts provisioned with <code>--admin</code>
+        (<code>backoffice/scripts/user.mjs</code>).
+      </p>
+      <a
+        href="/"
+        class="mt-5 inline-block rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white"
+      >
+        Back to the board
+      </a>
+    </main>
+  </body>
+</html>

@@ -32,7 +32,8 @@ step.
    - **Scrape & queue this page**
 
 4. The popup answers e.g. `Queued 12 message(s) on resumes.generate. Queue depth now
-   12.` The board fills in as workers pick the jobs up (KEDA scales the worker 0 -> N).
+   12.` The cards are in **Created** straight away; each turns *Tailored* once the
+   worker finishes (KEDA scales the worker 0 -> N).
 
 ## What it sends
 

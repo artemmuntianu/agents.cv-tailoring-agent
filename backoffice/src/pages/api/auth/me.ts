@@ -10,6 +10,11 @@ export const GET: APIRoute = async ({ request, cookies }) => {
   if (!session) return json({ ok: true, session: null });
   return json({
     ok: true,
-    session: { email: session.email, name: session.name ?? null, expiresAt: session.exp },
+    session: {
+      email: session.email,
+      name: session.name ?? null,
+      admin: session.admin,
+      expiresAt: session.exp,
+    },
   });
 };

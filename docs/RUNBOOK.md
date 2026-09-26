@@ -117,6 +117,26 @@ kubectl rollout restart deploy/ai-agent-worker
 | drain the queue faster | raise `maxReplicaCount` and `keda.queueLength` (e.g. `"2"` = 1 pod / 2 messages) |
 | keep pods warm (latency) | `keda.minReplicaCount=1` (costs money at idle) |
 
+## After a schema change (the worker owns the DDL)
+
+`utils/db.py::SCHEMA_SQL` is the **only** DDL, and the worker executes it at start-up
+(`PostgresDb.ensure_schema`). The board deliberately does not duplicate it, so after a
+schema change the database has to be upgraded once before the board can read the new
+columns:
+
+```powershell
+kubectl port-forward svc/postgres 5432:5432      # keep it running
+$env:DATABASE_URL = 'postgresql://cvt:cvt@localhost:5432/cvt?sslmode=disable'
+$env:DB_BACKEND   = 'postgres'
+python -c "from utils import db; db.get_db().ping()"
+```
+
+The cheapest alternative is to let any task run (`.\scripts\send-test-job.ps1 -Smoke`):
+every `worker.py` start runs the same bootstrap. The migrations are guard-first and
+idempotent, so running them twice is a no-op - the 2026-09-26 one renamed the Actor
+vocabulary (`Me`/`Them` -> `Candidate`/`Company`) and added `resume_board.archived_*`
+plus `board_actions`.
+
 ## Rollback
 
 ```bash

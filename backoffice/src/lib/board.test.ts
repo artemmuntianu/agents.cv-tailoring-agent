@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_ACTION_LENGTH, countByStage, groupByStage, parseMoveRequest } from './board';
+import {
+  MAX_ACTION_LENGTH,
+  RESTORE_ACTION,
+  countArchived,
+  countByStage,
+  countColumns,
+  groupByStage,
+  historyLine,
+  parseArchiveRequest,
+  parseMoveRequest,
+  parseRestoreRequest,
+} from './board';
 import { STAGES, isStageId, tailoringFromStatus } from './stages';
 import type { BoardCard } from './types';
 
@@ -21,9 +32,24 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
     createdAt: '2026-09-25T10:00:00.000Z',
     updatedAt: '2026-09-25T10:05:00.000Z',
     stage: 'created',
+    archivedAt: null,
+    archivedActor: null,
+    archivedReason: null,
+    archived: false,
     history: [],
     ...overrides,
   };
+}
+
+/** The shape the DB writes when a card is refused. */
+function archivedCard(overrides: Partial<BoardCard> = {}): BoardCard {
+  return card({
+    archivedAt: '2026-09-25T12:00:00.000Z',
+    archivedActor: 'Company',
+    archivedReason: 'Salary mismatch',
+    archived: true,
+    ...overrides,
+  });
 }
 
 describe('tailoringFromStatus (the worker owns this state)', () => {
@@ -46,7 +72,7 @@ describe('tailoringFromStatus (the worker owns this state)', () => {
 });
 
 describe('parseMoveRequest (the dialog contract)', () => {
-  const valid = { jobId: '374001-1', to: 'applied', actor: 'Me', action: 'Applied online' };
+  const valid = { jobId: '374001-1', to: 'applied', actor: 'Candidate', action: 'Applied online' };
 
   it('accepts a well-formed move and trims the reason', () => {
     const parsed = parseMoveRequest({ ...valid, action: '  Applied online  ' });
@@ -91,5 +117,93 @@ describe('board grouping', () => {
     expect(isStageId('negotiating')).toBe(true);
     expect(isStageId('archived')).toBe(false);
     expect(isStageId(42)).toBe(false);
+  });
+});
+
+describe('archive and restore requests (the refusal dialog)', () => {
+  it('accepts the dialog contract and trims the reason', () => {
+    const parsed = parseArchiveRequest({ jobId: ' a-1 ', actor: 'Company', action: '  Salary mismatch ' });
+    expect(parsed).toEqual({ ok: true, value: { jobId: 'a-1', actor: 'Company', action: 'Salary mismatch' } });
+  });
+
+  it('rejects the pre-2026-09-26 actor vocabulary and anything over the limit', () => {
+    const base = { jobId: 'a-1', actor: 'Candidate', action: 'Rejected by company' };
+    for (const actor of ['Me', 'Them', 'someone', '', null]) {
+      expect(parseArchiveRequest({ ...base, actor }).ok, String(actor)).toBe(false);
+    }
+    expect(parseArchiveRequest({ ...base, action: '   ' }).ok).toBe(false);
+    expect(parseArchiveRequest({ ...base, action: 'x'.repeat(MAX_ACTION_LENGTH + 1) }).ok).toBe(false);
+    expect(parseArchiveRequest({ ...base, jobId: '' }).ok).toBe(false);
+    expect(parseArchiveRequest(null).ok).toBe(false);
+    expect(parseArchiveRequest([base]).ok).toBe(false);
+  });
+
+  it('takes a job id and nothing else for a restore', () => {
+    expect(parseRestoreRequest({ jobId: ' a-1 ' })).toEqual({ ok: true, value: { jobId: 'a-1' } });
+    expect(parseRestoreRequest({}).ok).toBe(false);
+    expect(parseRestoreRequest({ jobId: 42 }).ok).toBe(false);
+    expect(parseRestoreRequest('a-1').ok).toBe(false);
+    // The restore reason is recorded by the route, not typed by the operator.
+    expect(RESTORE_ACTION).toBe('Restored to the active pipeline');
+  });
+
+  it('still refuses "archived" as a column id on a move', () => {
+    expect(parseMoveRequest({ jobId: 'a-1', to: 'archived', actor: 'Candidate', action: 'x' }).ok).toBe(
+      false,
+    );
+  });
+});
+
+describe('active vs archived counting (column headers)', () => {
+  it('splits each column and keeps the total', () => {
+    const cards = [
+      card({ jobId: 'a', stage: 'interviewing' }),
+      card({ jobId: 'b', stage: 'interviewing' }),
+      archivedCard({ jobId: 'c', stage: 'interviewing' }),
+      archivedCard({ jobId: 'd', stage: 'applied' }),
+    ];
+
+    expect(countColumns(cards)[3]).toEqual({ stage: 'interviewing', active: 2, archived: 1, total: 3 });
+    expect(countColumns(cards)[1]).toEqual({ stage: 'applied', active: 0, archived: 1, total: 1 });
+    // countByStage feeds the nav panel, which counts the pipeline *in play*.
+    expect(countByStage(cards).interviewing).toBe(2);
+    expect(countByStage(cards).applied).toBe(0);
+    expect(countArchived(cards)).toBe(2);
+  });
+
+  it('renders both history vocabularies', () => {
+    expect(
+      historyLine({
+        id: 1,
+        at: '2026-09-25T12:00:00.000Z',
+        actor: 'Company',
+        action: 'Salary mismatch',
+        kind: 'archive',
+        from: 'active',
+        to: 'archived',
+      }),
+    ).toBe('archived: active → refused');
+    expect(
+      historyLine({
+        id: 2,
+        at: '2026-09-25T13:00:00.000Z',
+        actor: 'Candidate',
+        action: RESTORE_ACTION,
+        kind: 'restore',
+        from: 'archived',
+        to: 'active',
+      }),
+    ).toBe('restored: refused → active');
+    expect(
+      historyLine({
+        id: 3,
+        at: '2026-09-25T14:00:00.000Z',
+        actor: 'Candidate',
+        action: 'Applied online',
+        kind: 'move',
+        from: 'created',
+        to: 'applied',
+      }),
+    ).toBe('stage: Created → Applied');
   });
 });

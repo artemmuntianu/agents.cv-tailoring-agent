@@ -35,11 +35,13 @@ make test-postgres             # or:
 TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt python -m pytest -q tests/test_postgres_store.py
 ```
 
-The 9 Postgres-gated tests need a database: point them at the cluster's own Postgres
+The 17 Postgres-gated tests need a database: point them at the cluster's own Postgres
 through a port-forward (`kubectl port-forward svc/postgres 5432:5432`), or let CI
 provide one as a service container (`.github/AGENTS.md`). They cover the worker's claim
-semantics, the board's two tables (`resume_board`, `resume_history`) and the backoffice's
-`app_users`.
+semantics (including the ingest row the gateway pre-creates), the board's tables
+(`resume_board` with its archive columns, `resume_history` with the `Candidate`/`Company`
+actor vocabulary and the four kinds), the backoffice's `app_users` and the Action
+catalogue's admin writes / retired-value view (`board_actions`).
 
 ## The harness contract (`helpers.py`)
 
