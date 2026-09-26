@@ -20,6 +20,7 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `test_docx_mutator.py` | The document surgery that must never regress: normalisation, bullet/no-op dropping, sync validation, master left untouched |
 | `test_messaging.py` | Directory-queue semantics: ack -> `processed`, retry (attempt bump), dead-letter -> `failed`, a crashing handler requeues |
 | `test_model_state.py` | Model ledger: preference order, unavailability TTL, exhaustion -> `None` |
+| `test_scout.py` | The scheduled intake: the feed fixture (escaped HTML, double-escaped entities, the utm link, the apply tail), the title/id parsing, the board-scoped dedupe, "a run queues nothing", the Telegram message, and that a run without a feed is an *error* |
 | `test_postgres_store.py` | **Real** Postgres: schema bootstrap, the shape CHECK, claim SQL, the shared ledger. Skipped unless `TEST_DATABASE_URL` is set |
 | `test_retry.py` | `_is_retryable`, daily-quota detection, headless `RetryLater`, backoff |
 | `test_worker_pipeline.py` | End-to-end `worker.handle_delivery` / `worker.main --once`: happy path, duplicate, DLQ, master-CV drift, quota deferral, attempt ceiling |

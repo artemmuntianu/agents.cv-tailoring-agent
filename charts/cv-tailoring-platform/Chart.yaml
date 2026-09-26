@@ -24,3 +24,8 @@ dependencies:
     version: "0.2.0"
     repository: "file://../cv-tailoring-worker"
     condition: cv-tailoring-worker.enabled
+  # The scheduled intake (a CronJob): feeds -> cards in Scraped + a Telegram message each.
+  - name: cv-tailoring-scout
+    version: "0.1.0"
+    repository: "file://../cv-tailoring-scout"
+    condition: cv-tailoring-scout.enabled

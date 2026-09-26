@@ -227,6 +227,23 @@ class LocalDb:
         self._save(data)
         return record
 
+    def find_existing_ids(self, source, external_ids, cv_version="v1"):
+        """Which of these vacancies are already on the board (see PostgresDb)."""
+        wanted = set(external_ids)
+        source = source or "djinni"
+        cv_version = cv_version or "v1"
+        return {
+            row.get("external_id")
+            for row in self._load()["jobs"].values()
+            if row.get("external_id") in wanted
+            and (row.get("source") or "djinni") == source
+            and (row.get("cv_version") or "v1") == cv_version
+        }
+
+    def app_user_exists(self, user_id):
+        """The file backend has no `app_users`: accounts are a Postgres/backoffice concern."""
+        return True
+
     def get_job(self, job_id):
         return self._load()["jobs"].get(job_id)
 
@@ -841,6 +858,40 @@ class PostgresDb:
                 row = cur.fetchone()
             conn.commit()
         return dict(row) if row else None
+
+    def find_existing_ids(self, source, external_ids, cv_version="v1"):
+        """Which of these vacancies the board already has - **any** owner, any status.
+
+        Board-scoped on purpose (`CONSTITUTION.md` invariant 17): the board renders every row
+        whatever its `user_id`, so a lookup limited to one account would create a second card
+        for a vacancy the operator can already see. The intake uses this to decide what is new;
+        a refused card counts as known, so a re-run never reopens it.
+        """
+        if not external_ids:
+            return set()
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select external_id from resumes
+                     where source = %s
+                       and external_id = any(%s)
+                       and cv_version = %s
+                    """,
+                    (source or "djinni", list(external_ids), cv_version or "v1"),
+                )
+                return {row["external_id"] for row in cur.fetchall()}
+
+    def app_user_exists(self, user_id):
+        """True when `app_users` holds this id - the scout refuses to write as a stranger."""
+        if not user_id:
+            return False
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select 1 as ok from app_users where id = %s", (user_id,))
+                return cur.fetchone() is not None
 
     def get_job(self, job_id):
         self.ensure_schema()

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cv-tailoring-scout.fullname" . }}
+  labels:
+    {{- include "cv-tailoring-scout.labels" . | nindent 4 }}
+data:
+  # The intake's own knobs. Everything secret (the bot token, the chat id, DATABASE_URL)
+  # comes from the Secret, never from here.
+  SERVICE_NAME: cv-tailoring-scout
+  SCOUT_FEEDS: {{ .Values.config.feeds | quote }}
+  SCOUT_SOURCE: {{ .Values.config.source | quote }}
+  SCOUT_USER_ID: {{ .Values.config.userId | quote }}
+  SCOUT_MAX_PER_RUN: {{ .Values.config.maxPerRun | quote }}
+  SCOUT_TIMEOUT_SECONDS: {{ .Values.config.timeoutSeconds | quote }}
+  SCOUT_NOTIFY: {{ .Values.config.notify | quote }}
+  DB_BACKEND: {{ .Values.config.dbBackend | quote }}
+  DB_APPLICATION_NAME: cv-tailoring-scout
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  LOG_FORMAT: {{ .Values.config.logFormat | quote }}

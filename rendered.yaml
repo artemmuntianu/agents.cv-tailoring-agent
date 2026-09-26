@@ -121,6 +121,35 @@ stringData:
   rabbitmq-management-url: "http://cvt:dev-only-change-me@rabbitmq.default.svc.cluster.local:15672/%2F"
 
 ---
+# Source: cv-tailoring-platform/charts/cv-tailoring-scout/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cv-tailoring-cv-tailoring-scout
+  labels:
+    helm.sh/chart: cv-tailoring-scout-0.1.0
+    app.kubernetes.io/name: cv-tailoring-scout
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: scout
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+data:
+  # The intake's own knobs. Everything secret (the bot token, the chat id, DATABASE_URL)
+  # comes from the Secret, never from here.
+  SERVICE_NAME: cv-tailoring-scout
+  SCOUT_FEEDS: "https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus, https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager, https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect"
+  SCOUT_SOURCE: "dou"
+  SCOUT_USER_ID: ""
+  SCOUT_MAX_PER_RUN: "0"
+  SCOUT_TIMEOUT_SECONDS: "20"
+  SCOUT_NOTIFY: "telegram"
+  DB_BACKEND: "postgres"
+  DB_APPLICATION_NAME: cv-tailoring-scout
+  LOG_LEVEL: "DEBUG"
+  LOG_FORMAT: "text"
+
+---
 # Source: cv-tailoring-platform/charts/cv-tailoring-worker/templates/configmap.yaml
 apiVersion: v1
 kind: ConfigMap
@@ -11346,6 +11375,84 @@ spec:
         resources:
           requests:
             storage: 1Gi
+
+---
+# Source: cv-tailoring-platform/charts/cv-tailoring-scout/templates/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cv-tailoring-cv-tailoring-scout
+  labels:
+    helm.sh/chart: cv-tailoring-scout-0.1.0
+    app.kubernetes.io/name: cv-tailoring-scout
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: scout
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+spec:
+  schedule: "0,30 7-23 * * *"
+  # Wall-clock, not UTC: "07:30" has to mean 07:30 in the operator's day, DST included.
+  timeZone: "Europe/Lisbon"
+  concurrencyPolicy: "Forbid"
+  suspend: false
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # A hung fetch must not hold the slot forever.
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cv-tailoring-scout
+            app.kubernetes.io/instance: cv-tailoring
+            app.kubernetes.io/component: scout
+          annotations:
+            # Roll the job template when the configuration changes.
+            checksum/config: 5876fc09efaca74acc61d4e7d70446739df8ab2bda79a93097997f18f6babcae
+        spec:
+          restartPolicy: "OnFailure"
+          securityContext:
+            fsGroup: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: scout
+              image: "cv-tailoring-worker:dev"
+              imagePullPolicy: IfNotPresent
+              # The package's entry point: there is no root `scout.py` on purpose (a same-named
+              # package would shadow it).
+              command: ["python", "-m", "scout"]
+              envFrom:
+                - configMapRef:
+                    name: cv-tailoring-cv-tailoring-scout
+                - secretRef:
+                    name: cv-tailoring-secrets
+              resources:
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                readOnlyRootFilesystem: false
+              volumeMounts:
+                # `config.TEMP_ROOT` defaults under /tmp; the heartbeat file lives there too.
+                - name: work
+                  mountPath: /tmp/cvt
+          volumes:
+            - name: work
+              emptyDir: {}
 
 ---
 # Source: cv-tailoring-platform/charts/keda/templates/metrics-server/apiservice.yaml

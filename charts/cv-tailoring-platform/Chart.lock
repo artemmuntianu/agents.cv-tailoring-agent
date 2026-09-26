@@ -5,5 +5,8 @@ dependencies:
 - name: cv-tailoring-worker
   repository: file://../cv-tailoring-worker
   version: 0.2.0
-digest: sha256:8f37bb0d64f582be7de224ee4748c87aeb9b528b92ef0c7703e7ed434966d91e
-generated: "2026-09-18T23:43:26.0653705+01:00"
+- name: cv-tailoring-scout
+  repository: file://../cv-tailoring-scout
+  version: 0.1.0
+digest: sha256:1609102c3bac94b15f65e575ccf812a63b7c5d9c37b146d8b8968667e0cb17e2
+generated: "2026-09-26T23:53:15.9589006+01:00"

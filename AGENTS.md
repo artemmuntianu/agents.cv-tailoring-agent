@@ -22,6 +22,7 @@ live, so no agent has to re-derive them.
 - **`scripts/AGENTS.md`** - operator tooling: deploy, cluster storage, secrets, model check.
 - **`backoffice/AGENTS.md`** - the operator UI *and* the API gateway (Astro + React POC): run commands, auth contract, the batch-ingest contract, board contract, what is deliberately missing.
 - **`extension/AGENTS.md`** - the Chrome MV3 scraper that feeds the gateway (DOM contract, injection rules, where its tests live).
+- **`scout/AGENTS.md`** - the scheduled RSS intake (`python -m scout`): the feed contract, the board-scoped dedupe, the Telegram message, and what it deliberately never does (no Gemini, no queue message).
 - **`tests/AGENTS.md`** - the hermetic verification layer.
 - **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what.
 - **`.github/AGENTS.md`** - CI workflows.
@@ -71,6 +72,7 @@ python -m ruff check .                   # lint; must stay clean
 python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the junction (trap 16)
 
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
+python -m scout --dry-run                # what the scheduled intake would add (writes nothing)
 ```
 
 The 18 Postgres integration tests only run when pointed at a throwaway database:

@@ -252,6 +252,10 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   *derived* from it (`tailoringFromStatus`), which is why the modal shows it read-only.
 - **Cards move only by hand**, and only through the dialog: a drop opens
   `ReasonDialog`, `Cancel`/Escape changes nothing, `Proceed` POSTs actor + reason.
+  The one writer that is not the dialog is the one-off spreadsheet import
+  (`scripts/seed_board.py`): it writes a column and a timeline directly, and every row
+  it writes is prefixed `Imported: ` in `resume_history`, so an imported column can
+  always be told apart from a hand-made move.
 - **One transaction per move**: `resume_board` upsert + `resume_history` insert, so a
   card can never move without a recorded reason.
 - **The database is the display**: after every POST the board re-reads `/api/board`,

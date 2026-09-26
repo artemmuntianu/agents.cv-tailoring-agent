@@ -1,0 +1,71 @@
+{{- if .Values.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cv-tailoring-scout.fullname" . }}
+  labels:
+    {{- include "cv-tailoring-scout.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  # Wall-clock, not UTC: "07:30" has to mean 07:30 in the operator's day, DST included.
+  timeZone: {{ .Values.timeZone | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy | quote }}
+  suspend: {{ .Values.suspend }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.backoffLimit }}
+      # A hung fetch must not hold the slot forever.
+      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "cv-tailoring-scout.selectorLabels" . | nindent 12 }}
+          annotations:
+            # Roll the job template when the configuration changes.
+            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        spec:
+          restartPolicy: {{ .Values.restartPolicy | quote }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: scout
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # The package's entry point: there is no root `scout.py` on purpose (a same-named
+              # package would shadow it).
+              command: ["python", "-m", "scout"]
+              envFrom:
+                - configMapRef:
+                    name: {{ include "cv-tailoring-scout.fullname" . }}
+                - secretRef:
+                    name: {{ include "cv-tailoring-scout.secretName" . }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                # `config.TEMP_ROOT` defaults under /tmp; the heartbeat file lives there too.
+                - name: work
+                  mountPath: /tmp/cvt
+          volumes:
+            - name: work
+              emptyDir: {}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

@@ -97,6 +97,9 @@ check-models: ## Verify MODEL_NAME against the models this Gemini key can use
 	python scripts/check_models.py --strict
 
 .PHONY: test-postgres
+scout-dry-run: ## Show what the scheduled intake would add (writes nothing)
+	DB_BACKEND=postgres python -m scout --dry-run
+
 test-postgres: ## Production-store tests against the cluster Postgres (needs a port-forward)
 	# kubectl port-forward svc/postgres 5432:5432   # in a second terminal
 	TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt \

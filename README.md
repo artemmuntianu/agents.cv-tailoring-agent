@@ -52,6 +52,8 @@ can show progress and hand over the files.
 ```
 extension (Chrome MV3) --batch--> backoffice gateway --> cards in "Scraped"
                     (validates, creates a card per vacancy, queues nothing)   |
+scout (CronJob, python -m scout) --feeds--> one card per new vacancy --------+
+                    (the same intake, on a schedule; Telegram per new card)  |
                                                                              |  the operator drags
                                                                              |  a card into "Prepare"
 publisher.py / send-test-job.ps1 ----------------------+                     v

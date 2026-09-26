@@ -60,6 +60,32 @@ Healthy signs: worker replicas `0` when idle (scale-to-zero works), `Ready`
 depth rises with a batch and returns to 0, `messages_unacknowledged` ≤ max
 replicas, and the DLQ stays at 0.
 
+## Scheduled intake (the scout)
+
+`CronJob cv-tailoring-cv-tailoring-scout` fetches the DOU feeds every 30 minutes between 07:00 and
+23:30 Lisbon time, creates one card per new vacancy in the board's **Scraped** column, and sends
+one Telegram message for each. It never queues tailoring - that is the operator's drag - so a run
+costs no Gemini request whatever it finds.
+
+```sh
+kubectl get cronjob cv-tailoring-cv-tailoring-scout      # schedule, suspend state, last run
+kubectl get jobs --sort-by=.metadata.creationTimestamp   # the recent runs
+kubectl logs job/<job-name> --tail=50                    # ends with "created=N notified=N"
+
+# run one out of band
+kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
+```
+
+- **Nothing new arrives**: read the last job's log. `no feed answered` (exit 1) means the feeds are
+  unreachable, *not* that the week is quiet - the scout refuses to report that as an empty result.
+- **Pause it**: `helm upgrade ... --set cv-tailoring-scout.suspend=true`.
+- **No Telegram messages**: the token and chat id live in the worker's Secret
+  (`scripts/worker-secret.ps1` reads `SCOUT_TELEGRAM_TOKEN`/`_CHAT_ID` from `.env`);
+  `SCOUT_NOTIFY=none` turns them off deliberately, and the cards still appear.
+- **Too many cards at once**: `SCOUT_MAX_PER_RUN` caps a run (0 = everything, the default).
+- **A dry run** (writes nothing): `python -m scout --dry-run` on the host with `SCOUT_USER_ID` and
+  `DATABASE_URL` pointed at a port-forward - see `scout/AGENTS.md`.
+
 ## Queue is backing up (messages_ready grows, workers stay at 0)
 
 1. `kubectl get scaledobject cv-tailoring-cv-tailoring-worker -o yaml | grep -A5 status`

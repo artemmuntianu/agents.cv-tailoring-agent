@@ -202,6 +202,38 @@ AMQP_HEARTBEAT_SECONDS = _env_int("AMQP_HEARTBEAT_SECONDS", 600)
 HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", os.path.join(TEMP_ROOT, "heartbeat"))
 HEARTBEAT_MAX_AGE_SECONDS = _env_int("HEARTBEAT_MAX_AGE_SECONDS", 300)
 
+# --------------------------------------------------------------------------- #
+# Scheduled vacancy intake (`scout.py`)
+# --------------------------------------------------------------------------- #
+# The board queues tailoring only when the operator drags a card into Prepare, so an intake
+# that just creates cards is free: no Gemini call, no broker round trip. The scout is that
+# intake for feeds nobody browses by hand.
+SCOUT_FEEDS = _env_csv(
+    "SCOUT_FEEDS",
+    [
+        "https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus",
+        "https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager",
+        "https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect",
+    ],
+)
+# The site slug every scouted card carries (`resumes.source`): it is what makes the same
+# vacancy scraped in the browser later the *same* card instead of a second one.
+SCOUT_SOURCE = os.getenv("SCOUT_SOURCE", "dou")
+# Whose rows the scout creates - a provisioned `app_users.id`. It matters: the worker's claim
+# looks the vacancy up by `(user_id, source, external_id, cv_version)`, and the board publishes
+# a drag with the row's own owner, so a different owner here would fork a second row.
+SCOUT_USER_ID = os.getenv("SCOUT_USER_ID", "")
+# 0 = every new vacancy of the run (a feed can be long, and a new card costs nothing until the
+# operator drags it). Kept as a knob only so a runaway feed can be capped without a code change.
+SCOUT_MAX_PER_RUN = _env_int("SCOUT_MAX_PER_RUN", 0)
+SCOUT_TIMEOUT_SECONDS = _env_int("SCOUT_TIMEOUT_SECONDS", 20)
+# `telegram` sends one message per new vacancy (scheduled sources only - a browser scrape never
+# notifies); `none` keeps the intake silent while still creating the cards.
+SCOUT_NOTIFY = os.getenv("SCOUT_NOTIFY", "telegram").strip().lower()
+SCOUT_TELEGRAM_TOKEN = os.getenv("SCOUT_TELEGRAM_TOKEN", "")
+SCOUT_TELEGRAM_CHAT_ID = os.getenv("SCOUT_TELEGRAM_CHAT_ID", "")
+CV_VERSION = os.getenv("CV_VERSION", "v1")
+
 # Keep per-job temp dirs (PDFs, page PNGs) after a task for debugging.
 KEEP_TEMP_DIRS = _env_bool("KEEP_TEMP_DIRS", False)
 

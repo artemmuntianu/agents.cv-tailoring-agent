@@ -1,7 +1,13 @@
 # Create the worker's Kubernetes Secret from .env (values never touch git).
 #
-# Only GEMINI_API_KEY and DATABASE_URL are needed: artifacts live on the
+# Only GEMINI_API_KEY and DATABASE_URL are required: artifacts live on the
 # cluster's own volume, so there is no bucket or cloud storage to configure.
+#
+# SCOUT_TELEGRAM_TOKEN / SCOUT_TELEGRAM_CHAT_ID are optional and belong to the
+# scout (`python -m scout`, the scheduled intake): without them it still creates
+# the cards and simply sends no notification. The scout's Secret is this one - the
+# CronJob borrows it for DATABASE_URL too - so the bot token never appears in a
+# chart, in git, or on a second object.
 #
 # The broker credentials are NOT here: the chart injects RABBITMQ_USERNAME /
 # RABBITMQ_PASSWORD from the same Secret KEDA uses, so the password lives in one
@@ -47,7 +53,10 @@ foreach ($line in Get-Content -LiteralPath $EnvFile) {
 }
 
 # Real environment variables win over the file, so CI can override.
-foreach ($key in @('GEMINI_API_KEY', 'DATABASE_URL')) {
+foreach ($key in @(
+    'GEMINI_API_KEY', 'DATABASE_URL',
+    'SCOUT_TELEGRAM_TOKEN', 'SCOUT_TELEGRAM_CHAT_ID'
+)) {
     $fromEnv = [Environment]::GetEnvironmentVariable($key)
     if (-not [string]::IsNullOrWhiteSpace($fromEnv)) { $settings[$key] = $fromEnv }
 }
@@ -66,26 +75,46 @@ if ($settings['DATABASE_URL'] -notmatch 'sslmode=') {
     Warn 'DATABASE_URL has no sslmode parameter; for the in-cluster Postgres use ?sslmode=disable'
 }
 
+# Optional: the scout's notification target. Missing keys are a warning, never a failure -
+# the intake is still useful without Telegram.
+$scoutToken = [string]$settings['SCOUT_TELEGRAM_TOKEN']
+$scoutChatId = [string]$settings['SCOUT_TELEGRAM_CHAT_ID']
+$scoutNotify = (-not [string]::IsNullOrWhiteSpace($scoutToken)) -and
+    (-not [string]::IsNullOrWhiteSpace($scoutChatId))
+if ($scoutNotify) {
+    Ok 'SCOUT_TELEGRAM_TOKEN and SCOUT_TELEGRAM_CHAT_ID present (the scout will notify)'
+} else {
+    Warn 'no SCOUT_TELEGRAM_TOKEN/_CHAT_ID in .env - the scout will create cards silently'
+}
+
 # NOTE: each '--flag=' + value pair MUST be built into a variable first. Inside an
 # array literal PowerShell 5.1 turns `'--flag=' + $value,` into TWO elements (an
 # empty-valued flag plus a stray positional argument), and kubectl then fails with
 # "exactly one NAME is required, got 3".
 $fromGeminiKey = '--from-literal=GEMINI_API_KEY=' + $settings['GEMINI_API_KEY']
 $fromDatabaseUrl = '--from-literal=DATABASE_URL=' + $settings['DATABASE_URL']
+$fromScoutToken = '--from-literal=SCOUT_TELEGRAM_TOKEN=' + $scoutToken
+$fromScoutChatId = '--from-literal=SCOUT_TELEGRAM_CHAT_ID=' + $scoutChatId
 
 $kubectlArgs = @(
     'create', 'secret', 'generic', $Name,
     '--namespace', $Namespace,
     $fromGeminiKey,
-    $fromDatabaseUrl,
-    '--dry-run=client', '-o', 'yaml'
+    $fromDatabaseUrl
 )
+if ($scoutNotify) {
+    $kubectlArgs += $fromScoutToken
+    $kubectlArgs += $fromScoutChatId
+}
+$kubectlArgs += @('--dry-run=client', '-o', 'yaml')
 if ($DryRun) {
     # Never echo the values themselves.
     Write-Host 'would create Secret:'
     Write-Host ("  name      : " + $Name)
     Write-Host ("  namespace : " + $Namespace)
-    Write-Host '  keys      : GEMINI_API_KEY, DATABASE_URL'
+    $keys = 'GEMINI_API_KEY, DATABASE_URL'
+    if ($scoutNotify) { $keys += ', SCOUT_TELEGRAM_TOKEN, SCOUT_TELEGRAM_CHAT_ID' }
+    Write-Host ("  keys      : " + $keys)
     Write-Host ("  db host   : " + (($settings['DATABASE_URL'] -split '@')[-1]))
     exit 0
 }

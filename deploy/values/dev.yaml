@@ -55,6 +55,30 @@ rabbitmqDefinitions:
 keda:
   enabled: true
 
+# The scheduled intake. `userId` is a provisioned app_users row: create one with
+#   cd backoffice; npm run user -- add --email=scout@local --password=<generated> --name="Scout Bot"
+# and copy the id it prints (or `select id from app_users where email = 'scout@local'`).
+cv-tailoring-scout:
+  enabled: true
+  image:
+    repository: cv-tailoring-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  # The worker's Secret: DATABASE_URL plus SCOUT_TELEGRAM_TOKEN / SCOUT_TELEGRAM_CHAT_ID
+  # (`scripts/worker-secret.ps1` adds them when .env has them).
+  existingSecret: cv-tailoring-secrets
+  schedule: "0,30 7-23 * * *"
+  timeZone: Europe/Lisbon
+  config:
+    source: dou
+    # scout@local: the intake's own account, so a scouted card is visibly not yours and the
+    # drag still publishes the row's own owner (CONSTITUTION.md invariant 25).
+    userId: u-53f18341fb2495b8
+    notify: telegram
+    maxPerRun: 0
+    logLevel: DEBUG
+    logFormat: text
+
 cv-tailoring-worker:
   enabled: true
   image:

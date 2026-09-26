@@ -1,0 +1,17 @@
+apiVersion: v2
+name: cv-tailoring-scout
+description: |
+  Scheduled vacancy intake: fetches the configured RSS feeds, creates one card per new
+  vacancy in the board's Scraped column and sends a Telegram message for each. It calls no
+  model and publishes no message - the operator's drag into Prepare is what queues tailoring
+  (`CONSTITUTION.md` invariants 23 and 25).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - rss
+  - intake
+  - cronjob
+maintainers:
+  - name: artemmuntianu
