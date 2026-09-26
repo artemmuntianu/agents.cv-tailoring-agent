@@ -252,10 +252,18 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   *derived* from it (`tailoringFromStatus`), which is why the modal shows it read-only.
 - **Cards move only by hand**, and only through the dialog: a drop opens
   `ReasonDialog`, `Cancel`/Escape changes nothing, `Proceed` POSTs actor + reason.
-  The one writer that is not the dialog is the one-off spreadsheet import
-  (`scripts/seed_board.py`): it writes a column and a timeline directly, and every row
-  it writes is prefixed `Imported: ` in `resume_history`, so an imported column can
+  The writers that are not the dialog are the **intake** - the batch route and the
+  scout, which only ever *create* cards - and the 2026-09-26 one-off spreadsheet
+  import, which wrote columns and timelines directly and is now deleted
+  (`scripts/archive_not_applicable.sql` is the last artifact of it). Every row that
+  import wrote is prefixed `Imported: ` in `resume_history`, so an imported card can
   always be told apart from a hand-made move.
+- **The board carries the operator's own history**: that import adopted 226 cards from
+  the job-search export, each stamped with the sheet's own dates, and archived the
+  rows the sheet had already closed - 121 `NA` cards ("fits neither side") as
+  `Candidate` / `Not applicable`, 5 refusals as `Company` / `Rejected by company`, 1 as
+  `Candidate` / `Salary mismatch`. An archive never moves a card: it stays in the
+  column where it stopped, rendered muted.
 - **One transaction per move**: `resume_board` upsert + `resume_history` insert, so a
   card can never move without a recorded reason.
 - **The database is the display**: after every POST the board re-reads `/api/board`,
@@ -323,9 +331,10 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   pipeline view - and the Filters panel is the only place archived cards appear.
 - Stage chips and action checkboxes are additive filters; none selected = everything. An
   action filter matches a card if **any** of its history entries carries that value.
-- Filtering is **client-side** over the ≤200 loaded cards (`BOARD_LIMIT`): no request per
+- Filtering is **client-side** over the loaded cards (`BOARD_LIMIT` = 1000): no request per
   keystroke, and `lib/filters.ts` is pure, so the rules are unit tested with an injected
-  `now`.
+  `now`. The cap is not a page: a card past it is **absent** from the UI, which is why the
+  constant carries the story of the 2026-09-26 import that outgrew the old value of 200.
 
 ## Deliberately missing (it is a POC)
 
@@ -345,11 +354,12 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 - The card is written by the *intake* (the batch route, and the scout), not by the worker: a
   vacancy published by anything else (`.\scripts\send-test-job.ps1 -Smoke`, `publisher.py`)
   appears when the worker claims it, not at publish time.
-- No "add vacancy", no pagination (200 cards, newest first).
+- No "add vacancy", no pagination (`BOARD_LIMIT` = 1000 cards, newest `updated_at` first -
+  the window the toolbar filters in the browser).
 - **No dark theme**: the board is light-only on purpose (`global.css` says "no dark mode
   switch"), so the UX spec's `dark:` variants are deliberately not half-applied.
 - **No bulk archive/restore** and no multi-select: one card, one confirmed change.
-- **Filtering is client-side** over the loaded 200 cards; server-side filtering and paging
+- **Filtering is client-side** over the loaded cards; server-side filtering and paging
   are unimplemented, and the window is `updated_at` only (no "created between").
 - **No undo toast** for a refusal: `🔄 Restore` *is* the undo, and it is audited.
 - The Actor vocabulary is fixed in code (`Candidate`/`Company`, matching the DB CHECK);

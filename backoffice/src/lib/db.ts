@@ -17,7 +17,16 @@ import type { Actor, ArchiveRequest, BoardAction, BoardCard, MoveRequest } from 
  * idempotency state, and the `prepare` sub-state is derived from it instead.
  */
 
-const BOARD_LIMIT = 200;
+/*
+ * How many cards a board load may carry.
+ *
+ * Filtering is client-side, so this is the whole board as far as the UI knows: a card beyond
+ * the cap is not "further down", it is **absent** - which is exactly how three interview cards
+ * went missing after the 2026-09-26 spreadsheet import pushed the board to 236 rows. That
+ * import also stamped every card with its own dates: with all of them sharing one `updated_at`,
+ * the tie made the cut-off arbitrary.
+ */
+const BOARD_LIMIT = 1000;
 
 interface CardRow {
   job_id: string;
