@@ -9,7 +9,7 @@ Runs on every push to `main` and on every pull request.
 
 | Job | Steps | Why |
 |---|---|---|
-| `app` | `pip install -r requirements-dev.txt` (Python 3.12, pip cache) -> `python -m ruff check .` -> `python -m pytest -q` with a **Postgres 16 service container** | The service container is what makes the 6 `TEST_DATABASE_URL`-gated tests in `tests/test_postgres_store.py` really run; the rest of the suite stays offline |
+| `app` | `pip install -r requirements-dev.txt` (Python 3.12, pip cache) -> `python -m ruff check .` -> `python -m pytest -q` with a **Postgres 16 service container** | The service container is what makes the 9 `TEST_DATABASE_URL`-gated tests in `tests/test_postgres_store.py` really run; the rest of the suite stays offline |
 | `charts` | `helm lint charts/cv-tailoring-worker` -> `helm dependency update charts/cv-tailoring-platform` -> `helm lint charts/cv-tailoring-platform` -> `helm template ... -f deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci` -> `kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0` | `helm lint` cannot catch a null/invalid field value; kubeconform is the step that found `secretKeyRef.key: null` before a deploy did |
 
 Helm is pinned to `v3.16.2` on purpose. Do not bump it casually: the charts must
@@ -43,7 +43,7 @@ template renders it - `CONSTITUTION.md` D1.)
 - Keep `helm dependency update` before the umbrella lint/template: without it the
   `file://../cv-tailoring-worker` dependency does not exist on a fresh checkout.
 - Treat a red CI as a real regression - the same suite is green locally
-  (45 collected / 39 passed / 6 skipped, `ruff` clean).
+  (48 collected / 39 passed / 9 skipped, `ruff` clean).
 
 ## Don't
 

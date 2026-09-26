@@ -68,6 +68,7 @@ pip install -r requirements-dev.txt      # runtime + pytest + ruff
 
 python -m pytest -q                      # hermetic: no network, no Gemini, no LibreOffice
 python -m ruff check .                   # lint; must stay clean
+python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the junction (trap 16)
 
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
 ```
@@ -208,6 +209,14 @@ Do not add a dependency just to answer a reference/dead-code question.
     provisions the literal password `'secret'` (login then fails with
     `invalid credentials`). Pass CLI arguments as `--key=value` (`--password=secret`) -
     the parser accepts both forms, the `=` form is the unambiguous one.
+16. **`tools/` is a Windows junction, so local `ruff` never sees it - CI does.**
+    `tools/` -> `E:\CommonAgentSDK\tools\py`, and `tools/analyze.py` is a *hard link*
+    to the SDK's copy (editing either edits both). Ruff does not descend junctions, so
+    `python -m ruff check .` is green locally while CI - a real directory on Linux,
+    with ruff 0.16.9 - lints the vendored file. That is how `UP015` on `open(f, "r")`
+    went red in CI only (`python -m ruff check . --show-files` lists 33 files and omits
+    `tools/analyze.py`). Lint the tool explicitly before pushing a tooling change:
+    `python -m ruff check tools/analyze.py`.
 
 ## Shell / commands (Windows PowerShell 5.1)
 

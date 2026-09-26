@@ -34,7 +34,7 @@ def outline(file_path):
         print(f"analyze error: file not found: {file_path}")
         sys.exit(1)
 
-    with open(full_path, "r", encoding="utf-8") as f:
+    with open(full_path, encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=full_path)
 
     print(f"Outline for {_rel(full_path)}:")
@@ -55,7 +55,7 @@ def context(file_path):
         print(f"analyze error: file not found: {file_path}")
         sys.exit(1)
 
-    with open(full_path, "r", encoding="utf-8") as f:
+    with open(full_path, encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=full_path)
 
     print(f"=== TOKEN-EFFICIENT INTERFACE SUMMARY: {_rel(full_path)} ===")
@@ -102,7 +102,7 @@ def impact(file_path):
             if fname.endswith(".py") and os.path.join(dirpath, fname) != full_path:
                 py_file = os.path.join(dirpath, fname)
                 try:
-                    with open(py_file, "r", encoding="utf-8") as f:
+                    with open(py_file, encoding="utf-8") as f:
                         content = f.read()
                     if target_mod in content:
                         dependents.append(_rel(py_file))
@@ -125,7 +125,7 @@ def syntax_check(file_path):
         sys.exit(1)
 
     try:
-        with open(full_path, "r", encoding="utf-8") as f:
+        with open(full_path, encoding="utf-8") as f:
             ast.parse(f.read(), filename=full_path)
         print(f"analyze syntax-check: PASS ({_rel(full_path)} is syntactically valid Python)")
     except SyntaxError as e:
@@ -143,7 +143,7 @@ def validate_docs():
     if not os.path.exists(agents_path):
         errors.append("Missing AGENTS.md in project root")
     else:
-        with open(agents_path, "r", encoding="utf-8") as f:
+        with open(agents_path, encoding="utf-8") as f:
             content = f.read()
 
         arch_map_match = re.search(r"## Architecture map.*?(?=\n## |\Z)", content, re.DOTALL)
