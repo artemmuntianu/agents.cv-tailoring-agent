@@ -5,12 +5,17 @@ Two interchangeable backends implement the same tiny contract:
 * ``directory`` - JSON messages as files under `artifacts/queue/`. Lets the whole
   worker loop run (and be tested) with no broker at all.
 * ``amqp``      - RabbitMQ via pika, matching the architecture doc: durable
-  queue `resumes.generate`, `prefetch_count = 1`, manual ack, a dead-letter
-  exchange for poison messages and TTL retry queues for delayed re-delivery
-  (used when the Gemini quota is exhausted).
+  queues (`resumes.generate` for tailoring, `resumes.cover` for cover letters),
+  `prefetch_count = 1`, manual ack, a dead-letter exchange for poison messages and
+  TTL retry queues for delayed re-delivery (used when the Gemini quota is exhausted).
 
 A handler returns a `HandlerResult` and the backend translates it into broker
 semantics, so the pipeline never touches AMQP details.
+
+**One queue is one `QueueSpec`.** RabbitMQ refuses a re-declare with different arguments
+(406), and the topology of each queue is declared in four places - the chart's definitions
+Secret, the board's `lib/queue.ts` publisher, and the two Python consumers. Adding a queue
+means adding it to all four, with the same names and arguments.
 """
 
 import json
@@ -28,6 +33,35 @@ log = get_logger(__name__)
 
 # Delayed-retry ladder: the smallest rung >= the requested delay is used.
 RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)
+
+
+@dataclass(frozen=True)
+class QueueSpec:
+    """One queue and the topology every declarer has to agree on.
+
+    `directory` is the file-backend sub-directory: the two queues must not share it, or the
+    tailoring consumer would eat cover-letter messages (and vice versa) in a local run.
+    """
+
+    name: str
+    dlx: str
+    dlq: str
+    directory: str | None = None
+
+
+def task_queue_spec() -> QueueSpec:
+    """`resumes.generate` - one message per vacancy to tailor."""
+    return QueueSpec(name=config.QUEUE_NAME, dlx=config.QUEUE_DLX, dlq=config.QUEUE_DLQ)
+
+
+def cover_queue_spec() -> QueueSpec:
+    """`resumes.cover` - one message per cover letter the operator asked for."""
+    return QueueSpec(
+        name=config.COVER_QUEUE_NAME,
+        dlx=config.COVER_QUEUE_DLX,
+        dlq=config.COVER_QUEUE_DLQ,
+        directory=os.path.join(config.QUEUE_DIR, "cover"),
+    )
 
 try:  # pika is optional outside of AMQP mode
     import pika
@@ -430,14 +464,25 @@ class AmqpQueue(BaseQueue):
 _QUEUE_CACHE = {}
 
 
-def get_queue(backend=None, **kwargs):
-    """Return a queue for the configured backend."""
+def get_queue(backend=None, spec=None, **kwargs):
+    """Return the queue for a backend **and** a queue spec (the tailoring queue by default).
+
+    The cache is keyed by both, so asking for two queues in one process cannot hand back the
+    same object - which would silently make the cover worker consume tailoring messages.
+    """
     backend = (backend or config.QUEUE_BACKEND or "directory").strip().lower()
-    if backend not in _QUEUE_CACHE:
-        _QUEUE_CACHE[backend] = (
-            AmqpQueue(**kwargs) if backend == "amqp" else DirectoryQueue(**kwargs)
-        )
-    return _QUEUE_CACHE[backend]
+    spec = spec or task_queue_spec()
+    key = (backend, spec.name)
+    if key not in _QUEUE_CACHE:
+        if backend == "amqp":
+            _QUEUE_CACHE[key] = AmqpQueue(
+                queue_name=spec.name, dlx=spec.dlx, dlq=spec.dlq, **kwargs
+            )
+        else:
+            _QUEUE_CACHE[key] = DirectoryQueue(
+                base_dir=spec.directory or config.QUEUE_DIR, **kwargs
+            )
+    return _QUEUE_CACHE[key]
 
 
 def reset_queue_cache():

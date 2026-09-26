@@ -29,8 +29,9 @@ def store():
     with db.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_history, resume_board, resumes, "
-                "board_actions, artifact_purge, model_availability, app_settings"
+                "drop table if exists resume_cover_letter, resume_history, "
+                "resume_board, resumes, board_actions, artifact_purge, "
+                "model_availability, app_settings"
             )
         conn.commit()
     db._schema_ready = False
@@ -39,8 +40,9 @@ def store():
     with db.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_history, resume_board, resumes, "
-                "board_actions, artifact_purge, model_availability, app_settings"
+                "drop table if exists resume_cover_letter, resume_history, "
+                "resume_board, resumes, board_actions, artifact_purge, "
+                "model_availability, app_settings"
             )
         conn.commit()
 
@@ -629,8 +631,9 @@ def test_a_legacy_database_is_migrated_to_the_source_and_scraped_vocabulary(stor
     with store.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_history, resume_board, resumes, "
-                "board_actions, artifact_purge, model_availability, app_settings"
+                "drop table if exists resume_cover_letter, resume_history, "
+                "resume_board, resumes, board_actions, artifact_purge, "
+                "model_availability, app_settings"
             )
             cur.execute(
                 """
@@ -713,3 +716,35 @@ def test_a_legacy_database_is_migrated_to_the_source_and_scraped_vocabulary(stor
                     " values ('dup-1', 'u-1', '848944', 'djinni', 'queued')"
                 )
 
+
+
+def test_cover_letters_are_one_row_per_vacancy(store):
+    """The cover worker's table: one row per vacancy, refreshed in place, gone with the card.
+
+    `text`/`model` survive a later failed attempt (a retry must not wipe a letter that is
+    already there) and `attempts` only grows - both are what the worker relies on.
+    """
+    job_id = "cover-row-1"
+    store.upsert_job(_row(job_id))
+
+    first = store.upsert_cover_letter(job_id, "queued", attempts=1)
+    assert first["status"] == "queued"
+    assert first["text"] is None
+
+    store.upsert_cover_letter(
+        job_id, "completed", text="Hello,\n\nletter", model="gemini-x", attempts=2
+    )
+    failed = store.upsert_cover_letter(job_id, "failed", error="boom", attempts=3)
+    assert failed["status"] == "failed"
+    assert failed["text"] == "Hello,\n\nletter"
+    assert failed["model"] == "gemini-x"
+    assert failed["attempts"] == 3
+
+    assert store.get_cover_letter(job_id)["text"] == "Hello,\n\nletter"
+
+    # Removal takes the letter with it (the row cascades from `resumes`).
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("delete from resumes where job_id = %s", (job_id,))
+        conn.commit()
+    assert store.get_cover_letter(job_id) is None

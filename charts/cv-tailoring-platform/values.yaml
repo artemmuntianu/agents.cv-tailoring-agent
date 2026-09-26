@@ -78,6 +78,15 @@ rabbitmqDefinitions:
         auto_delete: false
         internal: false
         arguments: {}
+      # The cover-letter queue has its own exchange: its DLQ must not collect tailoring
+      # failures (and vice versa), and `cover.py` declares exactly this topology.
+      - name: resumes.cover.dlx
+        vhost: /
+        type: direct
+        durable: true
+        auto_delete: false
+        internal: false
+        arguments: {}
     queues:
       - name: resumes.generate
         vhost: /
@@ -88,6 +97,19 @@ rabbitmqDefinitions:
           x-dead-letter-exchange: resumes.generate.dlx
           x-dead-letter-routing-key: resumes.generate.dlq
       - name: resumes.generate.dlq
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
+      - name: resumes.cover
+        vhost: /
+        durable: true
+        auto_delete: false
+        # MUST stay identical to utils/messaging.py::_declare_topology() for this queue.
+        arguments:
+          x-dead-letter-exchange: resumes.cover.dlx
+          x-dead-letter-routing-key: resumes.cover.dlq
+      - name: resumes.cover.dlq
         vhost: /
         durable: true
         auto_delete: false
@@ -108,6 +130,12 @@ rabbitmqDefinitions:
         destination: resumes.generate.dlq
         destination_type: queue
         routing_key: resumes.generate.dlq
+        arguments: {}
+      - source: resumes.cover.dlx
+        vhost: /
+        destination: resumes.cover.dlq
+        destination_type: queue
+        routing_key: resumes.cover.dlq
         arguments: {}
 
 # --------------------------------------------------------------------------- #

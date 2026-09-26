@@ -10,6 +10,10 @@ One AMQP message == one vacancy == one LangGraph run.
 | Exchange | `resumes.generate.dlx` (direct) | dead-letter target |
 | Queue | `resumes.generate.dlq` | poison messages (invalid payload, attempt limit) |
 | Queue | `resumes.generate.retry.{60,300,900,1800,3600}s` | TTL queues, auto-declared by the worker; `RETRY_LATER` picks the smallest rung ≥ the requested delay |
+| Queue | `resumes.cover` | durable, consumed by `cover.py` with `prefetch_count=1` |
+| Exchange | `resumes.cover.dlx` (direct) | dead-letter target of the cover queue |
+| Queue | `resumes.cover.dlq` | poison cover-letter requests |
+| Queues | `resumes.cover.retry.{60,300,900,1800,3600}s` | the same TTL ladder, declared by `cover.py` |
 | Queues | `vacancies.parse`, `applications.submit` | declared for the gateway/extension side |
 
 Backpressure: the worker declares the topology on connect (`utils/messaging.py`),
@@ -69,6 +73,25 @@ and may be `848944-1789668742`, a UUID, or any token matching
 `cv.docx`. The worker verifies this (`validate_cv_data_against_docx`) and fails
 the task with `invalid_master_cv`-style error rather than mutating the wrong
 paragraph.
+
+## Cover letters (`resumes.cover`)
+
+A second producer and a second queue, because a letter must not wait behind a tailoring
+backlog and must not wake a tailoring pod:
+
+```json
+{ "job_id": "0a58a065-...", "enqueued_at": "2026-09-26T21:10:00.000Z" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `job_id` | **yes** | the vacancy's row id; the letter is written from that row |
+| `attempt` | no | informational; the authoritative counter is `resume_cover_letter.attempts` |
+
+The payload carries **no** description and no CV: `cover.py` reads `resumes.description_raw` and
+the master `cv_data.json` itself (invariant 24), so a stale copy cannot reach the prompt. The
+outcome is one row of `resume_cover_letter` (`queued` -> `running` -> `completed`/`failed`) -
+the broker semantics (ack / retry / TTL retry / DLQ) are the ones in the table below.
 
 ## Acknowledgement semantics
 

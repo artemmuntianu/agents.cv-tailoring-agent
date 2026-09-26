@@ -1,0 +1,42 @@
+{{- if and .Values.keda.enabled .Values.cover.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "cv-tailoring-worker.fullname" . }}-cover
+  labels:
+    {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+    cv-tailoring.io/workload: cover
+spec:
+  scaleTargetRef:
+    name: {{ include "cv-tailoring-worker.fullname" . }}-cover
+  minReplicaCount: 0
+  # A letter is one short Gemini call, so the ceiling is well below the tailoring worker's:
+  # nothing here converts documents, and a burst of letters is rare (the operator clicks).
+  maxReplicaCount: {{ .Values.cover.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  {{- if .Values.keda.fallback.enabled }}
+  fallback:
+    failureThreshold: {{ .Values.keda.fallback.failureThreshold }}
+    replicas: {{ .Values.keda.fallback.replicas }}
+  {{- end }}
+  {{- with .Values.keda.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+  triggers:
+    - type: rabbitmq
+      metadata:
+        # Same reasoning as the worker's ScaledObject: `protocol: http` reads the management
+        # API, whose count includes unacknowledged messages - with `amqp` KEDA would scale the
+        # pod down while it is still writing the letter.
+        protocol: {{ .Values.keda.protocol | quote }}
+        queueName: {{ .Values.cover.queueName | quote }}
+        mode: {{ .Values.keda.mode | quote }}
+        value: {{ .Values.keda.queueLength | quote }}
+        activationValue: {{ .Values.keda.activationQueueLength | quote }}
+      authenticationRef:
+        name: {{ include "cv-tailoring-worker.fullname" . }}-rabbitmq
+{{- end }}

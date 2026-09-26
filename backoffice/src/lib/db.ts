@@ -36,10 +36,16 @@ interface CardRow {
   docx_path: string | null;
   created_at: Date | string;
   updated_at: Date | string;
+  has_description: boolean;
   stage: string;
   archived_at: Date | string | null;
   archived_actor: string | null;
   archived_reason: string | null;
+  cover_status: string | null;
+  cover_text: string | null;
+  cover_error: string | null;
+  cover_model: string | null;
+  cover_updated_at: Date | string | null;
 }
 
 interface HistoryRow {
@@ -100,10 +106,14 @@ const CARD_SELECT = `
   select r.job_id, r.external_id, r.source, r.title, r.company, r.source_url, r.cv_version,
          r.status, r.attempts, r.revision_count, r.duration_ms, r.error,
          r.pdf_url, r.docx_path, r.created_at, r.updated_at,
+         (r.description_raw is not null) as has_description,
          coalesce(b.stage, 'scraped') as stage,
-         b.archived_at, b.archived_actor, b.archived_reason
+         b.archived_at, b.archived_actor, b.archived_reason,
+         c.status as cover_status, c.text as cover_text, c.error as cover_error,
+         c.model as cover_model, c.updated_at as cover_updated_at
     from resumes r
-    left join resume_board b on b.job_id = r.job_id`;
+    left join resume_board b on b.job_id = r.job_id
+    left join resume_cover_letter c on c.job_id = r.job_id`;
 
 async function fetchHistory(jobIds: string[]): Promise<HistoryRow[]> {
   const history = await pool().query<HistoryRow>(
@@ -142,6 +152,17 @@ function toCard(row: CardRow, history: HistoryRow[]): BoardCard {
     // The worker stored these paths; whether *this* board can serve them depends on its
     // artifact root (a mirror, in dev) - so the UI never offers a link that would 404.
     artifactAvailability: artifactAvailability(row.pdf_url, row.docx_path),
+    hasDescription: row.has_description === true,
+    coverLetter:
+      row.cover_status === null
+        ? null
+        : {
+            status: row.cover_status,
+            text: row.cover_text,
+            error: row.cover_error,
+            model: row.cover_model,
+            updatedAt: row.cover_updated_at === null ? null : toIso(row.cover_updated_at),
+          },
     history: history
       .filter((entry) => entry.job_id === row.job_id)
       .map((entry) => ({
@@ -713,3 +734,35 @@ export async function taskMessageRow(jobId: string): Promise<TaskMessageRow | nu
   };
 }
 
+
+/**
+ * Record that the operator asked for a cover letter.
+ *
+ * Returns false when a letter is *being written right now*: two clicks must not queue two
+ * generations, and the `where` on the upsert is what makes that impossible without a lock.
+ * Setting the row to `queued` is also what turns a *regeneration* into a genuine request -
+ * `cover.py` treats only `completed` as a duplicate.
+ */
+export async function markCoverRequested(jobId: string): Promise<boolean> {
+  const result = await pool().query(
+    `insert into resume_cover_letter (job_id, status) values ($1, 'queued')
+     on conflict (job_id) do update
+        set status = 'queued', error = null, updated_at = now()
+      where resume_cover_letter.status <> 'running'`,
+    [jobId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * The publish failed, so nothing is on its way: the row must not keep claiming `queued`.
+ * `failed` is honest, and the modal's *Try again* resets it.
+ */
+export async function failCoverRequest(jobId: string, error: string): Promise<void> {
+  await pool().query(
+    `insert into resume_cover_letter (job_id, status, error) values ($1, 'failed', $2)
+     on conflict (job_id) do update
+        set status = 'failed', error = excluded.error, updated_at = now()`,
+    [jobId, error.slice(0, 500)],
+  );
+}

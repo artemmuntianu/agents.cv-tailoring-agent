@@ -8,6 +8,7 @@ data:
   SERVICE_NAME: {{ .Values.config.serviceName | quote }}
   QUEUE_BACKEND: {{ .Values.config.queueBackend | quote }}
   QUEUE_NAME: {{ .Values.config.queueName | quote }}
+  COVER_QUEUE_NAME: {{ .Values.cover.queueName | quote }}
   PREFETCH_COUNT: {{ .Values.config.prefetchCount | quote }}
   MAX_ATTEMPTS: {{ .Values.config.maxAttempts | quote }}
   QUEUE_RETRY_TTL_MS: {{ .Values.config.queueRetryTtlMs | quote }}

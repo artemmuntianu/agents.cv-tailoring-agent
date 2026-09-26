@@ -172,6 +172,21 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   touches the broker at all: `created` counts cards, and `jobIds` are the rows it made.
 - `QUEUE_NAME`/`CV_VERSION` must match the worker's configmap.
 
+## Cover letters (`POST /api/cover/<job_id>`)
+
+- One card, one letter, **any** card: no stage requirement, archived cards included - a letter
+  is application material, not a funnel step. 400 for a malformed id, 404 for an unknown card,
+  409 when the vacancy has no stored job description (a card scraped before 2026-09-26 cannot
+  produce a letter; the worker would dead-letter it) or when a letter is *being written right
+  now*.
+- Order: claim the row (`resume_cover_letter.status = 'queued'`, refused while it says
+  `running`), publish to `resumes.cover`, and mark the row `failed` with the broker's error if
+  the publish throws - the modal then shows why instead of a card that waits forever.
+- The result comes back through the **card payload** (`coverLetter`, a `LEFT JOIN` in
+  `CARD_SELECT`) and the existing 5s poll: no push channel, no second request. `lib/cover.ts`
+  decides what the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and it is
+  unit tested, so the component stays a rendering layer.
+
 ## Status lookup (the extension's per-card buttons)
 
 - `GET /api/vacancies/status?external_ids=850374,850359` answers "is this already on the

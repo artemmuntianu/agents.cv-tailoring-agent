@@ -12,7 +12,8 @@ Read `CONSTITUTION.md` first; this file is the layer-specific detail.
 | `state.py` | `State` (flat `TypedDict`) + `initial_state()`, which fills every key |
 | `contracts.py` | `ResumeTaskMessage`, `CvData`/`CvHeader`/`CvExperience`, `JobStatus`, `TaskResult` |
 | `models.py` | Pydantic schemas used as Gemini `response_schema` (`JobRoleExtraction`, `TextModificationList`, `LayoutCheckResult`) |
-| `nodes.py` | The four nodes + the three `_call_gemini_*` functions + the prompt |
+| `nodes.py` | The four nodes + the three `_call_gemini_*` functions + the tailoring prompt |
+| `cover.py` | The cover-letter prompt, its `response_schema` and `run_cover_letter()` - the one Gemini call the board triggers by hand |
 | `graph.py` | Graph topology, `check_after_adapt`, `should_continue`, `create_graph()` |
 | `pipeline.py` | `run_cv_tailoring()` / `run_task()` - the only entry into the graph |
 | `__init__.py` | Package marker |
@@ -91,7 +92,8 @@ The adaptation prompt is part of the product, not a comment. Keep all of these:
 
 ## Don't
 
-- Call Gemini anywhere except `nodes.py`, and only through the decorated helpers.
+- Call Gemini anywhere except `nodes.py` and `cover.py`, and only through the decorated
+  helpers.
 - Bypass `pipeline.run_cv_tailoring()` / `run_task()` from a new entry point.
 - Cache the CV model in a module-level global (this caused a cross-task staleness
   bug; `cv_data` is always an explicit argument).

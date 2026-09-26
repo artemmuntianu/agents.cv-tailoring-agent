@@ -45,6 +45,21 @@ export interface HistoryEntry {
 }
 
 /**
+ * The cover letter of one card (`resume_cover_letter`) - written on demand by `cover.py`,
+ * which owns the row; the board writes `queued` when it publishes the request and reads the
+ * result through the card payload.
+ */
+export interface CoverLetterState {
+  /** `queued` (requested) | `running` | `completed` | `failed`. */
+  status: string;
+  text: string | null;
+  error: string | null;
+  /** Which model wrote it, when one did. */
+  model: string | null;
+  updatedAt: string | null;
+}
+
+/**
  * One card = one row of the worker's `resumes` table joined with the board's
  * `resume_board` (stage + the archive columns) and its `resume_history` rows.
  * The board never copies the vacancy: it reads the worker's row and only owns the
@@ -89,6 +104,14 @@ export interface BoardCard {
    * only means the worker stored one, and a dev board resolves them against its mirror.
    */
   artifactAvailability: { pdf: boolean; docx: boolean };
+  /** `null` = nobody asked for a letter yet. */
+  coverLetter: CoverLetterState | null;
+  /**
+   * Whether the vacancy's job description is stored (`resumes.description_raw`). A card
+   * scraped before 2026-09-26 has none, and neither a tailored CV nor a cover letter can be
+   * built from nothing - so the UI says so instead of offering a button that must fail.
+   */
+  hasDescription: boolean;
   /** Newest last; rendered newest first in the card modal. */
   history: HistoryEntry[];
 }

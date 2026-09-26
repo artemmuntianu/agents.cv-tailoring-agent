@@ -125,6 +125,17 @@ readinessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
 
+# The cover-letter worker: the same image and configuration, a different entry point
+# (`cover.py`) and a different queue. Separate on purpose - a letter neither waits behind a
+# tailoring backlog nor wakes a tailoring pod, because each queue has its own ScaledObject.
+cover:
+  enabled: true
+  # One letter is one short Gemini call: nothing converts documents here.
+  maxReplicaCount: 3
+  queueName: resumes.cover
+  # Empty = inherit the worker's `resources` above.
+  resources: {}
+
 keda:
   enabled: true
   minReplicaCount: 0

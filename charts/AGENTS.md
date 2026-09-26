@@ -15,9 +15,9 @@ Read `CONSTITUTION.md` first (sections 2, 3 and 5).
 | `cv-tailoring-platform/templates/rabbitmq.yaml` | RabbitMQ StatefulSet (`rabbitmq-0`) + Service: durable queue, the `-management` image (the KEDA scaler reads it over HTTP), `rabbitmq-diagnostics -q ping` probes plus a TCP `startupProbe` |
 | `cv-tailoring-platform/templates/local-postgres.yaml` | `localPostgres.enabled` -> single-replica Postgres + `local-postgres` Secret + `postgres-data` PVC. The worker creates its own tables (no init scripts) |
 | `cv-tailoring-platform/templates/storage.yaml` | `cv-artifacts` PVC (`helm.sh/resource-policy: keep`) and the always-on `cv-files` pod that keeps `kubectl cp` working while the worker is at zero |
-| `cv-tailoring-platform/templates/definitions.yaml` | The queue topology (`resumes.generate`, its `.dlq`, `vacancies.parse`, `applications.submit`, the DLX policy/binding) as a definitions Secret - reviewable in git, loaded by `rabbitmq.yaml` |
+| `cv-tailoring-platform/templates/definitions.yaml` | The queue topology (`resumes.generate` and `resumes.cover`, each with its own DLX/DLQ/binding, plus `vacancies.parse` and `applications.submit`) as a definitions Secret - reviewable in git, loaded by `rabbitmq.yaml` |
 | `cv-tailoring-platform/templates/rabbitmq-credentials.yaml` | The one Secret holding username/password/url, shared by the broker, the worker and KEDA |
-| `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe |
+| `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe - and the second workload (`cover-deployment.yaml` + `cover-scaledobject.yaml`, `python cover.py` on `resumes.cover`), which shares the image, the ConfigMap and the Secret |
 | `cv-tailoring-worker/values.schema.json` | Type/enum guard for the values Helm must accept before anything renders |
 | `deploy/values/dev.yaml` | Local-cluster overrides: `localPostgres` on, dev broker password, `existingSecret: cv-tailoring-secrets`, `/data` mount, 0..3 replicas |
 | root `Dockerfile` | The image (LibreOffice + poppler + Carlito/Caladea fonts, non-root uid 10001). There is no compose/no-cluster path: the only runtime is the local cluster |

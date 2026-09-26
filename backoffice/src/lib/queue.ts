@@ -24,6 +24,32 @@ export function deadLetterQueue(): string {
   return process.env.QUEUE_DLQ?.trim() || `${queueName()}.dlq`;
 }
 
+/**
+ * `resumes.cover` - the on-demand cover-letter queue (`config.py` is the reference for the
+ * names). It is a *separate* queue on purpose: a letter neither waits behind a tailoring
+ * backlog nor wakes the tailoring workers, because each queue has its own ScaledObject on the
+ * cluster side.
+ */
+export function coverQueueName(): string {
+  return process.env.COVER_QUEUE_NAME?.trim() || 'resumes.cover';
+}
+
+export function coverDeadLetterExchange(): string {
+  return process.env.COVER_QUEUE_DLX?.trim() || `${coverQueueName()}.dlx`;
+}
+
+export function coverDeadLetterQueue(): string {
+  return process.env.COVER_QUEUE_DLQ?.trim() || `${coverQueueName()}.dlq`;
+}
+
+/** Every queue this client publishes to, declared on connect. */
+export function queueTopology(): { queue: string; dlx: string; dlq: string }[] {
+  return [
+    { queue: queueName(), dlx: deadLetterExchange(), dlq: deadLetterQueue() },
+    { queue: coverQueueName(), dlx: coverDeadLetterExchange(), dlq: coverDeadLetterQueue() },
+  ];
+}
+
 export function cvVersion(): string {
   return process.env.CV_VERSION?.trim() || 'v1';
 }
@@ -70,10 +96,16 @@ interface QueueClient {
 // One client per process, surviving Astro/Vite dev reloads.
 const globals = globalThis as unknown as { __cvTailoringQueue?: Promise<QueueClient> };
 
-async function declareTopology(channel: ConfirmChannel): Promise<void> {
-  const queue = queueName();
-  const dlx = deadLetterExchange();
-  const dlq = deadLetterQueue();
+/**
+ * Declare one queue's topology. The names are passed in, so the same code serves the
+ * tailoring queue and the cover-letter one - and it has to match every other declarer
+ * (the chart's definitions Secret, `utils/messaging.py`), or RabbitMQ answers 406.
+ */
+async function declareTopology(
+  channel: ConfirmChannel,
+  names: { queue: string; dlx: string; dlq: string },
+): Promise<void> {
+  const { queue, dlx, dlq } = names;
 
   await channel.assertExchange(dlx, 'direct', { durable: true });
   await channel.assertQueue(dlq, { durable: true });
@@ -116,7 +148,7 @@ async function client(): Promise<QueueClient> {
       globals.__cvTailoringQueue = undefined;
     });
     const channel = await connection.createConfirmChannel();
-    await declareTopology(channel);
+    for (const names of queueTopology()) await declareTopology(channel, names);
     return { connection, channel };
   })();
 
@@ -131,8 +163,23 @@ async function client(): Promise<QueueClient> {
 
 /** Publish one message per task, then wait for the broker's confirms. */
 export async function publishResumeTasks(messages: Record<string, unknown>[]): Promise<number> {
+  return publish(queueName(), messages);
+}
+
+/**
+ * Publish cover-letter requests (the modal's *Generate* button).
+ *
+ * Same confirm semantics as a tailoring message: the route must not tell the operator a letter
+ * is on its way before the broker acknowledged the publish.
+ */
+export async function publishCoverRequests(
+  messages: Record<string, unknown>[],
+): Promise<number> {
+  return publish(coverQueueName(), messages);
+}
+
+async function publish(queue: string, messages: Record<string, unknown>[]): Promise<number> {
   const { channel } = await client();
-  const queue = queueName();
   for (const message of messages) {
     channel.publish('', queue, Buffer.from(JSON.stringify(message), 'utf8'), {
       contentType: 'application/json',

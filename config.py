@@ -184,6 +184,12 @@ QUEUE_NAME = os.getenv("QUEUE_NAME", "resumes.generate")
 QUEUE_DLX = os.getenv("QUEUE_DLX", f"{QUEUE_NAME}.dlx")
 QUEUE_DLQ = os.getenv("QUEUE_DLQ", f"{QUEUE_NAME}.dlq")
 QUEUE_RETRY_TTL_MS = _env_int("QUEUE_RETRY_TTL_MS", 300000)
+# A second, independent queue. A cover letter is generated on demand for one card, so it must
+# neither wait behind a tailoring backlog nor wake the tailoring workers: each queue has its
+# own ScaledObject, and the four places that declare the topology share these names.
+COVER_QUEUE_NAME = os.getenv("COVER_QUEUE_NAME", "resumes.cover")
+COVER_QUEUE_DLX = os.getenv("COVER_QUEUE_DLX", f"{COVER_QUEUE_NAME}.dlx")
+COVER_QUEUE_DLQ = os.getenv("COVER_QUEUE_DLQ", f"{COVER_QUEUE_NAME}.dlq")
 PREFETCH_COUNT = _env_int("PREFETCH_COUNT", 1)
 CONSUMER_POLL_INTERVAL = _env_float("CONSUMER_POLL_INTERVAL", 2.0)
 # AMQP heartbeat (seconds), 0 disables it. It MUST exceed the longest task: the

@@ -129,6 +129,27 @@ class ResumeTaskMessage(BaseModel):
         return cls.model_validate(payload)
 
 
+class CoverLetterMessage(BaseModel):
+    """One cover-letter request, published when the operator asks for one.
+
+    Deliberately tiny: the vacancy's description lives in the database
+    (`resumes.description_raw`) and the master CV on the volume, so the payload carries no
+    copy of either - a stale copy could otherwise reach the prompt and let the letter claim
+    something the CV does not say.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str = Field(
+        min_length=4,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+        description="Row id of the vacancy the letter is for (`resumes.job_id`).",
+    )
+    attempt: int = 0
+    enqueued_at: str | None = None
+
+
 class TaskResult(BaseModel):
     """Outcome of one task, as persisted and pushed to the dashboard."""
 

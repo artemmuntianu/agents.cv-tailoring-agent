@@ -15,6 +15,7 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `conftest.py` | Puts the repo root on `sys.path` so pytest runs from any cwd |
 | `helpers.py` | Fixture-free harness: `isolated_config`, `fake_gemini`, `reset_caches`, sample CV/JD builders |
 | `test_contracts.py` | `ResumeTaskMessage` defaults, the `job_id` shape guard, `key()`, `to_job_row()`, `new_job_id()` |
+| `test_cover_letter.py` | The letter prompt (only what the CV states), the digest, and `cover.handle_delivery`: written / duplicate / quota-deferred / dead-lettered, plus the two queues never sharing storage |
 | `test_db_claim.py` | Claim outcomes `claimed` / `duplicate` / `owned` and the re-claim of a failed row (local backend) |
 | `test_docx_mutator.py` | The document surgery that must never regress: normalisation, bullet/no-op dropping, sync validation, master left untouched |
 | `test_messaging.py` | Directory-queue semantics: ack -> `processed`, retry (attempt bump), dead-letter -> `failed`, a crashing handler requeues |

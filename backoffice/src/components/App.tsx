@@ -158,6 +158,14 @@ export default function App({ session }: AppProps) {
     return payload;
   }
 
+  /**
+   * Ask for a cover letter. The only action that does not move a card, so it goes straight
+   * through `mutate` - the board's 5s poll then shows the letter as soon as it lands.
+   */
+  async function generateCover(jobId: string) {
+    await mutate(`/api/cover/${encodeURIComponent(jobId)}`, {});
+  }
+
   async function confirmMove(actor: Actor, action: string) {
     if (!pending) return;
     const request: MoveRequest = { jobId: pending.card.jobId, to: pending.to, actor, action };
@@ -366,6 +374,7 @@ export default function App({ session }: AppProps) {
             setOpenId(null);
             setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
           }}
+          onGenerateCover={generateCover}
         />
       )}
 

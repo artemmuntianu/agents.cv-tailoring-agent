@@ -34,6 +34,15 @@
         "renderDpi": { "type": "integer", "minimum": 30, "maximum": 300 }
       }
     },
+    "cover": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxReplicaCount": { "type": "integer", "minimum": 0 },
+        "queueName": { "type": "string", "minLength": 1 },
+        "resources": { "type": "object" }
+      }
+    },
     "resources": {
       "type": "object",
       "properties": {

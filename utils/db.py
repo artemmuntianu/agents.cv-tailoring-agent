@@ -85,7 +85,7 @@ class LocalDb:
                     return json.load(handle)
             except Exception as exc:  # noqa: BLE001
                 log.warning("could not read local db", path=self.path, error=str(exc))
-        return {"jobs": {}, "completed": {}}
+        return {"jobs": {}, "completed": {}, "cover_letters": {}}
 
     def _save(self, data):
         directory = os.path.dirname(self.path)
@@ -178,6 +178,34 @@ class LocalDb:
             data["completed"][key] = job_id
         self._save(data)
         return {"job_id": job_id, "outcome": "claimed", "row": record}
+
+    def upsert_cover_letter(
+        self, job_id, status, text=None, model=None, error=None, attempts=0
+    ):
+        """Create/refresh the single cover-letter row of one vacancy (see PostgresDb)."""
+        data = self._load()
+        letters = data.setdefault("cover_letters", {})
+        record = letters.get(job_id) or {
+            "job_id": job_id,
+            "text": None,
+            "model": None,
+            "attempts": 0,
+            "created_at": now_iso(),
+        }
+        record["status"] = status
+        record["error"] = error
+        if text:
+            record["text"] = text
+        if model:
+            record["model"] = model
+        record["attempts"] = max(int(record.get("attempts") or 0), int(attempts or 0))
+        record["updated_at"] = now_iso()
+        letters[job_id] = record
+        self._save(data)
+        return record
+
+    def get_cover_letter(self, job_id):
+        return self._load().get("cover_letters", {}).get(job_id)
 
     def update_job(self, job_id, **fields):
         data = self._load()
@@ -358,6 +386,21 @@ create table if not exists resume_history (
 );
 
 create index if not exists resume_history_job_id_at_idx on resume_history (job_id, at);
+
+-- Cover letters, generated on demand (one row per vacancy). Owned by the cover worker
+-- (`cover.py`), requested by the board, read by both. `text` is the letter as plain text and
+-- `model` records which model actually wrote it, because the ladder may have moved since the
+-- request; a removed vacancy takes its letter with it (cascade).
+create table if not exists resume_cover_letter (
+    job_id     text primary key references resumes (job_id) on delete cascade,
+    status     text not null default 'queued',
+    text       text,
+    model      text,
+    error      text,
+    attempts   integer not null default 0,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
 
 -- The Action vocabulary the dialogs offer as a combobox and the Filters dialog
 -- lists. It is *data*, not a code enum: typing a new action in a dialog persists it
@@ -728,6 +771,56 @@ class PostgresDb:
             payload,
         )
         return cur.fetchone()
+
+    def upsert_cover_letter(
+        self, job_id, status, text=None, model=None, error=None, attempts=0
+    ):
+        """Create/refresh the single cover-letter row of one vacancy.
+
+        `text`/`model` are only overwritten when the caller has them, so a failed retry cannot
+        wipe a letter that is already there; `attempts` only ever grows.
+        """
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into resume_cover_letter
+                        (job_id, status, text, model, error, attempts)
+                    values (%(job_id)s, %(status)s, %(text)s, %(model)s, %(error)s,
+                            %(attempts)s)
+                    on conflict (job_id) do update
+                        set status = excluded.status,
+                            text = coalesce(excluded.text, resume_cover_letter.text),
+                            model = coalesce(excluded.model, resume_cover_letter.model),
+                            error = excluded.error,
+                            attempts = greatest(resume_cover_letter.attempts,
+                                                excluded.attempts),
+                            updated_at = now()
+                    returning *
+                    """,
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "text": text,
+                        "model": model,
+                        "error": error,
+                        "attempts": int(attempts or 0),
+                    },
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    def get_cover_letter(self, job_id):
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select * from resume_cover_letter where job_id = %s", (job_id,)
+                )
+                row = cur.fetchone()
+        return dict(row) if row else None
 
     def update_job(self, job_id, **fields):
         if not fields:

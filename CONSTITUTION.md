@@ -40,6 +40,13 @@ Chrome extension / scout --> backoffice board (one card per vacancy, column "Scr
                      adapt_text -> render -> vision_check -> persist
                                      |
                   cv-artifacts volume (PDF/DOCX) + Postgres (status)
+
+the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
+                                     |  KEDA: queue depth -> replicas (0 -> N -> 0)
+                                     v
+                     ai-agent-worker-cover pod (one Gemini call per letter)
+                                     |
+                  resume_cover_letter (text) + the master cv_data.json
 ```
 
 ## 2. One way to run the pipeline
@@ -212,6 +219,20 @@ automation         .github/workflows/
     is null (scraped before 2026-09-26) is refused with 409 and stays where it is rather than
     poisoning the DLQ, and a parked card already in Prepare is *retried* by the same request
     without a stage change.
+
+24. **Cover letters are on demand, on their own queue.** A letter is application material,
+    not a stage of the funnel: the board offers *Generate* on **any** card, whatever its column
+    and whether it is archived (`POST /api/cover/<job_id>`). It goes to `resumes.cover`, which
+    has its own worker (`cover.py`), its own DLX/DLQ and its own ScaledObject, so asking for a
+    letter can never wake a tailoring pod - and the four declarers of that topology (the chart's
+    definitions, `utils/messaging.py`, `backoffice/src/lib/queue.ts`) have to agree as exactly
+    as they do for `resumes.generate`. The prompt is built from **the database's own copy** of
+    the job description (`resumes.description_raw`) and the master `cv_data.json`, never from a
+    copy in the message, and it forbids inventing anything the CV does not say - so the feature
+    is useless on a card scraped before 2026-09-26, and the API refuses such a request with 409
+    (the worker would dead-letter it). The result is one row in `resume_cover_letter`, which the
+    board reads through the card payload; `queued` means "asked for", which is what makes a
+    regeneration a genuine request and a redelivery a duplicate.
 
 ## 5. Known discrepancies, dead code and legacy paths
 
