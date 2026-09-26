@@ -50,13 +50,15 @@ can show progress and hand over the files.
 ## Architecture
 
 ```
-publisher / Chrome extension --> RabbitMQ (rabbitmq-0, resumes.generate)
-                                    |  KEDA: queue depth -> replicas (0 -> M -> 0)
-                                    v
-                    ai-agent-worker pod (prefetch = 1, one vacancy per message)
-                    adapt_text -> render -> vision_check -> persist
-                                    |
-                cv-artifacts volume (PDF/DOCX) + Postgres (status)
+extension (Chrome MV3) --batch--> backoffice gateway --+--> RabbitMQ (rabbitmq-0, resumes.generate)
+publisher.py / send-test-job.ps1 ----------------------+        |  KEDA: queue depth -> replicas (0 -> M -> 0)
+                                                              v
+                                              ai-agent-worker pod (prefetch = 1, one vacancy per message)
+                                              adapt_text -> render -> vision_check -> persist
+                                                              |
+                                          cv-artifacts volume (PDF/DOCX) + Postgres (status)
+                                                              |
+                                          backoffice board (same Postgres, live poll)
 ```
 
 The graph inside the pod, with its two branch points:
@@ -87,12 +89,12 @@ until the layout is approved or `MAX_REVISIONS` is reached.
 
 ## Key engineering decisions
 
-### One pipeline, three ways to run it
+### One pipeline, one runtime
 
-`agent/pipeline.py` is the single implementation of the flow and every entry
-point delegates to it. The queue, database and model-state backends are selected
-purely by environment variables, so the batch CLI, the docker-compose stack and
-the cluster run identical logic instead of three drifting copies of it.
+`agent/pipeline.py` is the single implementation of the flow. The supported runtime
+is the local Kubernetes cluster that `.\scripts\local-deploy.ps1` installs; the
+queue/database backends stay environment-selectable for the hermetic tests, but this
+repo ships no second run mode, so there is no parallel implementation to drift.
 
 ### Confirm the message only after the result is saved
 
@@ -138,7 +140,8 @@ configuration is read once in `config.py`, and Gemini-specific code is confined 
 
 The suite replaces all three Gemini calls and both render tools with fakes, so it
 runs offline in CI. The production-store tests additionally run against a real
-Postgres (a service container in CI, `docker compose` locally).
+Postgres (a service container in CI, or the cluster's own database through
+`kubectl port-forward svc/postgres 5432` - see `make test-postgres`).
 
 ### No secrets in the chart
 
@@ -166,32 +169,52 @@ Then put your CV on the cluster volume and send a vacancy:
 ```powershell
 .\scripts\storage-files.ps1 -Action seed        # push cv.docx + cv_data.json (+ any jd_*.txt)
 
-kubectl port-forward svc/rabbitmq 5672:5672      # in a second terminal
-$env:RABBITMQ_URL = (kubectl get secret rabbitmq-credentials -o jsonpath={.data.rabbitmq-url} | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
-python publisher.py --jd your_job.txt
+.\scripts\send-test-job.ps1 -Smoke              # one vacancy; opens its own port-forward
 
 kubectl get pods -w                              # 0 -> 1 -> 0
 .\scripts\storage-files.ps1 -Action download    # tailored PDFs into artifacts\output
 ```
 
+`send-test-job.ps1` exists because the manual version is wrong twice over:
+`publisher.py` does not switch the queue backend on its own (the bare default is the
+file-based `directory` backend the tests use) and the `rabbitmq-url` in the broker
+Secret names the in-cluster DNS, which your machine cannot resolve. The script sets
+`QUEUE_BACKEND=amqp`, rebuilds the URL against `localhost:<port>` through a
+port-forward, and checks the release and the master CV on the volume before spending
+any Gemini quota.
+
 Teardown: `.\scripts\local-deploy.ps1 -Uninstall` (add
 `kubectl delete pvc cv-artifacts` to drop the data as well).
 
-## Run without a cluster
+## Backoffice (POC): the vacancy board and the batch gateway
 
-The same pipeline also runs locally, with no Kubernetes at all:
+A kanban UI for the pipeline - the cards *are* the worker's `resumes` rows, moved by
+hand between **Created** (its sub-state follows the worker's status), **Applied**,
+**Negotiating**, **Interviewing** and **Offer**. Every move asks for an actor
+(Me/Them) and a reason, and both are written to `resume_history` in the same Postgres
+the worker uses (`backoffice/AGENTS.md` documents the contract). The board re-reads the
+database every few seconds (the `● Live` toggle), so worker progress shows up on its
+own.
 
-```bash
-pip install -r requirements-dev.txt
+It is also the gateway the scraper posts to: `extension/` collects every vacancy card
+on a listing page and `POST /api/vacancies/batch` turns the batch into one
+`resumes.generate` message per vacancy, after validating the whole batch.
 
-# 1. batch CLI over artifacts/input/jd_*.txt
-python main.py
+There is **no signup**: an administrator creates accounts out of band.
 
-# 2. docker compose (RabbitMQ + Postgres containers)
-docker compose up -d rabbitmq postgres
-docker compose run --rm worker python publisher.py --all
-docker compose up worker
+```powershell
+kubectl port-forward svc/postgres 5432:5432      # keep both running
+kubectl port-forward svc/rabbitmq 5672:5672
+cd backoffice
+npm install
+Copy-Item .env.example .env                      # DATABASE_URL, BACKOFFICE_JWT_SECRET, RABBITMQ_URL
+npm run user -- add --email me@example.com --password=secret --name Me --admin
+npm run dev                                      # http://localhost:4321 -> sign in
 ```
+
+Then load `extension/` unpacked (`chrome://extensions` -> Developer mode -> Load
+unpacked), sign in there with the same account and press *Scrape & queue this page*.
+`extension/README.md` has the step-by-step.
 
 ## Your files
 
@@ -263,14 +286,13 @@ make test-postgres
 agent/          contract, state, LangGraph nodes/graph, shared pipeline runner
 utils/          queue, storage, db, model-state, retry, docx mutator, renderer, logging
 worker.py       queue consumer (the pod entry point)
-main.py         batch CLI over local files
-publisher.py    dev stand-in for the API gateway
+publisher.py    dev stand-in for the API gateway (host-side publish)
 healthcheck.py  exec probes (liveness / readiness / render / amqp)
 charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker
 deploy/values/  environment values (dev.yaml = local cluster)
-scripts/        local-deploy.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
+scripts/        local-deploy.ps1, send-test-job.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
 tests/          hermetic suite (+ Postgres-gated production-store tests)
-docs/           architecture, contract, runbook, Postgres schema + the layer map
+docs/           architecture, contract, runbook + the layer map
 ```
 
 ## Deployment
@@ -301,12 +323,6 @@ manifests checked with kubeconform).
 | `docs/ARCHITECTURE.md` | how the code maps onto the design documents |
 | `docs/MESSAGE_CONTRACT.md` | payload, ack/retry/dead-letter semantics, idempotency |
 | `docs/RUNBOOK.md` | operations (queue backlog, dead letters, quota, rollback) |
-| `docs/postgres_schema.sql` | the human-facing DDL |
 | `<layer>/AGENTS.md` | the mechanical detail for one directory |
 
 ## Optional: managed clusters
-
-The charts are not tied to a local cluster - point them at a managed Kubernetes
-cluster, give the worker a registry-hosted image and a `nodeSelector` for your
-node pools, and the same deployment works there (`docs/RUNBOOK.md` documents the
-scaling and cost knobs). Nothing in the worker code assumes either topology.

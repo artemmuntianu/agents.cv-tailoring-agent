@@ -1,0 +1,9 @@
+# Astro / Node build artifacts
+node_modules/
+dist/
+.astro/
+
+# Local configuration and secrets (the real database URL and session key live here).
+.env
+.env.*
+!.env.example

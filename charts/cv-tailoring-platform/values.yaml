@@ -54,19 +54,22 @@ rabbitmqDefinitions:
   secretName: rabbitmq-definitions
   definitions:
     rabbit_version: "3.13.0"
+    # vhosts/users/permissions are filled in by templates/definitions.yaml from
+    # `rabbitmqCredentials` (the broker refuses to seed them when load_definitions
+    # is set). Set them explicitly here only when the credentials come from an
+    # externally managed Secret.
     users: []
     vhosts: []
     permissions: []
     parameters: []
     global_parameters: []
-    policies:
-      - vhost: /
-        name: dlx-policy
-        pattern: "^resumes\\.generate$"
-        apply-to: queues
-        definition:
-          dead-letter-exchange: resumes.generate.dlx
-        priority: 0
+    # Kept empty on purpose: the dead-letter target is a QUEUE ARGUMENT (see the
+    # `resumes.generate` arguments below), because that is how
+    # `utils/messaging.py::_declare_topology()` declares it. A policy that also sets
+    # it is a second source of truth, and a pre-declared queue whose arguments differ
+    # from the worker's declaration is rejected by the broker with
+    # 406 PRECONDITION_FAILED - inequivalent arg 'x-dead-letter-exchange'.
+    policies: []
     exchanges:
       - name: resumes.generate.dlx
         vhost: /
@@ -80,7 +83,10 @@ rabbitmqDefinitions:
         vhost: /
         durable: true
         auto_delete: false
-        arguments: {}
+        # MUST stay identical to utils/messaging.py::_declare_topology().
+        arguments:
+          x-dead-letter-exchange: resumes.generate.dlx
+          x-dead-letter-routing-key: resumes.generate.dlq
       - name: resumes.generate.dlq
         vhost: /
         durable: true
@@ -162,6 +168,12 @@ fileManager:
   enabled: true
   name: cv-files
   image: busybox:1.36
+  # uid:gid that owns /data/input and /data/output. It MUST match the worker's
+  # security context (cv-tailoring-worker.podSecurityContext runAsUser/runAsGroup):
+  # the worker is deliberately unprivileged, so root-owned directories make its
+  # first task die with
+  # "[Errno 13] Permission denied: '/data/output/<name>.pdf'".
+  owner: "10001:10001"
 
 # --------------------------------------------------------------------------- #
 # AI worker (pod group ②): Deployment + ScaledObject.
@@ -184,9 +196,9 @@ cv-tailoring-worker:
     queueName: resumes.generate
   keda:
     enabled: true
-    host: http://rabbitmq.default.svc.cluster.local:15672
     auth:
       secretName: rabbitmq-credentials
+      urlKey: rabbitmq-management-url
       usernameKey: rabbitmq-username
       passwordKey: rabbitmq-password
     minReplicaCount: 0

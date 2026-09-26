@@ -261,7 +261,10 @@ class AmqpQueue(BaseQueue):
 
     def connect(self):
         parameters = pika.URLParameters(self.url)
-        parameters.heartbeat = 60
+        # See config.AMQP_HEARTBEAT_SECONDS: a long task blocks this connection's
+        # I/O loop, so a 60s heartbeat makes the broker drop it mid-task and requeue
+        # the message.
+        parameters.heartbeat = config.AMQP_HEARTBEAT_SECONDS
         parameters.blocked_connection_timeout = 300
         parameters.connection_attempts = 3
         parameters.retry_delay = 5

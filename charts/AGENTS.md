@@ -12,7 +12,7 @@ Read `CONSTITUTION.md` first (sections 2, 3 and 5).
 | Path | Owns |
 |---|---|
 | `cv-tailoring-platform/` | Umbrella: the broker, its Secrets, the local-dev Postgres, the artifact volume and both dependencies |
-| `cv-tailoring-platform/templates/rabbitmq.yaml` | RabbitMQ StatefulSet (`rabbitmq-0`) + Service: durable queue, the `-management` image so KEDA's HTTP scaler works, `rabbitmq-diagnostics -q ping` probes |
+| `cv-tailoring-platform/templates/rabbitmq.yaml` | RabbitMQ StatefulSet (`rabbitmq-0`) + Service: durable queue, the `-management` image (the KEDA scaler reads it over HTTP), `rabbitmq-diagnostics -q ping` probes plus a TCP `startupProbe` |
 | `cv-tailoring-platform/templates/local-postgres.yaml` | `localPostgres.enabled` -> single-replica Postgres + `local-postgres` Secret + `postgres-data` PVC. The worker creates its own tables (no init scripts) |
 | `cv-tailoring-platform/templates/storage.yaml` | `cv-artifacts` PVC (`helm.sh/resource-policy: keep`) and the always-on `cv-files` pod that keeps `kubectl cp` working while the worker is at zero |
 | `cv-tailoring-platform/templates/definitions.yaml` | The queue topology (`resumes.generate`, its `.dlq`, `vacancies.parse`, `applications.submit`, the DLX policy/binding) as a definitions Secret - reviewable in git, loaded by `rabbitmq.yaml` |
@@ -20,7 +20,7 @@ Read `CONSTITUTION.md` first (sections 2, 3 and 5).
 | `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe |
 | `cv-tailoring-worker/values.schema.json` | Type/enum guard for the values Helm must accept before anything renders |
 | `deploy/values/dev.yaml` | Local-cluster overrides: `localPostgres` on, dev broker password, `existingSecret: cv-tailoring-secrets`, `/data` mount, 0..3 replicas |
-| root `Dockerfile` / `docker-compose.yml` | The image (LibreOffice + poppler + Carlito/Caladea fonts, non-root uid 10001) and the no-cluster path (compose stack + bind-mounted `artifacts/`) |
+| root `Dockerfile` | The image (LibreOffice + poppler + Carlito/Caladea fonts, non-root uid 10001). There is no compose/no-cluster path: the only runtime is the local cluster |
 
 Only KEDA comes from an upstream chart. The broker is ours, on the official
 `rabbitmq:3.13-management` image, because Bitnami moved its index behind

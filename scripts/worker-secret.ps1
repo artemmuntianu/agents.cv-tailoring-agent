@@ -66,11 +66,18 @@ if ($settings['DATABASE_URL'] -notmatch 'sslmode=') {
     Warn 'DATABASE_URL has no sslmode parameter; for the in-cluster Postgres use ?sslmode=disable'
 }
 
+# NOTE: each '--flag=' + value pair MUST be built into a variable first. Inside an
+# array literal PowerShell 5.1 turns `'--flag=' + $value,` into TWO elements (an
+# empty-valued flag plus a stray positional argument), and kubectl then fails with
+# "exactly one NAME is required, got 3".
+$fromGeminiKey = '--from-literal=GEMINI_API_KEY=' + $settings['GEMINI_API_KEY']
+$fromDatabaseUrl = '--from-literal=DATABASE_URL=' + $settings['DATABASE_URL']
+
 $kubectlArgs = @(
     'create', 'secret', 'generic', $Name,
     '--namespace', $Namespace,
-    '--from-literal=GEMINI_API_KEY=' + $settings['GEMINI_API_KEY'],
-    '--from-literal=DATABASE_URL=' + $settings['DATABASE_URL'],
+    $fromGeminiKey,
+    $fromDatabaseUrl,
     '--dry-run=client', '-o', 'yaml'
 )
 if ($DryRun) {
@@ -83,10 +90,23 @@ if ($DryRun) {
     exit 0
 }
 
+# $ErrorActionPreference is 'Stop' above, and PowerShell 5.1 turns a native
+# command's stderr into a terminating error - relax it for these two calls so a
+# failure reaches the [fail] lines instead of a raw NativeCommandError.
+$previousPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+
 $manifest = & kubectl @kubectlArgs
-if ($LASTEXITCODE -ne 0) { Fail 'could not render the Secret (is the cluster running?)' }
+$renderCode = $LASTEXITCODE
+if ($renderCode -ne 0) {
+    $ErrorActionPreference = $previousPreference
+    Fail 'could not render the Secret (is the cluster running?)'
+}
+
 $manifest | kubectl apply -f - | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail 'kubectl apply failed' }
+$applyCode = $LASTEXITCODE
+$ErrorActionPreference = $previousPreference
+if ($applyCode -ne 0) { Fail 'kubectl apply failed' }
 
 Ok ("Secret '" + $Name + "' applied in namespace " + $Namespace)
 Write-Host ''

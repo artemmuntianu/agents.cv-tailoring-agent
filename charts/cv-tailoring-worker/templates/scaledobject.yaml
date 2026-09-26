@@ -27,8 +27,9 @@ spec:
   triggers:
     - type: rabbitmq
       metadata:
-        # The scaler uses the RabbitMQ management HTTP API, not AMQP.
-        host: {{ .Values.keda.host | quote }}
+        # No `host` here: the TriggerAuthentication supplies the management API URL
+        # (credentials and vhost included) from the credentials Secret, and KEDA
+        # rejects a `host` it cannot parse as the scheme implied by `protocol`.
         protocol: {{ .Values.keda.protocol | quote }}
         queueName: {{ .Values.config.queueName | quote }}
         mode: {{ .Values.keda.mode | quote }}

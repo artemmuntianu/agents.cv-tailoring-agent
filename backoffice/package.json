@@ -1,0 +1,36 @@
+{
+  "name": "cv-tailoring-backoffice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "start": "node --env-file-if-exists=.env ./dist/server/entry.mjs",
+    "user": "node scripts/user.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@astrojs/node": "^9.2.0",
+    "@astrojs/react": "^4.2.0",
+    "@tailwindcss/vite": "^4.1.0",
+    "amqplib": "^0.10.5",
+    "astro": "^5.6.0",
+    "pg": "^8.16.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.8",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.15.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

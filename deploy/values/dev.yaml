@@ -1,4 +1,5 @@
-# Local cluster (Docker Desktop Kubernetes / kind / k3d / k3s) overrides.
+# Docker Desktop Kubernetes overrides - the only supported runtime
+# (Settings -> Kubernetes -> kubeadm, so the cluster shares Docker's image store).
 # Nothing here costs money and nothing talks to the cloud.
 #
 #   powershell -ExecutionPolicy Bypass -File .\scripts\local-deploy.ps1
@@ -30,13 +31,18 @@ rabbitmq:
   persistence:
     enabled: true
     size: 1Gi
+  # RabbitMQ's first boot (Erlang VM + plugins + loading the definitions) is
+  # CPU-hungry and every `rabbitmq-diagnostics` probe spawns another Erlang VM.
+  # 50m/250m starves it on Docker Desktop, so the broker never becomes Ready and
+  # the liveness probe restarts it forever. The chart default (100m/500m) is the
+  # floor; a local cluster can afford a whole core.
   resources:
     requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
       cpu: 250m
-      memory: 384Mi
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
 
 rabbitmqCredentials:
   create: true
@@ -71,6 +77,14 @@ cv-tailoring-worker:
     artifactsDir: /data
     dbBackend: postgres
     modelStateBackend: postgres
+    # The chart default (gemini-3.5-flash) is a placeholder: an id this API key
+    # cannot use - or whose free-tier budget is spent (20 requests/day PER MODEL,
+    # and one CV needs 1-3 adaptations plus a vision check per rendered page) -
+    # sends every task to the DLQ. Pick ids with
+    # `python scripts/check_models.py --strict`, most preferred first; each model
+    # has its own daily budget, so a short ladder is the real fallback.
+    modelName: gemini-3.5-flash-lite
+    preferredModels: gemini-3.5-flash-lite,gemini-3.1-flash-lite
   keda:
     minReplicaCount: 0
     maxReplicaCount: 3

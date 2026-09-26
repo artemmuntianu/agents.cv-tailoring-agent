@@ -1,0 +1,22 @@
+---
+import LoginForm from '../components/LoginForm.tsx';
+import '../styles/global.css';
+
+// Already signed in? Skip the form (the middleware lets /login through on purpose).
+if (Astro.locals.session) {
+  return Astro.redirect('/');
+}
+const next = Astro.url.searchParams.get('next') ?? '/';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in · CV tailoring backoffice</title>
+  </head>
+  <body class="flex min-h-screen items-center justify-center bg-slate-100 antialiased">
+    <LoginForm client:load next={next} />
+  </body>
+</html>

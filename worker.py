@@ -238,6 +238,26 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def start_heartbeat_thread() -> threading.Thread:
+    """Keep the readiness heartbeat fresh while the worker waits for work.
+
+    `healthcheck.py --mode readiness` (the pod's readiness probe) reads this file,
+    and it used to be written only at start-up and after each task - so a worker
+    that idled longer than HEARTBEAT_MAX_AGE_SECONDS reported itself unhealthy
+    (readiness "heartbeat is stale"), which also made a later
+    `helm upgrade --wait` fail with the pod stuck at 0/1.
+    """
+    interval = max(15, config.HEARTBEAT_MAX_AGE_SECONDS // 3)
+
+    def _beat() -> None:
+        while not STOP_EVENT.wait(interval):
+            write_heartbeat()
+
+    thread = threading.Thread(target=_beat, name="heartbeat", daemon=True)
+    thread.start()
+    return thread
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.queue_backend:
@@ -272,6 +292,7 @@ def main(argv=None) -> int:
         max_messages = max(0, int(available))
 
     write_heartbeat()
+    start_heartbeat_thread()
     try:
         processed = queue.consume(
             handle_delivery, max_messages=max_messages, stop_event=STOP_EVENT

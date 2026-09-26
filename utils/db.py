@@ -2,8 +2,8 @@
 
 Two interchangeable backends:
 
-* ``local``    - a JSON file under ``artifacts/`` (keeps `python main.py` and
-  the tests fully offline).
+* ``local``    - a JSON file under ``artifacts/`` (what the hermetic test suite
+  uses, so it needs no database).
 * ``postgres`` - the Postgres database the dashboard reads from. The worker
   writes status transitions here so the UI can show progress (doc: "worker
   updates PostgreSQL state").
@@ -238,6 +238,43 @@ create table if not exists app_settings (
     key        text primary key,
     value      jsonb,
     updated_at timestamptz not null default now()
+);
+
+-- Board-owned state for the backoffice kanban (`backoffice/`). The worker never
+-- touches these two tables, and the board never writes `resumes.status`: that
+-- column is the worker's claim/idempotency state (see ACTIVE_STATUSES), so the
+-- board's `created` sub-state is *derived* from it instead of stored.
+create table if not exists resume_board (
+    job_id     text primary key references resumes (job_id) on delete cascade,
+    stage      text not null default 'created',
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists resume_history (
+    id         bigserial primary key,
+    job_id     text not null references resumes (job_id) on delete cascade,
+    at         timestamptz not null default now(),
+    actor      text not null check (actor in ('Me', 'Them')),
+    action     text not null check (char_length(action) between 1 and 500),
+    kind       text not null check (kind in ('move', 'tailoring')),
+    from_state text not null,
+    to_state   text not null
+);
+
+create index if not exists resume_history_job_id_at_idx on resume_history (job_id, at);
+
+-- Backoffice accounts. There is NO public signup: an administrator provisions
+-- users out of band (`backoffice/scripts/user.mjs`) exactly like the design's
+-- "manual provisioning" rule; the UI only ever authenticates.
+create table if not exists app_users (
+    id            text primary key,
+    email         text not null unique,
+    display_name  text,
+    password_hash text not null,
+    is_admin      boolean not null default false,
+    is_active     boolean not null default true,
+    created_at    timestamptz not null default now(),
+    last_login_at timestamptz
 );
 
 -- Shape guard for the opaque job_id (characters that are safe in logs, storage

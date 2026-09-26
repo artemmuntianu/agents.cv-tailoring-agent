@@ -63,7 +63,7 @@ spec:
           command:
             - sh
             - -c
-            - mkdir -p {{ .Values.persistence.mountPath }}/input {{ .Values.persistence.mountPath }}/output && sleep infinity
+            - mkdir -p {{ .Values.persistence.mountPath }}/input {{ .Values.persistence.mountPath }}/output && chown -R {{ .Values.fileManager.owner }} {{ .Values.persistence.mountPath }}/input {{ .Values.persistence.mountPath }}/output && sleep infinity
           resources:
             requests:
               cpu: 10m

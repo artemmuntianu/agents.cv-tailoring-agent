@@ -1,12 +1,9 @@
 """Central configuration.
 
-Every value is environment-overridable so the exact same code base runs
-- locally as a CLI batch tool (`python main.py`), and
-- in Kubernetes as a RabbitMQ consumer (`python worker.py`).
-
-Local defaults are unchanged; cloud behaviour is switched on purely by env vars
-(see `.env.example`). No provider SDK is imported here, so this module stays
-importable with only the base requirements installed.
+Every value is environment-overridable, so the same code base runs the broker
+consumer in Kubernetes (`python worker.py`) and the hermetic test suite. No provider
+SDK is imported here, so this module stays importable with only the base
+requirements installed (see `.env.example`).
 """
 
 import os
@@ -189,6 +186,13 @@ QUEUE_DLQ = os.getenv("QUEUE_DLQ", f"{QUEUE_NAME}.dlq")
 QUEUE_RETRY_TTL_MS = _env_int("QUEUE_RETRY_TTL_MS", 300000)
 PREFETCH_COUNT = _env_int("PREFETCH_COUNT", 1)
 CONSUMER_POLL_INTERVAL = _env_float("CONSUMER_POLL_INTERVAL", 2.0)
+# AMQP heartbeat (seconds), 0 disables it. It MUST exceed the longest task: the
+# pika BlockingConnection cannot service heartbeats while the graph runs, so the
+# broker drops the connection two heartbeats in ("missed heartbeats from client,
+# timeout: 60s"), requeues the unacked message and the whole task restarts - which
+# is what a rate-limited Gemini turn (backoff up to 60s x 5) triggers. RabbitMQ's
+# own `consumer_timeout` remains the backstop for a genuinely dead consumer.
+AMQP_HEARTBEAT_SECONDS = _env_int("AMQP_HEARTBEAT_SECONDS", 600)
 HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", os.path.join(TEMP_ROOT, "heartbeat"))
 HEARTBEAT_MAX_AGE_SECONDS = _env_int("HEARTBEAT_MAX_AGE_SECONDS", 300)
 

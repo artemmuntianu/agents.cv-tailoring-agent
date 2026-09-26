@@ -24,5 +24,28 @@ spec:
             name: {{ include "cv-tailoring-worker.fullname" . }}
         - secretRef:
             name: {{ include "cv-tailoring-worker.secretName" . }}
+      # The broker address/credentials are NOT in the ConfigMap or the worker
+      # Secret: the Deployment injects them from the broker Secret. Without the
+      # same env here, `--mode amqp` composes the default guest@localhost:5672 and
+      # the probe always fails.
+      {{- if eq .Values.config.queueBackend "amqp" }}
+      env:
+        - name: RABBITMQ_HOST
+          value: {{ .Values.config.rabbitmqHost | quote }}
+        - name: RABBITMQ_PORT
+          value: {{ .Values.config.rabbitmqPort | quote }}
+        - name: RABBITMQ_VHOST
+          value: {{ .Values.config.rabbitmqVhost | quote }}
+        - name: RABBITMQ_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.rabbitmqCredentials.secretName }}
+              key: {{ .Values.rabbitmqCredentials.usernameKey }}
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.rabbitmqCredentials.secretName }}
+              key: {{ .Values.rabbitmqCredentials.passwordKey }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}

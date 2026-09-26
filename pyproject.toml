@@ -1,7 +1,7 @@
 [project]
 name = "cv-tailoring-agent"
 version = "0.2.0"
-description = "Event-driven CV tailoring worker (LangGraph + RabbitMQ + Supabase)"
+description = "Event-driven CV tailoring worker (LangGraph + RabbitMQ on local Kubernetes)"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

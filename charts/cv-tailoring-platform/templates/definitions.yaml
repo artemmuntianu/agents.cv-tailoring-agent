@@ -1,7 +1,30 @@
 {{- if .Values.rabbitmqDefinitions.create }}
-# Queue/exchange definitions loaded by the Bitnami RabbitMQ chart
-# (`loadDefinition.existingSecret`). Keeping them in values.yaml means the
-# queue topology is reviewable and diffable.
+{{- $username := include "cv-tailoring-platform.rabbitmqUsername" . }}
+{{- $password := .Values.rabbitmqCredentials.password | default .Values.rabbitmq.auth.password }}
+{{- $vhost := "/" }}
+{{- $definitions := deepCopy .Values.rabbitmqDefinitions.definitions }}
+{{/*
+  With `load_definitions` set, RabbitMQ refuses to seed the default vhost and user
+  ("Will not seed default virtual host and user: have definitions to load..."), so
+  the file must declare them itself - otherwise the broker dies at boot with
+  BOOT FAILED: Please create virtual host "/" prior to importing definitions.
+  The vhost/user/permissions are therefore filled in from the SAME values that
+  render the `rabbitmq-credentials` Secret (never a second copy of the password).
+  Values that set them explicitly win, which is what an externally managed
+  credential Secret (rabbitmqCredentials.create=false) needs.
+*/}}
+{{- if not $definitions.vhosts }}
+{{- $_ := set $definitions "vhosts" (list (dict "name" $vhost)) }}
+{{- end }}
+{{- if not $definitions.users }}
+{{- $_ := set $definitions "users" (list (dict "name" $username "password" $password "tags" "administrator")) }}
+{{- end }}
+{{- if not $definitions.permissions }}
+{{- $_ := set $definitions "permissions" (list (dict "user" $username "vhost" $vhost "configure" ".*" "write" ".*" "read" ".*")) }}
+{{- end }}
+# Queue/exchange definitions loaded by our RabbitMQ StatefulSet
+# (`load_definitions` in the mounted 10-cv-tailoring.conf). Keeping them in
+# values.yaml means the queue topology is reviewable and diffable in git.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -11,5 +34,5 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 type: Opaque
 stringData:
-  definitions.json: {{ .Values.rabbitmqDefinitions.definitions | toJson | quote }}
+  definitions.json: {{ $definitions | toJson | quote }}
 {{- end }}

@@ -1,20 +1,23 @@
-"""Development stand-in for the Vercel API gateway.
+"""Publish vacancies to the cluster broker (the dev stand-in for the gateway).
 
-In production the Chrome extension POSTs a batch of vacancies to Vercel, which
-publishes one AMQP message per vacancy to `resumes.generate`. Locally the
-extension/Vercel do not exist, so this script publishes the exact same payload:
+The design's producer is Chrome extension → Vercel → AMQP. On this machine that
+gateway does not exist, so this script publishes the identical payload shape to the
+broker running in the local cluster:
 
-    python publisher.py --all                          # every jd_*.txt in artifacts/input
     python publisher.py --jd artifacts/input/jd_1.txt
+    python publisher.py --all                          # every jd_*.txt in artifacts/input
     python publisher.py --jd jd.txt --user-id <uuid> --attach-cv-data
     python publisher.py --payload payload.json         # raw JSON passthrough
 
-Works against both backends (QUEUE_BACKEND=directory|amqp), so the whole worker
-loop can be exercised offline or against a local RabbitMQ.
+Publishing by hand needs a port-forward plus `QUEUE_BACKEND=amqp`; use
+`scripts/send-test-job.ps1`, which does both (and refuses to publish before the
+release and the seeded CV are in place).
 """
 
 import argparse
+import fnmatch
 import json
+import os
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -23,10 +26,28 @@ if hasattr(sys.stdout, "reconfigure"):
 from datetime import UTC, datetime
 
 import config
-from main import find_job_descriptions, jd_id_from_path
 from utils.docx_mutator import load_cv_data
 from utils.logging_setup import setup_logging
 from utils.messaging import get_queue
+
+JD_FILE_PATTERN = "jd_*.txt"
+
+
+def find_job_descriptions(input_dir: str):
+    """Return sorted absolute paths of every jd_{jd_id}.txt inside the input dir."""
+    if not os.path.isdir(input_dir):
+        return []
+    return sorted(
+        os.path.join(input_dir, name)
+        for name in os.listdir(input_dir)
+        if fnmatch.fnmatch(name, JD_FILE_PATTERN)
+    )
+
+
+def jd_id_from_path(jd_path: str) -> str:
+    """Extract the jd_id (text between 'jd_' and '.txt') from a JD file path."""
+    name = os.path.basename(jd_path)
+    return name[len("jd_"):-len(".txt")]
 
 
 def build_payload(jd_path, user_id=None, attach_cv_data=False, cv_data=None):

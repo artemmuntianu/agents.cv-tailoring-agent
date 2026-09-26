@@ -33,6 +33,19 @@ function Warn([string]$Text) { Write-Host "  [warn] $Text" -ForegroundColor Yell
 function Fail([string]$Text) { Write-Host "  [fail] $Text" -ForegroundColor Red; exit 1 }
 function Step([string]$Text) { Write-Host ''; Write-Host ("== " + $Text) -ForegroundColor Cyan }
 
+function Invoke-External([string]$File, [string[]]$Arguments) {
+    # PowerShell 5.1 + $ErrorActionPreference='Stop' turns ANY stderr output of a
+    # native command into a terminating error - including `kubectl get crd`
+    # reporting "No resources found" on an empty cluster. Capture the exit code and
+    # the output instead of letting the script die mid-step.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $text = (& $File @Arguments 2>&1 | Out-String)
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $previous
+    return [pscustomobject]@{ Code = $code; Text = $text.Trim() }
+}
+
 Step '1. tools'
 foreach ($tool in @('docker', 'kubectl', 'helm')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
@@ -54,12 +67,21 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($context)) {
     Fail 'No kubectl context. Enable Kubernetes in Docker Desktop (Settings -> Kubernetes).'
 }
 Ok ("context: " + $context)
-if ($context -notmatch 'docker-desktop|kind-|k3d-|minikube') {
-    Warn 'This does not look like a local cluster - check `kubectl config get-contexts`.'
+if ($context -notmatch 'docker-desktop') {
+    Warn ("context '" + $context + "': this project targets Docker Desktop Kubernetes only" +
+        ' (Settings -> Kubernetes -> kubeadm). A cluster with its own image store will not' +
+        ' see the locally built image.')
 }
 & kubectl cluster-info 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail 'The cluster is not reachable (is Kubernetes started in Docker Desktop?)' }
 Ok 'cluster reachable'
+
+if ($Namespace -ne 'default') {
+    Warn ("namespace '" + $Namespace + "': the worker ScaledObject pins KEDA's RabbitMQ " +
+        'management host to rabbitmq.default.svc.cluster.local, so the worker will never ' +
+        'scale up. Deploy into `default`, or override ' +
+        'cv-tailoring-worker.keda.host from the values file.')
+}
 
 if ($Uninstall) {
     Step 'uninstall'
@@ -78,66 +100,19 @@ if ($SkipBuild) {
     Ok ("image built: " + $Image)
 }
 
-Step '5. make the image visible to the cluster'
+Step '5. image visibility'
+# Docker Desktop's kubeadm cluster shares Docker's image store, so the image built
+# above is already visible to the kubelet - nothing to load. That shared store is
+# exactly why Docker Desktop is the only supported runtime: kind/k3d/minikube nodes
+# keep their own store and would need the image imported into them.
 $nodeNames = ((& kubectl get nodes -o jsonpath='{.items[*].metadata.name}') 2>$null)
 $nodes = @($nodeNames -split '\s+' | Where-Object { $_ })
-if ($nodes.Count -gt 0) { Ok ("nodes: " + ($nodes -join ', ')) }
-
-# kind names its nodes "<cluster>-control-plane" / "<cluster>-worker", and those
-# nodes keep their own image store - so a locally built image must be loaded.
-$kindNode = $nodes | Where-Object { $_ -match '-(control-plane|worker[0-9]*)$' } | Select-Object -First 1
-$kindCluster = ''
-if ($kindNode) { $kindCluster = $kindNode -replace '-(control-plane|worker[0-9]*)$', '' }
-elseif ($context -like 'kind-*') { $kindCluster = $context -replace '^kind-', '' }
-
-if ($kindCluster) {
-    if (Get-Command kind -ErrorAction SilentlyContinue) {
-        & kind load docker-image $Image --name $kindCluster
-        if ($LASTEXITCODE -ne 0) { Fail 'kind load docker-image failed' }
-        Ok ("loaded into kind cluster '" + $kindCluster + "'")
-    }
-    else {
-        # No kind CLI on PATH: do what `kind load` does under the hood - save the
-        # image and import it into the node container with containerd's ctr.
-        $node = $nodes[0]
-        if (-not $node) { Fail 'no node reported by kubectl - is the cluster up?' }
-        Warn ("kind CLI not found - importing the image into node container '" + $node + "' via docker")
-        $tar = Join-Path $env:TEMP ('cv-worker-image-' + [guid]::NewGuid().ToString('N') + '.tar')
-        & docker save -o $tar $Image
-        if ($LASTEXITCODE -ne 0) { Fail 'docker save failed' }
-        & docker cp $tar ($node + ':/tmp/cv-image.tar')
-        if ($LASTEXITCODE -ne 0) {
-            Warn ("could not copy into '" + $node + "'. Either install the kind CLI:")
-            Warn '    winget install Kubernetes.kind'
-            Warn 'or switch Docker Desktop to the kubeadm provisioner (shared image store).'
-            Remove-Item -Force $tar -ErrorAction SilentlyContinue
-            Fail 'image import failed'
-        }
-        & docker exec $node ctr -n k8s.io images import /tmp/cv-image.tar | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item -Force $tar -ErrorAction SilentlyContinue
-            Fail 'containerd import inside the node failed'
-        }
-        & docker exec $node rm -f /tmp/cv-image.tar | Out-Null
-        Remove-Item -Force $tar -ErrorAction SilentlyContinue
-        Ok ("imported into node '" + $node + "'")
-    }
-}
-elseif ($context -like 'k3d-*') {
-    if (-not (Get-Command k3d -ErrorAction SilentlyContinue)) {
-        Fail 'this is a k3d cluster, but the k3d CLI is not on PATH'
-    }
-    & k3d image import $Image -c ($context -replace '^k3d-', '')
-    if ($LASTEXITCODE -ne 0) { Fail 'k3d image import failed' }
-    Ok 'imported into k3d'
-}
-else {
-    Ok 'nothing to do: this node shares the Docker image store (kubeadm / docker-desktop)'
-}
+if ($nodes.Count -gt 0) { Ok ("node(s): " + ($nodes -join ', ')) }
+Ok 'shared image store - the freshly built image is already in-cluster'
 
 Step '6. chart dependencies'
 & helm dependency update charts/cv-tailoring-platform | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail 'helm dependency update failed (network needed for the Bitnami/KEDA charts)' }
+if ($LASTEXITCODE -ne 0) { Fail 'helm dependency update failed (network needed for the KEDA chart)' }
 Ok 'Chart.lock resolved'
 
 Step '7. worker Secret (from .env)'
@@ -145,11 +120,46 @@ Step '7. worker Secret (from .env)'
 if ($LASTEXITCODE -ne 0) { Fail 'could not create the worker Secret' }
 
 Step '8. deploy'
+# PowerShell 5.1 splits a native argument that contains '=(' into two tokens
+# ('key=' plus the parenthesised value), so the --set values are computed first and
+# interpolated. Without this, helm receives 4 positionals and dies with
+# '"helm upgrade" requires 2 arguments'.
+$imageRepository = ($Image -split ':')[0]
+$imageTag = ($Image -split ':')[1]
+
+# KEDA ships its CRDs as *templates* (keda/templates/crds/...), and Helm builds
+# every object of a release BEFORE creating any of them - so a ScaledObject in the
+# same release as its CRD can never be mapped ("no matches for kind ScaledObject").
+# The very first install therefore runs in two phases: phase 1 installs everything
+# with the worker disabled (which puts the CRDs in the cluster, owned by this
+# release), phase 2 adds the worker and its ScaledObject. On every later deploy the
+# CRDs already exist and the worker must NOT be disabled in between (that would
+# delete the Deployment and kill in-flight tasks), so phase 1 is skipped.
+$scaledObjectCrdPresent = $false
+$clusterCrds = (Invoke-External 'kubectl' @('get', 'crd')).Text
+if ($clusterCrds | Select-String -SimpleMatch 'scaledobjects.keda.sh') { $scaledObjectCrdPresent = $true }
+
+if ($scaledObjectCrdPresent) {
+    Ok 'KEDA CRDs already in the cluster - single-step install'
+} else {
+    Say '  first install: phase 1/2 installs the platform and the KEDA CRDs (no worker yet)'
+    & helm upgrade --install $Release charts/cv-tailoring-platform `
+        --namespace $Namespace --create-namespace `
+        -f $Values `
+        --set "cv-tailoring-worker.image.repository=$imageRepository" `
+        --set "cv-tailoring-worker.image.tag=$imageTag" `
+        --set cv-tailoring-worker.image.pullPolicy=IfNotPresent `
+        --set cv-tailoring-worker.enabled=false `
+        --wait --timeout 10m
+    if ($LASTEXITCODE -ne 0) { Fail 'helm install failed (phase 1: platform + CRDs) - inspect with: kubectl get pods' }
+    Ok 'KEDA CRDs installed; phase 2/2 adds the worker'
+}
+
 & helm upgrade --install $Release charts/cv-tailoring-platform `
     --namespace $Namespace --create-namespace `
     -f $Values `
-    --set cv-tailoring-worker.image.repository=(($Image -split ':')[0]) `
-    --set cv-tailoring-worker.image.tag=(($Image -split ':')[1]) `
+    --set "cv-tailoring-worker.image.repository=$imageRepository" `
+    --set "cv-tailoring-worker.image.tag=$imageTag" `
     --set cv-tailoring-worker.image.pullPolicy=IfNotPresent `
     --wait --timeout 10m
 if ($LASTEXITCODE -ne 0) { Fail 'helm install failed - inspect with: kubectl get pods' }
@@ -162,10 +172,11 @@ Say 'Put your CV on the cluster volume (once):'
 Say '  .\scripts\storage-files.ps1 -Action seed'
 Say '  (expects artifacts\input\cv.docx and artifacts\cv_data.json, or pass -CvFile / -CvDataFile)'
 Say ''
-Say 'Watch the workers wake up and go back to sleep:'
+Say 'Send one vacancy from your machine (the script opens its own port-forward,'
+Say 'selects the amqp backend and verifies the master CV is on the volume):'
+Say '  .\scripts\send-test-job.ps1 -Smoke'
+Say ''
+Say 'Watch the worker wake up and go back to sleep:'
 Say '  kubectl get pods -w'
-Say '  (send a job with: kubectl port-forward svc/rabbitmq 5672:5672  then)'
-Say '  $env:RABBITMQ_URL=(kubectl get secret rabbitmq-credentials -o jsonpath={.data.rabbitmq-url} | %{[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))})'
-Say '  python publisher.py --jd your_job.txt'
 Say ''
 Say 'Tear down:   .\scripts\local-deploy.ps1 -Uninstall'

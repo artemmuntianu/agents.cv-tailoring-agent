@@ -11,9 +11,10 @@ Verify:
   helm test {{ .Release.Name }}
 
 Send one vacancy from your machine:
-  kubectl port-forward svc/rabbitmq 5672:5672
-  $env:RABBITMQ_URL=(kubectl get secret rabbitmq-credentials -o jsonpath={.data.rabbitmq-url})
-  python publisher.py --jd your_job.txt
+  .\scripts\send-test-job.ps1 -Smoke
+  (it opens its own port-forward, sets QUEUE_BACKEND=amqp - publisher.py does not
+  default to the broker - and rebuilds the URL against localhost, because the
+  Secret's rabbitmq-url names the in-cluster DNS)
 
 Files on the artifact volume:
   .\scripts\storage-files.ps1 -Action seed      # push cv.docx + cv_data.json

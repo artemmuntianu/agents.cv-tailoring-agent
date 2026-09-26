@@ -39,25 +39,23 @@ publisher / Chrome extension --> RabbitMQ (rabbitmq-0, resumes.generate)
                   cv-artifacts volume (PDF/DOCX) + Postgres (status)
 ```
 
-## 2. Three ways to run the same pipeline
+## 2. One way to run the pipeline
 
-`agent/pipeline.py` is the **single** implementation of the flow; every entry
-point delegates to it.
+`agent/pipeline.py` is the **single** implementation of the flow, and there is a
+single supported runtime: the **local Kubernetes cluster** installed by
+`.\scripts\local-deploy.ps1` (Docker Desktop on the dev machine), where `worker.py`
+consumes the RabbitMQ queue inside a pod. Queue = amqp, DB = postgres, model state =
+postgres, artifacts = the `cv-artifacts` PVC at `/data`.
 
-| Mode | Entry point | Queue / DB / Storage |
-|---|---|---|
-| Local cluster (primary) | `.\scripts\local-deploy.ps1`, then `worker.py` in a pod | amqp / postgres / PVC `/data` |
-| Batch CLI | `python main.py` | directory / local / `artifacts/` |
-| docker compose | `docker compose up -d rabbitmq postgres` + worker | amqp / postgres / bind-mounted `artifacts/` |
-
-Backends are selected purely by env vars (`QUEUE_BACKEND`, `DB_BACKEND`,
-`MODEL_STATE_BACKEND`). Storage has **no** backend switch - it is always local
-(see section 5, discrepancy D1).
+`QUEUE_BACKEND` / `DB_BACKEND` / `MODEL_STATE_BACKEND` still exist because the
+hermetic test suite switches on them (`directory` / `local` / `file`); nothing in the
+shipped deployment uses those values. Storage has **no** backend switch - it is
+always local (section 5, D1).
 
 ## 3. Layer map and dependency direction
 
 ```
-entry points        main.py · worker.py · publisher.py · healthcheck.py
+entry points        worker.py · publisher.py · healthcheck.py
       |                     |
       v                     v
 orchestration      agent/   (state, contracts, models, nodes, graph, pipeline)
@@ -68,10 +66,13 @@ adapters/infra     utils/   (messaging, db, storage, model_state, retry,
       v
 config             config.py   (env parsing only; imports no provider SDK)
 
-deployment         charts/ · deploy/values/ · Dockerfile · docker-compose.yml
+deployment         charts/ · deploy/values/ · Dockerfile
 operator tooling   scripts/ · Makefile
 verification       tests/
 documentation      docs/ · README.md
+backoffice         backoffice/  (Astro+React kanban UI + the authenticated batch gateway;
+                                 shares the worker's Postgres)
+scraper            extension/   (Chrome MV3 scraper -> backoffice gateway -> queue)
 automation         .github/workflows/
 ```
 
@@ -81,7 +82,7 @@ automation         .github/workflows/
 ## 4. Invariants (do not break these silently)
 
 1. **One pipeline.** `agent/pipeline.run_cv_tailoring()` / `run_task()` are the
-   only ways to run the graph; `main.py` and `worker.py` both call them.
+   only ways to run the graph; `worker.py` calls them (and so do the tests).
 2. **Ack only after `persist`.** The queue message is acknowledged after the
    artifact is stored *and* the DB row is written, so a crash/OOM/scale-down
    simply redelivers the message (`worker.handle_delivery`, `agent/nodes.persist`).
@@ -118,6 +119,16 @@ automation         .github/workflows/
     `existingSecret`; `scripts/worker-secret.ps1` creates the Secret.
 14. **`helm lint`/`helm template` are not enough.** Render and validate with
     `kubeconform` before trusting a chart change (see section 5, D8).
+15. **No public signup, ever.** Backoffice accounts exist only because an
+    administrator provisioned them (`backoffice/scripts/user.mjs`); the UI
+    authenticates and never creates. A session is an HS256 token (cookie for the
+    browser, `Authorization: Bearer` for the extension) signed with
+    `BACKOFFICE_JWT_SECRET`, and `backoffice/src/middleware.ts` is the only gate.
+16. **The gateway publishes what the worker can consume.** `POST /api/vacancies/batch`
+    validates the whole batch *before* the first publish (required `external_id` +
+    `description_raw`, http(s) `source_url`, ≤25 cards) and emits exactly
+    `ResumeTaskMessage`; the AMQP topology in `backoffice/src/lib/queue.ts` mirrors
+    `utils/messaging.py` field for field (a mismatch is a 406 from the broker).
 
 ## 5. Known discrepancies, dead code and legacy paths
 
@@ -128,15 +139,17 @@ so that a change which depends on them is a conscious one.
 | # | What | Reality | Status |
 |---|---|---|---|
 | D1 | `Dockerfile` line 48 comment ("persist to Supabase") and line 51 `ENV STORAGE_BACKEND=supabase` | There is no `STORAGE_BACKEND` in `config.py`, and `utils/storage.py` has no backend selection - storage is unconditionally `LocalStorage`. `deploy/values/dev.yaml` (`config.storageBackend: local`) and `.github/workflows/helm-smoke.yml` (`--set config.storageBackend=local`) set a value that `charts/cv-tailoring-worker/templates/configmap.yaml` never renders, so both are inert as well | **Dead** (leftover from the removed Supabase era). Harmless at runtime, misleading to readers. |
-| D2 | `pyproject.toml` description: "...LangGraph + RabbitMQ + Supabase" | Supabase was removed; storage is a PVC | **Stale metadata** |
+| D2 | `pyproject.toml` description: "...LangGraph + RabbitMQ + Supabase" | Supabase was removed; storage is a PVC | **Fixed 2026-09-25** (description now names local Kubernetes) |
 | D3 | `requirements.txt`: `pypdf>=4.0.0` | Not imported anywhere in the repo | **Unused dependency** |
-| D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined and passed by `docker-compose.yml`, but never read by application code - KEDA talks to the RabbitMQ management API itself | **Unused config** |
+| D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
 | D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
 | D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
 | D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **45 collected, 6 skipped, 39 passed** (`python -m pytest -q`, 2026-09-19); the 6 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
-| D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | The `.sql` file is the human-facing DDL (docker-compose mounts it as the initdb script) and additionally creates `vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx` and the `set_updated_at()` trigger; `SCHEMA_SQL` (what the worker runs on startup, and therefore what exists in the cluster) creates only `resumes` + its index/CHECK, `model_availability` and `app_settings`. Neither is generated from the other. The divergence was briefly "resolved" by deleting the `.sql` file in `46a76fd`; that deletion was reverted (the docs are back in the tree), so the question is open again | **Two sources of truth** - keep both in sync on a schema change (see `docs/AGENTS.md`) |
+| D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
+| D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
+| D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -146,12 +159,30 @@ so that a change which depends on them is a conscious one.
   `rabbitmq:3.13-management` image (the Bitnami index moved behind
   `repo.broadcom.com` and its free images were emptied; see
   `charts/cv-tailoring-platform/Chart.yaml`).
+* **Every second way to run the app** - removed 2026-09-25 in favour of the single
+  local-cluster runtime: the batch CLI (`main.py`), `docker-compose.yml`, the
+  managed-cluster documentation and `docs/postgres_schema.sql` (D10). Publishing from
+  the host is `scripts/send-test-job.ps1` → `publisher.py`; the batch *CLI* entry point
+  is gone for good - do not add another one. (The HTTP batch endpoint in the backoffice
+  is a different thing: it is a gateway, not a second runtime - see D12.)
+* **Supabase (Auth, DB, Storage, Realtime) and Vercel.** Their *functions* now live in
+  the local stack - admin-provisioned accounts in `app_users` (`backoffice/src/lib/auth.ts`),
+  the gateway as `POST /api/vacancies/batch`, storage on the `cv-artifacts` PVC, and a
+  poll-based live board instead of realtime WebSockets (D12). Do not reintroduce either
+  provider, and do not add a signup form.
+* **kind / k3d / minikube support** in `scripts/local-deploy.ps1`. Docker Desktop's
+  kubeadm cluster shares Docker's image store, which is what makes a locally built
+  image visible to the kubelet; every other local provider keeps its own store and
+  would need an explicit image load.
 
 * **The classic `docs/` set was deleted once, then restored.** `46a76fd` removed
   `ARCHITECTURE.md`, `MESSAGE_CONTRACT.md`, `PROJECT_STATE.md`, `RUNBOOK.md` and
   `postgres_schema.sql`; they came back in `4678752` and the commit that follows it. They are
   current documentation again - the layer `AGENTS.md` files own the mechanics and these
   documents own the deep dives. Do not delete them again without moving their content.
+  (`postgres_schema.sql` is the one exception: it was deleted again on 2026-09-25, this
+  time deliberately, because its only consumer - the docker-compose initdb path - was
+  removed and `utils/db.SCHEMA_SQL` is the only schema; see D10.)
 
 
 ## 6. Entry points (root files)
@@ -159,9 +190,8 @@ so that a change which depends on them is a conscious one.
 | File | Role | Notes |
 |---|---|---|
 | `config.py` | Every env-overridable setting | Import-safe without provider SDKs; calls `load_dotenv()` |
-| `main.py` | Batch CLI over `artifacts/input/jd_*.txt` | Skips a JD whose `cv_{jd_id}.docx` already exists in the output dir |
 | `worker.py` | Queue consumer (the pod) | preflight -> claim -> prepare -> graph -> ack/retry/DLQ |
-| `publisher.py` | Dev stand-in for the Vercel gateway | Publishes the real payload shape; `--all`, `--jd`, `--payload` |
+| `publisher.py` | Host-side dev stand-in for the API gateway | Publishes the real payload shape; `--all`, `--jd`, `--payload`. Driven by `scripts/send-test-job.ps1`. The in-app gateway (scraped batch → one message per vacancy) is `backoffice/src/pages/api/vacancies/batch.ts` |
 | `healthcheck.py` | Exec probes | `--mode liveness`, `readiness`, `amqp`, `render`, `all` |
 | `model_state.json` | Local model-availability ledger | **Tracked but rewritten at runtime** - restore with `git checkout -- model_state.json` after local runs |
 
@@ -176,6 +206,64 @@ python -m ruff check .       # must stay clean (line-length 100, target py311)
 throwaway Postgres (`make test-postgres`); otherwise those 6 tests skip. A change
 that touches the DB, queue, DOCX mutator or retry logic is not done until the
 suite passes.
+
+The `backoffice/` layer has its own hermetic gates - run them for any change there:
+
+```sh
+cd backoffice
+npm test             # vitest: auth, board helpers, batch validation, scraper (jsdom)
+npx tsc --noEmit     # types (no mypy equivalent on this side)
+npm run build        # SSR bundle must build
+```
+
+## 9. What the first live deploy established (2026-09-25)
+
+Facts only a real install could reveal. All were fixed in the same change - keep them true.
+
+1. **KEDA ships its CRDs as templates**, and Helm builds every object of a release
+   before creating any of them, so a `ScaledObject` in the same release as its CRD
+   cannot be mapped. `local-deploy.ps1` therefore deploys in **two phases** on the
+   first run (worker disabled, then the full release); later deploys are single-step.
+   CI never sees this: `helm-smoke.yml` installs with `keda.enabled=false`.
+2. **The broker refuses to seed a default vhost/user when `load_definitions` is set**
+   ("Will not seed default virtual host and user: have definitions to load..."), so
+   the definitions file must declare the vhost, the user and its permissions itself.
+   `templates/definitions.yaml` fills them from the same values as
+   `rabbitmq-credentials`. Without it the broker dies with
+   `BOOT FAILED: Please create virtual host "/" prior to importing definitions.`
+3. **`conf.d` must be mounted as a single file**, never over the directory: the image
+   ships `conf.d/10-defaults.conf` (`log.console = true`) and its entrypoint writes
+   the generated default-user settings into that directory. A directory mount
+   silences the console log (the boot failure becomes invisible) and blocks the write.
+4. **Pre-declared queue arguments must equal `utils/messaging.py`'s declaration**
+   (`x-dead-letter-exchange` + `x-dead-letter-routing-key`), otherwise the first
+   publish dies with `406 PRECONDITION_FAILED - inequivalent arg`.
+5. **KEDA must scale over `protocol: http`** with the management URL from the Secret
+   (`rabbitmq-management-url`). The AMQP count (`queue.declare-ok`) is ready-only, so
+   a prefetched job looks like an empty queue and KEDA scales the worker to zero
+   mid-task.
+6. **The AMQP heartbeat must exceed the longest task** (`AMQP_HEARTBEAT_SECONDS`,
+   default 600). pika cannot service heartbeats while the graph runs, so the old 60s
+   heartbeat let the broker drop the connection mid-task and requeue the message -
+   the task then restarted from scratch, indefinitely.
+7. **The worker writes a periodic heartbeat while idle**
+   (`worker.start_heartbeat_thread`), so readiness no longer fails after five idle
+   minutes (which also made `helm upgrade --wait` time out).
+8. **`helm uninstall` can leave KEDA CRDs behind** - delete them before re-installing.
+9. **One Gemini model = 20 requests/day on the free tier.** A single CV can consume a
+   whole model's budget (3 revisions + vision checks per page), so the
+   `PREFERRED_MODELS` ladder (each model has its own quota) is the real fallback, and
+   a long `adapt_text`/`vision_check` node is usually quota backoff, not a hang.
+10. **The `cv-files` helper owns `/data/input` and `/data/output` as `10001:10001`**
+    (`fileManager.owner`). The worker runs unprivileged (`runAsUser: 10001`), so
+    root-owned directories made the first task die at `persist` with
+    `[Errno 13] Permission denied: '/data/output/<name>.pdf'`.
+11. **The `helm test` pod needs the same broker env as the Deployment**
+    (`RABBITMQ_HOST/PORT/VHOST` + the credentials from the broker Secret): those are
+    injected in the Deployment only, so the probe used to compose `guest@localhost:5672`
+    and always failed.
+
+---
 
 ## 8. When code and prose disagree
 

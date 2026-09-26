@@ -20,12 +20,13 @@ live, so no agent has to re-derive them.
 - **`utils/AGENTS.md`** - backend adapters and infrastructure (queue, DB, storage, model state, retry, DOCX mutator, renderer, logging).
 - **`charts/AGENTS.md`** - Helm charts + `deploy/values` (the cluster deployment).
 - **`scripts/AGENTS.md`** - operator tooling: deploy, cluster storage, secrets, model check.
+- **`backoffice/AGENTS.md`** - the operator UI *and* the API gateway (Astro + React POC): run commands, auth contract, the batch-ingest contract, board contract, what is deliberately missing.
+- **`extension/AGENTS.md`** - the Chrome MV3 scraper that feeds the gateway (DOM contract, injection rules, where its tests live).
 - **`tests/AGENTS.md`** - the hermetic verification layer.
 - **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what.
 - **`.github/AGENTS.md`** - CI workflows.
-
-Root entry points (`config.py`, `main.py`, `worker.py`, `publisher.py`,
-`healthcheck.py`) are mapped in `CONSTITUTION.md` section 6.
+- **Root entry points** (`config.py`, `worker.py`, `publisher.py`, `healthcheck.py`) are
+  mapped in `CONSTITUTION.md` section 6.
 
 ### How the docs are layered
 
@@ -67,16 +68,11 @@ pip install -r requirements-dev.txt      # runtime + pytest + ruff
 
 python -m pytest -q                      # hermetic: no network, no Gemini, no LibreOffice
 python -m ruff check .                   # lint; must stay clean
-python healthcheck.py --mode all         # probe render tools + writable dirs
 
-python main.py                           # batch CLI over artifacts/input/jd_*.txt
-python worker.py --once                  # drain the configured queue, then exit
-python worker.py                         # consume forever (this is the pod)
-python publisher.py --all                # publish every jd_*.txt (dev gateway)
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
 ```
 
-The 6 Postgres integration tests only run when pointed at a throwaway database:
+The 9 Postgres integration tests only run when pointed at a throwaway database:
 
 ```sh
 make test-postgres
@@ -84,18 +80,37 @@ make test-postgres
 TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt python -m pytest -q tests/test_postgres_store.py
 ```
 
-Cluster / containers:
+The local cluster (Docker Desktop Kubernetes) is the only runtime:
 
 ```sh
 .\scripts\local-deploy.ps1                 # build image + secret + helm install
 .\scripts\local-deploy.ps1 -SkipBuild      # redeploy an existing image
 .\scripts\local-deploy.ps1 -Uninstall      # remove the release (keeps PVCs)
 .\scripts\storage-files.ps1 -Action seed   # list | download | shell also valid
-
-docker build -t cv-tailoring-worker:dev .
-docker compose up -d rabbitmq postgres
-docker compose run --rm worker python publisher.py --all
+.\scripts\send-test-job.ps1 -Smoke         # publish one vacancy (own port-forward)
+helm test cv-tailoring                     # in-cluster probe: render tools + AMQP
 ```
+
+The backoffice POC (Astro + React + Tailwind; SSR, shares the worker's Postgres) and
+the batch gateway that the Chrome extension posts to:
+
+```sh
+kubectl port-forward svc/postgres 5432:5432      # in another terminal
+kubectl port-forward svc/rabbitmq 5672:5672      # only for the batch endpoint
+cd backoffice
+npm install
+cp .env.example .env                             # DATABASE_URL, BACKOFFICE_JWT_SECRET, RABBITMQ_URL
+npm run user -- add --email me@example.com --password=secret --name Me --admin
+npm run dev                      # http://localhost:4321 -> sign in (no signup exists)
+npm test                         # vitest: auth, board, batch validation, scraper
+npx tsc --noEmit                 # types
+npm run build                    # SSR bundle -> backoffice/dist
+```
+
+The scraper is loaded unpacked from `extension/` (no build step):
+`chrome://extensions` → Developer mode → Load unpacked → `extension/`, then sign in
+with the same provisioned account and press *Scrape & queue this page* on a listing
+page. One message per vacancy lands on `resumes.generate`.
 
 Charts (offline validation, no cluster needed):
 
@@ -175,6 +190,24 @@ Do not add a dependency just to answer a reference/dead-code question.
     the master CV changes.
 12. **`.env` is gitignored and never staged**, and may still contain now-unused
     Supabase keys (see `CONSTITUTION.md` D9).
+13. **PowerShell 5.1 mangles native arguments and array literals.** `--flag key=(expr)`
+    arrives as two tokens, and inside `@(...)` the element `'--flag=' + $value,`
+    becomes *two* elements - which is how the first live `helm upgrade` ("requires 2
+    arguments") and `kubectl create secret` ("exactly one NAME is required, got 3")
+    failed. Also `$ErrorActionPreference='Stop'` turns a native command's **stderr**
+    into a terminating error, so a script dies before printing its own `[fail]` line.
+    Compute values into variables and wrap native calls like
+    `scripts/send-test-job.ps1` does (see `scripts/AGENTS.md`).
+14. **`helm uninstall` can leave KEDA CRDs behind** (`kubectl get crd | grep keda`);
+    delete the leftovers before re-deploying, otherwise the next install fails with
+    "exists and cannot be imported". Related: Helm 4 applies server-side, so fields
+    previously written by `kubectl patch` collide - `helm upgrade --force-conflicts`
+    takes ownership back.
+15. **Single quotes are not quotes in `cmd.exe`.** `backoffice/scripts/user.mjs` is
+    often run through cmd or through `npm run user -- ...`, where `--password 'secret'`
+    provisions the literal password `'secret'` (login then fails with
+    `invalid credentials`). Pass CLI arguments as `--key=value` (`--password=secret`) -
+    the parser accepts both forms, the `=` form is the unambiguous one.
 
 ## Shell / commands (Windows PowerShell 5.1)
 
@@ -209,8 +242,8 @@ Do not add a dependency just to answer a reference/dead-code question.
 - Docstrings explain the *why* (the invariant being protected), not a restatement
   of the code.
 - Log through `utils.logging_setup.get_logger(__name__)` with structured
-  `key=value` extras. No `print()` in library code - the two CLIs (`main.py`,
-  `publisher.py`) are the deliberate exception.
+  `key=value` extras. No `print()` in library code - the one CLI (`publisher.py`,
+  the host-side dev gateway) is the deliberate exception.
 - Keep Gemini-specific code in `agent/nodes.py`; the pipeline and adapters stay
   provider-agnostic.
 - When you change a fact recorded in `CONSTITUTION.md`, update it in the same change.
@@ -224,6 +257,9 @@ Do not add a dependency just to answer a reference/dead-code question.
   (see `CONSTITUTION.md` section 5).
 - Add a dependency for something the pinned set already covers - and note that
   `pypdf` is currently unused.
+- Add a second run mode. There is exactly one runtime: Docker Desktop Kubernetes,
+  deployed by `scripts/local-deploy.ps1` (no batch CLI, no compose stack, no other
+  local cluster provider - see `CONSTITUTION.md` section 5, legacy list).
 - Trust `helm lint` alone for a chart change.
 - Treat `docs/PROJECT_STATE.md` as live status; it is a point-in-time handoff (its counts are stale - `CONSTITUTION.md` D7).
 

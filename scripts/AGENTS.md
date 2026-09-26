@@ -13,7 +13,8 @@ Read `CONSTITUTION.md` first; chart structure and cluster traps are in
 |---|---|---|
 | `local-deploy.ps1` | PowerShell | Build the image, make it visible to the cluster, resolve chart deps, create the Secret, `helm upgrade --install`, print status. Flags: `-SkipBuild`, `-Uninstall` (keeps PVCs), `-Release`, `-Namespace`, `-Values`, `-Image`, `-LocalDbUrl` |
 | `storage-files.ps1` | PowerShell | `-Action seed` pushes `cv.docx`, `cv_data.json` and any `jd_*.txt` to `/data`; `list`, `download` (PDFs -> `artifacts\output`), `shell`. Talks to the `cv-files` pod, so it works while the worker is scaled to zero |
-| `worker-secret.ps1` | PowerShell | Creates `cv-tailoring-secrets` from `.env` (`GEMINI_API_KEY`, `DATABASE_URL`); real environment variables win over the file; `-DryRun` prints what it would do **without** the values |
+| `send-test-job.ps1` | PowerShell | Publishes one vacancy (or `-All`) from the host to the in-cluster broker the only way that works: opens its own `kubectl port-forward`, rebuilds `RABBITMQ_URL` against `localhost` (the Secret's URL names the in-cluster DNS), forces `QUEUE_BACKEND=amqp`, and refuses to publish until the release and the master CV on the volume exist. `-Smoke` publishes under a fresh id, `-DryRun` prints the plan, `-KeepForward` leaves the tunnel up |
+| `worker-secret.ps1` | PowerShell | Creates `cv-tailoring-secrets` from `.env` (`GEMINI_API_KEY`, `DATABASE_URL`); real environment variables win over the file; `-DryRun` prints what it would do **without** the values. Pass `-DatabaseUrl` when `.env` has no `DATABASE_URL` - `local-deploy.ps1` always does (with the in-cluster URL), so the bare `make worker-secret` only works where `.env` carries one |
 | `check_models.py` | Python | Lists the models this API key can use and checks `MODEL_NAME`; `--strict` exits 1 when it is unavailable and prints the `--set` snippet to deploy with |
 
 Broker credentials are deliberately **not** in `worker-secret.ps1`: the chart
@@ -34,6 +35,11 @@ so the password lives in exactly one place.
   Secret creation in a second script.
 - `storage-files.ps1` failing with "no `cv-files` pod found" means *deploy first*,
   not "the volume is empty".
+- Publishing from the host goes through `send-test-job.ps1`. The manual
+  `kubectl get secret ... rabbitmq-url` snippet in old docs fails twice and
+  silently: that URL names the in-cluster DNS, and `publisher.py` defaults to the
+  `directory` backend, so `QUEUE_BACKEND=amqp` is also required. The script (and
+  the `-DryRun` output) is the single place that gets both right.
 - `check_models.py` imports `agent.nodes.get_genai_client` (the SDK call lives
   there). It is an operator script, so this does not break the one-way
   `utils/ -> agent/` rule.
@@ -46,6 +52,19 @@ so the password lives in exactly one place.
 - PowerShell 5.1: `;` is the only command separator (never `&&` or a bare `&`),
   `$ErrorActionPreference = 'Stop'`, a `Fail` helper exits non-zero with a
   `[fail]` line, and cmdlets are preferred over cmd aliases.
+- Two PowerShell 5.1 parsing/stream traps that bite every new script here:
+  **never** split an expression with a *leading* operator (`+`/`-` at the start of
+  the next line is a parse error - the operator goes at the end of the previous
+  line, or use a backtick); and `$ErrorActionPreference = 'Stop'` turns a native
+  command's **stderr** (`helm status` on a missing release, `kubectl exec` on a
+  non-zero exit) into a terminating error, so the script dies before its `[fail]`
+  message. `send-test-job.ps1`'s `Invoke-External` helper is the pattern to copy.
+- PowerShell 5.1 also mangles native argument *content*: `--set key=(($x -split ':')[0])`
+  is passed as `key=` plus a second lone token, and inside an array literal
+  `'--flag=' + $value,` becomes **two** elements. That is what broke the first live
+  `helm upgrade` ("requires 2 arguments") and `kubectl create secret` ("exactly one
+  NAME is required, got 3"). Compute the value into a variable, then interpolate it
+  into a `"key=$value"` string or pass the variable itself.
 - Python scripts under `scripts/` must call
   `sys.stdout.reconfigure(encoding="utf-8")` before printing (the console is
   cp1252) and are covered by `python -m ruff check .`.

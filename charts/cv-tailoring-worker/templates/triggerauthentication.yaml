@@ -9,6 +9,13 @@ metadata:
     {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
 spec:
   secretTargetRef:
+    # `host` must be the full amqp://user:pass@host:port/vhost URL: KEDA's RabbitMQ
+    # scaler parses it as an AMQP URI. A bare host:port (or a scheme it cannot use)
+    # makes it fail, and username/password alone are not enough for the AMQP path -
+    # that combination produced 403 "username or password not allowed".
+    - parameter: host
+      name: {{ .Values.keda.auth.secretName }}
+      key: {{ .Values.keda.auth.urlKey }}
     - parameter: username
       name: {{ .Values.keda.auth.secretName }}
       key: {{ .Values.keda.auth.usernameKey }}

@@ -3,6 +3,21 @@
 Operational procedures for the event-driven deployment. All commands assume
 `NAMESPACE=default` and release `cv-tailoring` (adjust as needed).
 
+## First install / re-install
+
+1. `.\scripts\local-deploy.ps1` - the **first** install runs in two phases (KEDA CRDs
+   first, then the worker with its ScaledObject), because Helm builds a whole release
+   before creating anything and KEDA ships its CRDs as templates. Later deploys are
+   single-step.
+2. `.\scripts\storage-files.ps1 -Action seed` - the worker needs `/data/cv_data.json`
+   and `/data/input/cv.docx` (exact paths) before any task can run.
+3. `.\scripts\send-test-job.ps1 -Smoke` - publishes one vacancy with its own
+   port-forward, and refuses to publish until the release and the volume are ready.
+4. Re-installing after `-Uninstall`: check `kubectl get crd | findstr keda` first -
+   leftover CRDs make the next install fail with "exists and cannot be imported".
+5. A scaled-to-zero worker takes its logs with it: tail them live, or read the durable
+   evidence instead (the `resumes` row, `/data/output/*`, the queue depth).
+
 ## Daily checks
 
 ```bash
@@ -19,9 +34,10 @@ replicas, and the DLQ stays at 0.
 
 1. `kubectl get scaledobject cv-tailoring-cv-tailoring-worker -o yaml | grep -A5 status`
    — look for `Ready`/`Active` conditions and scaler errors.
-2. Verify the management API the scaler uses:
+2. Check the broker the way the scaler does (it uses the management API,
+   `protocol: http`, with the URL from the Secret's `rabbitmq-management-url` key):
    `kubectl exec -it rabbitmq-0 -- rabbitmqctl status | head`
-   `curl -u "$USER:$PASS" http://rabbitmq.default.svc.cluster.local:15672/api/queues/%2F/resumes.generate`
+   `kubectl exec -it rabbitmq-0 -- rabbitmqctl list_queues name messages messages_ready messages_unacknowledged`
 3. If the metrics endpoint is broken, the `fallback.replicas` value keeps at
    least one worker running; raise it temporarily:
    `helm upgrade ... --set cv-tailoring-worker.keda.fallback.replicas=3`
@@ -43,6 +59,12 @@ The worker refuses to start when preflight fails (by design — fail fast):
 | `MODEL_NAME=... is not available for this API key` | placeholder model id | `python scripts/check_models.py --strict`, then set the real ids via `--set cv-tailoring-worker.config.modelName=...` |
 | `prepared statement ... does not exist` / pooler errors | prepared statements against a pooled endpoint | keep `DB_PREPARE_STATEMENTS=false` (default) |
 | liveness probe fails | `/tmp/cvt` not writable (fsGroup) | check `podSecurityContext` |
+| task restarts from scratch, broker logs `missed heartbeats from client, timeout: 60s` | `AMQP_HEARTBEAT_SECONDS` below the task duration (the graph blocks pika's I/O loop) | keep it above the longest task (`--set cv-tailoring-worker.config.amqpHeartbeatSeconds=1800`) |
+| `rabbitmq-0` boots, then `BOOT FAILED: Please create virtual host "/" prior to importing definitions` | `load_definitions` is set but the definitions file declares no vhost/user | use the chart's definitions (they declare vhost+user+permissions); the broker only re-imports at boot, so restart it after editing them |
+| publish fails with `406 PRECONDITION_FAILED - inequivalent arg 'x-dead-letter-exchange'` | the pre-declared queue's arguments differ from `utils/messaging.py` | align `rabbitmqDefinitions.definitions.queues` with the code, delete the queue and restart the broker |
+| a long node (`adapt_text`, `vision_check`) with `transient API error - backing off` | Gemini quota: **20 requests/day per model on the free tier** | wait for the reset, switch `MODEL_NAME` to another model from `PREFERRED_MODELS` (own quota), or enable billing |
+| row ends `failed`/`dead_lettered` with `[Errno 13] Permission denied: '/data/output/...'` | `/data/output` is owned by root, not by the worker's uid | the `cv-files` pod chowns `/data/input` + `/data/output` to `fileManager.owner` (10001:10001) on start; redeploy with `-SkipBuild` |
+| `helm test` fails while the worker itself is healthy | the chart probe pod lacked the broker env (`RABBITMQ_HOST`, credentials) | upgrade the chart - the test hook now carries the same env as the Deployment |
 
 ## Dead-letter queue
 

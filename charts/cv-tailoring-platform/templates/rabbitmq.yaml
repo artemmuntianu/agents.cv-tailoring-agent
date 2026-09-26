@@ -66,6 +66,19 @@ spec:
                 secretKeyRef:
                   name: {{ $credentials }}
                   key: {{ .Values.rabbitmqCredentials.passwordKey | default "rabbitmq-password" }}
+          # A RabbitMQ boot can take minutes on a CPU-limited/loaded node, and every
+          # `rabbitmq-diagnostics` invocation spawns another Erlang VM that competes
+          # for the same quota - probing with it during boot can starve the broker.
+          # The startup probe is therefore a plain TCP check on the AMQP port (no
+          # Erlang, no CPU cost), and it gates liveness/readiness: a slow first boot
+          # is tolerated instead of being killed every ~3 minutes
+          # (CrashLoopBackOff), while a genuinely dead broker is still restarted.
+          startupProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
           readinessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
@@ -86,8 +99,17 @@ spec:
             - name: data
               mountPath: /var/lib/rabbitmq
             {{- if .Values.rabbitmqDefinitions.create }}
+            # Mount our config as a SINGLE FILE inside conf.d - never over the
+            # directory. The official image ships /etc/rabbitmq/conf.d/10-defaults.conf
+            # (which sets `log.console = true`), and its entrypoint WRITES the
+            # generated default-user/vhost settings into this same directory. A
+            # directory mount hides 10-defaults.conf (silencing the console log, so a
+            # boot failure is invisible) and makes the directory read-only, so the
+            # default vhost "/" is never created and `load_definitions` dies with
+            # BOOT FAILED: Please create virtual host "/" prior to importing definitions.
             - name: config
-              mountPath: /etc/rabbitmq/conf.d
+              mountPath: /etc/rabbitmq/conf.d/10-cv-tailoring.conf
+              subPath: 10-cv-tailoring.conf
             - name: definitions
               mountPath: /etc/rabbitmq/definitions
             {{- end }}

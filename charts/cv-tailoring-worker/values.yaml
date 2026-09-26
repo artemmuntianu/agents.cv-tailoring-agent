@@ -40,6 +40,8 @@ config:
   rabbitmqVhost: "/"
   maxAttempts: 3
   queueRetryTtlMs: 300000
+  # AMQP heartbeat; must exceed the longest task (see config.AMQP_HEARTBEAT_SECONDS).
+  amqpHeartbeatSeconds: 600
   logLevel: INFO
   logFormat: json
   tempRoot: /tmp/cvt
@@ -134,12 +136,17 @@ keda:
   activationQueueLength: "0"
   # QueueLength == ready + unacked, which is what we want for 15-45s tasks.
   mode: QueueLength
-  # RabbitMQ management API (the KEDA rabbitmq scaler talks HTTP, not AMQP).
-  host: http://rabbitmq.default.svc.cluster.local:15672
-  protocol: amqp
+  # protocol MUST be http: it makes the scaler read `messages` from the RabbitMQ
+  # management API, which counts UNACKNOWLEDGED messages too. With `amqp` the count
+  # is ready-only, so KEDA scales the pod to zero the moment the worker prefetches
+  # its job - killing the task mid-flight (observed: scale-up and scale-down 60s
+  # apart while the task was still running).
+  protocol: http
   # Credentials come from a Secret via TriggerAuthentication (never inline).
   auth:
     secretName: rabbitmq-credentials
+    # Keys holding the connection URLs (amqp for the worker, http for the scaler).
+    urlKey: rabbitmq-management-url
     usernameKey: rabbitmq-username
     passwordKey: rabbitmq-password
   fallback:

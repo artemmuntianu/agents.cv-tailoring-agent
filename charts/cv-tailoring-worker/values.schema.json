@@ -28,6 +28,7 @@
         "queueName": { "type": "string", "minLength": 1 },
         "prefetchCount": { "type": "integer", "minimum": 1 },
         "maxAttempts": { "type": "integer", "minimum": 1 },
+        "amqpHeartbeatSeconds": { "type": "integer", "minimum": 0 },
         "logFormat": { "enum": ["json", "text"] },
         "maxRevisions": { "type": "integer", "minimum": 1 },
         "renderDpi": { "type": "integer", "minimum": 30, "maximum": 300 }
@@ -49,12 +50,13 @@
         "pollingInterval": { "type": "integer", "minimum": 1 },
         "cooldownPeriod": { "type": "integer", "minimum": 0 },
         "mode": { "enum": ["QueueLength", "Ready", "Unacked"] },
-        "host": { "type": "string" },
+        "protocol": { "enum": ["amqp", "amqps", "http", "https", "auto"] },
         "auth": {
           "type": "object",
           "required": ["secretName"],
           "properties": {
             "secretName": { "type": "string", "minLength": 1 },
+            "urlKey": { "type": "string" },
             "usernameKey": { "type": "string" },
             "passwordKey": { "type": "string" }
           }

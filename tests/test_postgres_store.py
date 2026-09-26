@@ -28,14 +28,20 @@ def store():
     # The database must be disposable: drop whatever a previous run left behind.
     with db.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("drop table if exists resumes, model_availability, app_settings")
+            cur.execute(
+                "drop table if exists resume_history, resume_board, resumes, "
+                "model_availability, app_settings"
+            )
         conn.commit()
     db._schema_ready = False
     db.ensure_schema()
     yield db
     with db.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("drop table if exists resumes, model_availability, app_settings")
+            cur.execute(
+                "drop table if exists resume_history, resume_board, resumes, "
+                "model_availability, app_settings"
+            )
         conn.commit()
 
 
@@ -129,3 +135,94 @@ def test_model_state_ledger_round_trip(store):
     assert loaded["current_model"] == "gemini-y"
     assert loaded["unavailable"] == []
     assert "updated_at" in loaded
+
+
+def test_board_tables_reference_the_job_row(store):
+    """Kanban state is board-owned, keyed by job_id, and cascades with the vacancy."""
+    job_id = "848944-board"
+    store.upsert_job(_row(job_id, status="processing"))
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into resume_board (job_id, stage) values (%s, %s)",
+                (job_id, "applied"),
+            )
+            cur.execute(
+                "insert into resume_history "
+                "(job_id, actor, action, kind, from_state, to_state) "
+                "values (%s, %s, %s, %s, %s, %s)",
+                (job_id, "Me", "Applied through the careers portal", "move", "created", "applied"),
+            )
+            cur.execute("select stage from resume_board where job_id = %s", (job_id,))
+            assert cur.fetchone()["stage"] == "applied"
+            cur.execute("select count(*) as n from resume_history where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 1
+        conn.commit()
+
+    # A manual board move must never touch the worker's own claim state.
+    assert store.get_job(job_id)["status"] == "processing"
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("delete from resumes where job_id = %s", (job_id,))
+            cur.execute("select count(*) as n from resume_board where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 0
+            cur.execute("select count(*) as n from resume_history where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 0
+        conn.commit()
+
+
+def test_board_history_rejects_sloppy_rows(store):
+    """The table enforces the dialog's contract, so a bad row can never land."""
+    import psycopg
+
+    job_id = "848944-history"
+    store.upsert_job(_row(job_id))
+
+    bad_rows = [
+        ("Someone", "moved", "move"),  # actor is a two-option dropdown
+        ("Me", "", "move"),  # the reason is required
+        ("Me", "moved", "sideways"),  # kind is move | tailoring
+    ]
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            for actor, action, kind in bad_rows:
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    cur.execute(
+                        "insert into resume_history "
+                        "(job_id, actor, action, kind, from_state, to_state) "
+                        "values (%s, %s, %s, %s, 'created', 'applied')",
+                        (job_id, actor, action, kind),
+                    )
+                conn.rollback()
+        conn.commit()
+
+
+def test_app_users_are_provisioned_not_signed_up(store):
+    """Accounts exist only because an admin created them; the email is unique."""
+    import psycopg
+
+    row = ("u-1", "andrei@example.com", "Andrei", "scrypt$1$2$3$4", True)
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into app_users (id, email, display_name, password_hash, is_admin) "
+                "values (%s, %s, %s, %s, %s)",
+                row,
+            )
+            cur.execute("select email, is_active, is_admin from app_users where id = %s", ("u-1",))
+            created = cur.fetchone()
+            assert created["email"] == "andrei@example.com"
+            assert created["is_active"] is True  # usable straight away
+            assert created["is_admin"] is True
+
+            # A second account cannot take the same email (the UI has no signup path,
+            # so this is the only way a duplicate could ever appear).
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                cur.execute(
+                    "insert into app_users (id, email, password_hash) values (%s, %s, %s)",
+                    ("u-2", "andrei@example.com", "scrypt$5$6$7$8"),
+                )
+            conn.rollback()
+        conn.commit()

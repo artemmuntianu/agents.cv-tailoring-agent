@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Queue vacancies</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #0f172a;
+      }
+      h1 { font-size: 14px; margin: 0 0 2px; }
+      p.hint { margin: 0 0 10px; color: #64748b; font-size: 12px; }
+      label { display: block; margin-bottom: 8px; font-size: 11px; color: #475569; text-transform: uppercase; letter-spacing: 0.03em; }
+      input {
+        width: 100%; box-sizing: border-box; margin-top: 3px; padding: 6px 8px;
+        border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; text-transform: none;
+      }
+      button {
+        width: 100%; padding: 8px; border: 0; border-radius: 6px; background: #0f172a;
+        color: #fff; font-size: 13px; cursor: pointer;
+      }
+      button.secondary { background: #e2e8f0; color: #0f172a; }
+      button:disabled { background: #cbd5e1; cursor: default; }
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      #status { margin-top: 10px; font-size: 12px; color: #475569; white-space: pre-wrap; }
+      #status.error { color: #be123c; }
+      #status.ok { color: #15803d; }
+      #session { margin-bottom: 10px; font-size: 12px; color: #475569; }
+      #scrape { margin-top: 10px; }
+      a { color: #1d4ed8; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>Queue vacancies</h1>
+    <p class="hint">Scrapes every <code>job-item</code> card on this page and posts the batch to the tailoring gateway.</p>
+
+    <div id="session">Checking session…</div>
+
+    <div id="auth" class="hidden">
+      <label>Gateway<input id="gateway" type="url" placeholder="http://localhost:4321" /></label>
+      <label>Email<input id="email" type="email" autocomplete="username" /></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" /></label>
+      <button id="signin">Sign in</button>
+    </div>
+
+    <div id="queue" class="hidden">
+      <button id="scrape">Scrape &amp; queue this page</button>
+      <div class="row"><button id="signout" class="secondary">Sign out</button></div>
+    </div>
+
+    <div id="status"></div>
+
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

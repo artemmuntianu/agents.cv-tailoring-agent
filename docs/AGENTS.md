@@ -14,24 +14,23 @@ and the disagreement is recorded.
 | `AGENTS.md` (root) + one file per layer | The map, plus the mechanical detail for `agent/`, `utils/`, `charts/`, `scripts/`, `tests/`, `docs/`, `.github/` |
 | `docs/AGENTS.md` | This file: which document owns what, and what must not drift |
 | `docs/PROJECT_STATE.md` | A **point-in-time** session handoff (resume point for the first live deploy). Restored deliberately; its counts are already stale (D7), so never read it as live status |
-| `docs/ARCHITECTURE.md` | How the code maps onto the design documents: pod groups, the per-task step table (a-g), deliberate deviations, why the CLI still works |
+| `docs/ARCHITECTURE.md` | How the code maps onto the design documents: the verified cluster topology (pod groups, ports, scaling path), the per-task step table (a-g), scaling/storage invariants, what owns what, deliberate deviations |
 | `docs/MESSAGE_CONTRACT.md` | The queue contract: payload fields, `job_id` semantics, the ack/retry/DLQ matrix, status lifecycle, idempotency key, directory-backend behaviour |
 | `docs/RUNBOOK.md` | Operations: daily checks, queue backlog, CrashLoop, DLQ, Gemini quota, secret rotation, scaling/cost knobs, rollback |
-| `docs/postgres_schema.sql` | The declarative DDL for humans; docker-compose mounts it as the initdb script. The worker self-bootstraps from `utils/db.SCHEMA_SQL` (see D10) |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
 
 Do not restate a layer's rules here - link to `charts/AGENTS.md`, `tests/AGENTS.md` and
 the rest instead.
 
-## Two Postgres schemas (D10)
+## One Postgres schema (D10, resolved)
 
-`docs/postgres_schema.sql` and `utils/db.SCHEMA_SQL` describe the same core tables but are
-not generated from one another. The `.sql` file is the human-facing DDL (docker-compose mounts
-it as the initdb script) and additionally creates `vacancies`, `applications`, two indexes and
-the `set_updated_at()` trigger; `SCHEMA_SQL` - what the worker executes on startup, and
-therefore what exists in the cluster - creates only `resumes` + its index/CHECK,
-`model_availability` and `app_settings`. Keep both in sync on a schema change
-(`CONSTITUTION.md` D10).
+There is exactly one DDL: `utils/db.SCHEMA_SQL`, which the worker executes on startup -
+so it is what exists in the cluster. It creates the worker's tables (`resumes`,
+`model_availability`, `app_settings`) **and the backoffice's three** (`resume_board`,
+`resume_history`, `app_users` - the first two `on delete cascade` to `resumes(job_id)`),
+because the backoffice shares this database. `docs/postgres_schema.sql` was deleted on
+2026-09-25 (its only consumer, the docker-compose initdb path, was removed). Add tables to
+`SCHEMA_SQL` (and to `tests/test_postgres_store.py`) - never to a second file.
 
 ## History: the docs set was deleted once, then restored
 

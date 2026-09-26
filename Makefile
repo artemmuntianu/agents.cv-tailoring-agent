@@ -7,8 +7,10 @@ CHART_PLATFORM := charts/cv-tailoring-platform
 RELEASE ?= cv-tailoring
 NAMESPACE ?= default
 VALUES ?= deploy/values/dev.yaml
-IMAGE_REPO ?= ghcr.io/artemmuntianu/agents-cv-tailoring-agent/cv-tailoring-worker
-IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+# The single supported runtime builds this image locally and runs it on Docker
+# Desktop Kubernetes (see scripts/local-deploy.ps1) - no registry in the loop.
+IMAGE_REPO ?= cv-tailoring-worker
+IMAGE_TAG ?= dev
 
 .DEFAULT_GOAL := help
 
@@ -31,25 +33,9 @@ test: ## Run the test suite
 lint: ## Ruff lint
 	python -m ruff check .
 
-.PHONY: healthcheck
-healthcheck: ## Probe the local runtime (render tools, dirs)
-	python healthcheck.py --mode all || true
-
-.PHONY: publish
-publish: ## Publish every jd_*.txt in artifacts/input to the configured queue
-	python publisher.py --all
-
-.PHONY: worker-once
-worker-once: ## Drain the queue once, then exit
-	python worker.py --once
-
-.PHONY: compose-up
-compose-up: ## Start RabbitMQ + Postgres locally
-	docker compose up -d rabbitmq postgres
-
-.PHONY: compose-down
-compose-down: ## Stop the local stack
-	docker compose down
+.PHONY: send-test-job
+send-test-job: ## Publish one vacancy to the in-cluster broker (own port-forward)
+	powershell -ExecutionPolicy Bypass -File scripts/send-test-job.ps1 -Smoke
 
 .PHONY: docker-build
 docker-build: ## Build the worker image
@@ -111,13 +97,7 @@ check-models: ## Verify MODEL_NAME against the models this Gemini key can use
 	python scripts/check_models.py --strict
 
 .PHONY: test-postgres
-test-postgres: ## Run the production-store tests against the local Postgres
+test-postgres: ## Production-store tests against the cluster Postgres (needs a port-forward)
+	# kubectl port-forward svc/postgres 5432:5432   # in a second terminal
 	TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt \
 		python -m pytest -q tests/test_postgres_store.py
-
-# --------------------------------------------------------------------------- #
-# infrastructure
-# --------------------------------------------------------------------------- #
-.PHONY: kind-create
-kind-create: ## Create a local kind cluster for dev/CI
-	kind create cluster --name cvtailoring

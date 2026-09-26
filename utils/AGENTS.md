@@ -19,6 +19,10 @@ selected by an env var, reached through a cached factory with a test hook:
 | Model ledger | `MODEL_STATE_BACKEND` | `file`, `postgres` | `model_state.get_store()` / `reset_store_cache()` |
 | Artifacts | (none) | `LocalStorage` only | `storage.get_storage()` / `reset_storage_cache()` |
 
+The `directory` / `local` / `file` values exist **only** for the hermetic test suite
+(and per `CONSTITUTION.md` section 2 the cluster always runs amqp / postgres /
+postgres). Keep them working - removing one means rewriting the tests that use it.
+
 Call sites never branch on the backend. Every cache has a `reset_*` helper, and
 `tests/helpers.reset_caches()` calls all of them - **if you add a cached factory,
 add it there too.**
@@ -28,8 +32,8 @@ add it there too.**
 | Module | Responsibility | Public surface |
 |---|---|---|
 | `logging_setup.py` | Structured logs (`text`/`json`) + heartbeat file | `get_logger`, `setup_logging`, `ContextLogger.bind`, `write_heartbeat`, `heartbeat_age_seconds`, `utc_now_iso` |
-| `messaging.py` | Queue abstraction: `HandlerResult`/`Outcome`, `Delivery`, `DirectoryQueue`, `AmqpQueue`, retry ladder, DLQ | `get_queue`, `HandlerResult.ack/retry/retry_later/dead_letter`, `RETRY_LADDER_SECONDS` |
-| `db.py` | Job store + claim semantics + schema DDL | `get_db`, `job_key`, `new_job_id`, `JOB_FIELDS`, `SCHEMA_SQL`, `ACTIVE_STATUSES` |
+| `messaging.py` | Queue abstraction: `HandlerResult`/`Outcome`, `Delivery`, `DirectoryQueue`, `AmqpQueue`, retry ladder, DLQ. The AMQP heartbeat comes from `config.AMQP_HEARTBEAT_SECONDS` and must stay **above the longest task** - pika cannot service heartbeats while the graph runs | `get_queue`, `HandlerResult.ack/retry/retry_later/dead_letter`, `RETRY_LADDER_SECONDS` |
+| `db.py` | Job store + claim semantics + schema DDL. `SCHEMA_SQL` is the **only** DDL and also creates the backoffice's `resume_board` / `resume_history` / `app_users` (the backoffice shares this database) | `get_db`, `job_key`, `new_job_id`, `JOB_FIELDS`, `SCHEMA_SQL`, `ACTIVE_STATUSES` |
 | `storage.py` | Local artifact IO + per-task materialisation | `get_storage`, `TaskContext`, `LocalStorage`, `output_key_for` |
 | `model_state.py` | Model-availability ledger + fallback ladder | `init_model_state`, `advance_after_failure`, `next_available_model`, `preferred_available` |
 | `retry.py` | Gemini backoff + quota handling | `retry_with_exponential_backoff`, `RetryLater`, `wait_until_midnight_utc` |

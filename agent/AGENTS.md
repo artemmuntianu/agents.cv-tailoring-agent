@@ -95,5 +95,5 @@ The adaptation prompt is part of the product, not a comment. Keep all of these:
 - Bypass `pipeline.run_cv_tailoring()` / `run_task()` from a new entry point.
 - Cache the CV model in a module-level global (this caused a cross-task staleness
   bug; `cv_data` is always an explicit argument).
-- Import anything from `worker.py` / `main.py` (entry points depend on this layer,
-  never the other way round).
+- Import anything from `worker.py` (the entry point depends on this layer, never the
+  other way round).

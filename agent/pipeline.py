@@ -1,8 +1,7 @@
 """Shared task runner.
 
-Both entry points (`main.py` for local batches, `worker.py` for queue messages)
-go through here, so the LangGraph invocation is identical locally and in the
-cluster.
+The worker entry point (`worker.py`) and the tests both go through here, so the
+LangGraph invocation is identical on the cluster and in the suite.
 """
 
 import os

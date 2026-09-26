@@ -19,6 +19,12 @@ model_state.json
 !tests/**/*.json
 !**/values.schema.json
 !.github/**/*.json
+!backoffice/**/*.json
+
+# Backoffice (Astro): dependency and build output never enters git.
+backoffice/node_modules/
+backoffice/dist/
+backoffice/.astro/
 
 # Runtime data
 queue/

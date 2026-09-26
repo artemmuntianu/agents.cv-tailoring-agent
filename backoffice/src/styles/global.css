@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* The board is a desktop tool: no responsive breakpoints, no dark mode switch. */
+html,
+body {
+  height: 100%;
+}
