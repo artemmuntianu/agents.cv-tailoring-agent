@@ -30,7 +30,7 @@ def store():
         with conn.cursor() as cur:
             cur.execute(
                 "drop table if exists resume_history, resume_board, resumes, "
-                "board_actions, model_availability, app_settings"
+                "board_actions, artifact_purge, model_availability, app_settings"
             )
         conn.commit()
     db._schema_ready = False
@@ -40,7 +40,7 @@ def store():
         with conn.cursor() as cur:
             cur.execute(
                 "drop table if exists resume_history, resume_board, resumes, "
-                "board_actions, model_availability, app_settings"
+                "board_actions, artifact_purge, model_availability, app_settings"
             )
         conn.commit()
 
@@ -89,7 +89,7 @@ def test_increment_update_and_find_completed_round_trip(store):
 
     updated = store.update_job(job_id, status="completed", pdf_url="https://x/p.pdf")
     assert updated["status"] == "completed"
-    assert store.find_completed("local:848944:v1")["job_id"] == job_id
+    assert store.find_completed("local:djinni:848944:v1")["job_id"] == job_id
 
     store.update_job(job_id, status="completed", error=None, revision_count=2)
     row = store.get_job(job_id)
@@ -211,7 +211,7 @@ def test_board_tables_reference_the_job_row(store):
                 "insert into resume_history "
                 "(job_id, actor, action, kind, from_state, to_state) "
                 "values (%s, %s, %s, %s, %s, %s)",
-                (job_id, "Candidate", "Applied through the careers portal", "move", "created", "applied"),
+                (job_id, "Candidate", "Applied through the careers portal", "move", "prepare", "applied"),
             )
             cur.execute("select stage from resume_board where job_id = %s", (job_id,))
             assert cur.fetchone()["stage"] == "applied"
@@ -533,6 +533,61 @@ def test_a_removed_action_is_still_visible_to_history(store):
     assert retired["uses"] == 1
 
 
+def test_removing_a_card_cascades_and_queues_its_artifacts(store):
+    """The SQL behind `POST /api/board/remove`.
+
+    Mirrors `backoffice/src/lib/db.ts::{queueArtifactPurge,purgeCard}`: the queue is written
+    first (the row's artifact paths are the only record of them), then the row goes - and the
+    card, its column and its whole history go with it, because `resume_board` and
+    `resume_history` cascade from `resumes`. Nothing is tombstoned: that is what "remove"
+    means (invariant 22), and the queue deliberately has no foreign key to the deleted row.
+    """
+    job_id = "848944-remove"
+    store.upsert_job(_row(job_id, status="completed"))
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into resume_board "
+                "(job_id, stage, archived_at, archived_actor, archived_reason) "
+                "values (%s, 'interviewing', now(), 'Company', 'Salary mismatch')",
+                (job_id,),
+            )
+            cur.execute(
+                "insert into resume_history (job_id, actor, action, kind, from_state, to_state) "
+                "values (%s, 'Company', 'Salary mismatch', 'archive', 'active', 'archived')",
+                (job_id,),
+            )
+
+            # The paths the board could not delete: queued before the row disappears.
+            paths = ["/data/output/848944.pdf", "/data/output/848944.docx"]
+            cur.execute(
+                "insert into artifact_purge (stored_path, job_id) "
+                "select * from unnest(%s::text[], %s::text[]) "
+                "on conflict (stored_path) do update set job_id = excluded.job_id, "
+                "queued_at = now()",
+                (paths, [job_id, job_id]),
+            )
+            cur.execute("select count(*) as n from artifact_purge where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 2
+
+            cur.execute("delete from resumes where job_id = %s", (job_id,))
+            assert cur.rowcount == 1
+        conn.commit()
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            for table in ("resumes", "resume_board", "resume_history"):
+                cur.execute(f"select count(*) as n from {table} where job_id = %s", (job_id,))
+                assert cur.fetchone()["n"] == 0, table
+            # The queue outlives the card: it is what `storage-files.ps1 -Action purge` reads.
+            cur.execute("select count(*) as n from artifact_purge where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 2
+            cur.execute("delete from artifact_purge where job_id = %s", (job_id,))
+            assert cur.rowcount == 2
+        conn.commit()
+
+
 def test_app_users_are_provisioned_not_signed_up(store):
     """Accounts exist only because an admin created them; the email is unique."""
     import psycopg
@@ -560,3 +615,101 @@ def test_app_users_are_provisioned_not_signed_up(store):
                 )
             conn.rollback()
         conn.commit()
+
+
+def test_a_legacy_database_is_migrated_to_the_source_and_scraped_vocabulary(store):
+    """A database created before the source/Scraped rework must come out the other side.
+
+    The old shape is built by hand - no `source`/`description_raw`, the three-column unique
+    index, `stage = 'created'` on the board and `created` in the history vocabulary - and then
+    `ensure_schema()` has to bring it forward without losing the rows.
+    """
+    from utils.db import PostgresDb
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "drop table if exists resume_history, resume_board, resumes, "
+                "board_actions, artifact_purge, model_availability, app_settings"
+            )
+            cur.execute(
+                """
+                create table resumes (
+                    job_id      text primary key,
+                    user_id     text,
+                    external_id text not null,
+                    title       text,
+                    company     text,
+                    source_url  text,
+                    cv_version  text not null default 'v1',
+                    status      text not null default 'queued',
+                    attempts    integer not null default 0,
+                    created_at  timestamptz not null default now(),
+                    updated_at  timestamptz not null default now()
+                )
+                """
+            )
+            cur.execute(
+                "create unique index resumes_job_key_idx"
+                " on resumes (coalesce(user_id, 'local'), external_id, cv_version)"
+            )
+            cur.execute(
+                "create table resume_board ("
+                " job_id text primary key, stage text not null default 'created',"
+                " updated_at timestamptz not null default now())"
+            )
+            cur.execute(
+                "create table resume_history ("
+                " id bigserial primary key, job_id text not null,"
+                " at timestamptz not null default now(), actor text not null,"
+                " action text not null, kind text not null,"
+                " from_state text not null, to_state text not null)"
+            )
+            cur.execute(
+                "insert into resumes (job_id, user_id, external_id, status)"
+                " values ('legacy-1', 'u-1', '848944', 'completed')"
+            )
+            cur.execute("insert into resume_board (job_id, stage) values ('legacy-1', 'created')")
+            cur.execute(
+                "insert into resume_history (job_id, actor, action, kind, from_state, to_state)"
+                " values ('legacy-1', 'Candidate', 'Applied online', 'move', 'created', 'applied')"
+            )
+        conn.commit()
+
+    migrated = PostgresDb(dsn=os.environ["TEST_DATABASE_URL"])
+    migrated.ensure_schema()
+
+    with migrated.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("select source, description_raw from resumes where job_id = 'legacy-1'")
+            row = cur.fetchone()
+            assert row["source"] == "djinni", "the new column back-fills old rows"
+            assert row["description_raw"] is None, "there is no job description to invent"
+
+            cur.execute("select stage from resume_board where job_id = 'legacy-1'")
+            assert cur.fetchone()["stage"] == "prepare", "Created became Prepare"
+
+            cur.execute("select from_state from resume_history where job_id = 'legacy-1'")
+            assert cur.fetchone()["from_state"] == "prepare", "the history vocabulary moved too"
+
+            cur.execute("select indexdef from pg_indexes where indexname = 'resumes_job_key_idx'")
+            assert "source" in cur.fetchone()["indexdef"], "the business key was rebuilt"
+
+            # The rebuilt key separates sites - the whole point of the column - and one
+            # site's own number is still unique (the next block proves it).
+            cur.execute(
+                "insert into resumes (job_id, user_id, external_id, source, status)"
+                " values ('dou-1', 'u-1', '848944', 'dou', 'queued')"
+            )
+        conn.commit()
+
+    import psycopg
+
+    with migrated.connection() as conn:
+        with conn.cursor() as cur:
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                cur.execute(
+                    "insert into resumes (job_id, user_id, external_id, source, status)"
+                    " values ('dup-1', 'u-1', '848944', 'djinni', 'queued')"
+                )
+

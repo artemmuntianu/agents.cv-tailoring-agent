@@ -3,6 +3,7 @@ import BoardToolbar from './BoardToolbar';
 import KanbanBoard from './KanbanBoard';
 import NavBar from './NavBar';
 import ReasonDialog from './ReasonDialog';
+import RemoveDialog from './RemoveDialog';
 import VacancyModal from './VacancyModal';
 import { countArchived, countByStage } from '../lib/board';
 import { DEFAULT_FILTERS, filterCards, type BoardFilters } from '../lib/filters';
@@ -43,6 +44,10 @@ export default function App({ session }: AppProps) {
   const [actions, setActions] = useState<BoardAction[]>([]);
   /** The card waiting for the refusal dialog's confirmation. */
   const [pendingArchive, setPendingArchive] = useState<BoardCard | null>(null);
+  /** The card waiting for the *removal* confirmation (irreversible). */
+  const [pendingRemoval, setPendingRemoval] = useState<BoardCard | null>(null);
+  /** A one-line explanation of what an action did (e.g. artifacts queued for the sweep). */
+  const [note, setNote] = useState<string | null>(null);
 
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoading(true);
@@ -112,27 +117,45 @@ export default function App({ session }: AppProps) {
     };
   }, [refresh]);
 
+  useEffect(() => {
+    // The extension's `Scraped` link lands on `/?card=<job_id>`: open that vacancy as soon as
+    // the board has it. The modal renders from `cards`, not from the filtered view, so it also
+    // works when the current filters happen to hide the column.
+    if (openId) return;
+    const requested = new URLSearchParams(window.location.search).get('card');
+    if (!requested) return;
+    if (cards.some((card) => card.jobId === requested)) setOpenId(requested);
+  }, [cards, openId]);
+
   /**
    * One confirmed change: POST, then re-read the board and the vocabulary. A refused
    * request sets the error *after* the re-read, because `refresh()` clears it (the DB is
-   * the display, so the previous state comes back on screen either way).
+   * the display, so the previous state comes back on screen either way). The route's JSON is
+   * returned so a caller can surface its `note` (e.g. "artifacts queued for the sweep").
    */
-  async function mutate(path: string, body: unknown) {
+  async function mutate(path: string, body: unknown): Promise<Record<string, unknown> | null> {
     let failure: string | null = null;
+    let payload: Record<string, unknown> | null = null;
+    setNote(null);
     try {
       const response = await fetch(path, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const payload = (await response.json()) as { ok: boolean; error?: string };
-      if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      const parsed = (await response.json()) as { ok: boolean; error?: string } & Record<
+        string,
+        unknown
+      >;
+      if (!response.ok || !parsed.ok) throw new Error(parsed.error ?? `HTTP ${response.status}`);
+      payload = parsed;
     } catch (cause) {
       failure = cause instanceof Error ? cause.message : String(cause);
     }
     await refresh();
     await loadActions();
     if (failure) setError(failure);
+    return payload;
   }
 
   async function confirmMove(actor: Actor, action: string) {
@@ -157,6 +180,21 @@ export default function App({ session }: AppProps) {
    */
   async function restore(jobId: string) {
     await mutate('/api/board/restore', { jobId });
+  }
+
+  /**
+   * Removal is the one action with no way back, so it happens only after the dialog and it
+   * deliberately leaves the board *without* the card: the vacancy is forgotten, artifacts
+   * included. Whatever the board could not delete itself is queued for the volume sweep, and
+   * the route's note tells the operator to run it.
+   */
+  async function confirmRemove() {
+    if (!pendingRemoval) return;
+    const jobId = pendingRemoval.jobId;
+    setPendingRemoval(null);
+    const result = await mutate('/api/board/remove', { jobId });
+    const explanation = typeof result?.note === 'string' ? result.note : null;
+    if (explanation) setNote(explanation);
   }
 
   const visible = useMemo(() => filterCards(cards, filters), [cards, filters]);
@@ -228,6 +266,12 @@ export default function App({ session }: AppProps) {
           </p>
         )}
 
+        {note && (
+          <p className="border-b border-emerald-200 bg-emerald-50 px-6 py-2 text-sm text-emerald-800">
+            {note}
+          </p>
+        )}
+
         {!error && !loading && cards.length === 0 && (
           <p className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-800">
             No vacancies yet. Scrape a listing page with the Chrome extension
@@ -263,6 +307,9 @@ export default function App({ session }: AppProps) {
             setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null)
           }
           onRestore={(jobId) => void restore(jobId)}
+          onRemove={(jobId) =>
+            setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null)
+          }
         />
       </main>
 
@@ -275,6 +322,12 @@ export default function App({ session }: AppProps) {
           actions={actions}
           actionsKind="move"
           confirmLabel="Proceed"
+          // Entering Prepare is what queues tailoring - say so before it happens.
+          warning={
+            pending.to === 'prepare'
+              ? 'Moving this card to Prepare queues the tailored CV for it: the worker will run Gemini on this vacancy.'
+              : undefined
+          }
           onProceed={confirmMove}
           onCancel={() => setPending(null)}
         />
@@ -309,6 +362,18 @@ export default function App({ session }: AppProps) {
             setOpenId(null);
             void restore(jobId);
           }}
+          onRemove={(jobId) => {
+            setOpenId(null);
+            setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
+          }}
+        />
+      )}
+
+      {pendingRemoval && (
+        <RemoveDialog
+          card={pendingRemoval}
+          onConfirm={() => void confirmRemove()}
+          onCancel={() => setPendingRemoval(null)}
         />
       )}
     </div>

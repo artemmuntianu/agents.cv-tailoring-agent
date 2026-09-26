@@ -8,8 +8,19 @@
  */
 
 export const MAX_BATCH_SIZE = 25;
+/** How many vacancies one status lookup may ask about (a whole listing page). */
+export const MAX_STATUS_IDS = 200;
 const MAX_DESCRIPTION_CHARS = 200_000;
 const MAX_FIELD_CHARS = 300;
+/** Ids the DB's shape guard accepts (`resumes_job_id_shape` uses the same alphabet). */
+const EXTERNAL_ID = /^[A-Za-z0-9_.:-]+$/;
+/**
+ * A site slug (`resumes.source`, guarded by `resumes_source_shape`): lower-case, dashes,
+ * 2-32 characters. `djinni` is the default so an extension build that predates `source`
+ * keeps producing exactly the rows it did before.
+ */
+const SOURCE_SLUG = /^[a-z0-9][a-z0-9-]{1,31}$/;
+export const DEFAULT_SOURCE = 'djinni';
 
 export interface ScrapedVacancy {
   external_id: string;
@@ -20,7 +31,7 @@ export interface ScrapedVacancy {
 }
 
 export type BatchParse =
-  | { ok: true; vacancies: ScrapedVacancy[]; duplicates: number }
+  | { ok: true; vacancies: ScrapedVacancy[]; duplicates: number; source: string }
   | { ok: false; error: string };
 
 function asText(value: unknown, limit = MAX_FIELD_CHARS): string {
@@ -31,6 +42,14 @@ export function parseBatchRequest(body: unknown): BatchParse {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return { ok: false, error: 'body must be a JSON object' };
   }
+  // The site is per *request*, not per vacancy: one page is scraped from one site, and
+  // the scout posts a batch of one feed. It is half of the vacancy's identity, so it is
+  // validated before anything is queued.
+  const source = (asText((body as { source?: unknown }).source, 32) || DEFAULT_SOURCE).toLowerCase();
+  if (!SOURCE_SLUG.test(source)) {
+    return { ok: false, error: `source must be a site slug (got "${source.slice(0, 32)}")` };
+  }
+
   const items = (body as { vacancies?: unknown }).vacancies;
   if (!Array.isArray(items)) return { ok: false, error: 'vacancies must be an array' };
   if (items.length === 0) return { ok: false, error: 'vacancies is empty' };
@@ -85,7 +104,42 @@ export function parseBatchRequest(body: unknown): BatchParse {
     });
   }
 
-  return { ok: true, vacancies, duplicates };
+  return { ok: true, vacancies, duplicates, source };
+}
+
+/**
+ * Validate `GET /api/vacancies/status?external_ids=a,b,c`.
+ *
+ * The injected per-card buttons ask this before they decide between `Scrape` and
+ * `Scraped`, so it has to answer for a whole listing page in one call. Rejects anything the
+ * batch validator would reject later, and de-duplicates: a page with the same vacancy twice
+ * must not cost two lookups.
+ */
+export function parseStatusQuery(
+  raw: string | null | undefined,
+  rawSource?: string | null,
+): { ok: true; ids: string[]; source: string } | { ok: false; error: string } {
+  const source = (String(rawSource ?? '').trim() || DEFAULT_SOURCE).toLowerCase();
+  if (!SOURCE_SLUG.test(source)) {
+    return { ok: false, error: `source must be a site slug (got "${source.slice(0, 32)}")` };
+  }
+  const ids = String(raw ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (ids.length === 0) {
+    return { ok: false, error: 'external_ids is required (comma-separated)' };
+  }
+  if (ids.length > MAX_STATUS_IDS) {
+    return { ok: false, error: `too many ids (${ids.length} > ${MAX_STATUS_IDS})` };
+  }
+  for (const id of ids) {
+    if (id.length > MAX_FIELD_CHARS || !EXTERNAL_ID.test(id)) {
+      return { ok: false, error: `"${id.slice(0, 40)}" is not a valid external_id` };
+    }
+  }
+  return { ok: true, ids: Array.from(new Set(ids)), source };
 }
 
 /**
@@ -95,13 +149,16 @@ export function parseBatchRequest(body: unknown): BatchParse {
  */
 export function toTaskMessage(
   vacancy: ScrapedVacancy,
-  userId: string,
-  options: { jobId: string; cvVersion?: string; now?: Date },
+  // `null` is a real case: the CLI/smoke-test rows carry no user id, and the message has to
+  // match the row's business key or the worker's claim would insert a second row.
+  userId: string | null,
+  options: { jobId: string; cvVersion?: string; source?: string; now?: Date },
 ): Record<string, unknown> {
   return {
     job_id: options.jobId,
     user_id: userId,
     external_id: vacancy.external_id,
+    source: options.source ?? DEFAULT_SOURCE,
     title: vacancy.title,
     company: vacancy.company,
     source_url: vacancy.source_url ?? null,

@@ -11,6 +11,7 @@ interface KanbanBoardProps {
   onOpen: (jobId: string) => void;
   onArchive: (jobId: string) => void;
   onRestore: (jobId: string) => void;
+  onRemove: (jobId: string) => void;
 }
 
 /**
@@ -26,6 +27,7 @@ export default function KanbanBoard({
   onOpen,
   onArchive,
   onRestore,
+  onRemove,
 }: KanbanBoardProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hoverStage, setHoverStage] = useState<StageId | null>(null);
@@ -92,6 +94,7 @@ export default function KanbanBoard({
                   onOpen={onOpen}
                   onArchive={onArchive}
                   onRestore={onRestore}
+                  onRemove={onRemove}
                 />
               ))}
               {columnCards.length === 0 && (

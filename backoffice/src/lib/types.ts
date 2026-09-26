@@ -11,9 +11,15 @@
 export type Actor = 'Candidate' | 'Company';
 
 /** Kanban columns, in board order. */
-export type StageId = 'created' | 'applied' | 'negotiating' | 'interviewing' | 'offer';
+export type StageId =
+  | 'scraped'
+  | 'prepare'
+  | 'applied'
+  | 'negotiating'
+  | 'interviewing'
+  | 'offer';
 
-/** Sub-states that only make sense inside the `created` column. */
+/** Sub-states that only make sense inside the `prepare` column. */
 export type TailoringStateId = 'in_progress' | 'failed' | 'tailored';
 
 /**
@@ -47,11 +53,17 @@ export interface HistoryEntry {
 export interface BoardCard {
   jobId: string;
   externalId: string;
+  /**
+   * Site slug the vacancy came from (`resumes.source`): `djinni`, `dou`, ...
+   * Part of the worker's business key, because two sites number their vacancies
+   * independently - the card shows it so a machine intake is recognisable.
+   */
+  source: string;
   title: string;
   company: string;
   sourceUrl: string | null;
   cvVersion: string;
-  /** Raw worker status (`resumes.status`) - the `created` sub-state derives from it. */
+  /** Raw worker status (`resumes.status`) - the `prepare` sub-state derives from it. */
   status: string;
   attempts: number;
   revisionCount: number | null;
@@ -72,6 +84,11 @@ export interface BoardCard {
   archivedActor: Actor | null;
   archivedReason: string | null;
   archived: boolean;
+  /**
+   * Which documents this board can serve *now* (`lib/artifacts.ts`): a `pdfUrl`/`docxPath`
+   * only means the worker stored one, and a dev board resolves them against its mirror.
+   */
+  artifactAvailability: { pdf: boolean; docx: boolean };
   /** Newest last; rendered newest first in the card modal. */
   history: HistoryEntry[];
 }

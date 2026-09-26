@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_BATCH_SIZE, parseBatchRequest, toTaskMessage } from './vacancies';
+import {
+  MAX_BATCH_SIZE,
+  MAX_STATUS_IDS,
+  parseBatchRequest,
+  parseStatusQuery,
+  toTaskMessage,
+} from './vacancies';
 
 const card = {
   external_id: '848944',
@@ -63,6 +69,34 @@ describe('batch validation', () => {
   });
 });
 
+describe('status lookup (the injected buttons ask this)', () => {
+  it('takes a comma-separated list and de-duplicates it', () => {
+    expect(parseStatusQuery('850374, 850359,850374 ,,')).toEqual({
+      ok: true,
+      ids: ['850374', '850359'],
+      source: 'djinni',
+    });
+  });
+
+  it('rejects an empty, oversized or invalid list', () => {
+    expect(parseStatusQuery('')).toMatchObject({ ok: false });
+    expect(parseStatusQuery(null)).toMatchObject({ ok: false });
+    expect(parseStatusQuery(',,')).toMatchObject({ ok: false });
+    expect(parseStatusQuery('a b')).toMatchObject({ ok: false }); // a space would need encoding
+    expect(parseStatusQuery('x'.repeat(301))).toMatchObject({ ok: false });
+    expect(
+      parseStatusQuery(Array.from({ length: MAX_STATUS_IDS + 1 }, (_, i) => String(i)).join(',')),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseStatusQuery(Array.from({ length: MAX_STATUS_IDS }, (_, i) => String(i)).join(',')).ok,
+    ).toBe(true);
+  });
+
+  it('accepts what the DB shape guard accepts', () => {
+    expect(parseStatusQuery('smoke_test,848944-1789668742,u-1:v2').ok).toBe(true);
+  });
+});
+
 describe('task payload', () => {
   it('matches the worker contract (ResumeTaskMessage)', () => {
     const parsed = parseBatchRequest({ vacancies: [card] });
@@ -78,6 +112,7 @@ describe('task payload', () => {
       job_id: '11111111-2222-3333-4444-555555555555',
       user_id: 'u-abc',
       external_id: '848944',
+      source: 'djinni',
       title: 'Platform Engineering Lead',
       company: 'UPPeople',
       source_url: 'https://djinni.co/jobs/848944/',
@@ -100,5 +135,44 @@ describe('task payload', () => {
     const message = toTaskMessage(parsed.vacancies[0], 'u-abc', { jobId: 'job-1' });
     expect(message.source_url).toBeNull();
     expect(message.title).toBe('');
+  });
+});
+
+describe('the vacancy source (site slug)', () => {
+  it('defaults to djinni, so an extension that predates `source` keeps working', () => {
+    const parsed = parseBatchRequest({ vacancies: [card] });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.source).toBe('djinni');
+  });
+
+  it('is per request and reaches the task message', () => {
+    const parsed = parseBatchRequest({ source: 'dou', vacancies: [card] });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.source).toBe('dou');
+
+    const message = toTaskMessage(parsed.vacancies[0], 'u-abc', {
+      jobId: 'job-dou',
+      source: 'dou',
+    });
+    expect(message.source).toBe('dou');
+  });
+
+  it('normalises case and rejects what the DB shape guard would refuse', () => {
+    const upper = parseBatchRequest({ source: 'DOU', vacancies: [card] });
+    expect(upper.ok).toBe(true);
+    if (upper.ok) expect(upper.source).toBe('dou');
+
+    // A longer slug is truncated (asText caps the field), so the invalid cases are
+    // the ones the shape guard actually rejects.
+    for (const source of ['x', 'a b', 'dou!', '-dou']) {
+      expect(parseBatchRequest({ source, vacancies: [card] }).ok, source).toBe(false);
+    }
+  });
+
+  it('is validated for the status lookup too (the extension sends it as a query param)', () => {
+    expect(parseStatusQuery('850374', 'dou')).toMatchObject({ ok: true, source: 'dou' });
+    expect(parseStatusQuery('850374', 'not a slug')).toMatchObject({ ok: false });
   });
 });

@@ -16,6 +16,8 @@ interface VacancyModalProps {
   /** Optional: the keyboard-accessible twin of the card's hover buttons. */
   onArchive?: (jobId: string) => void;
   onRestore?: (jobId: string) => void;
+  /** Irreversible: the board confirms it in its own dialog. */
+  onRemove?: (jobId: string) => void;
 }
 
 function formatDateTime(iso: string): string {
@@ -41,13 +43,27 @@ function duration(ms: number | null): string {
   return ms === null || ms === undefined ? '—' : `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Names of the documents the worker stored but this board cannot serve (not mirrored yet). */
+function missingArtifacts(card: BoardCard): string {
+  const missing: string[] = [];
+  if (card.pdfUrl && !card.artifactAvailability.pdf) missing.push('PDF');
+  if (card.docxPath && !card.artifactAvailability.docx) missing.push('DOCX');
+  return missing.join(' + ');
+}
+
 /** The stored artifact path reduced to its file name (`/data/output/848944.pdf`). */
 function resultField(storedPath: string | null): string {
   return storedPathName(storedPath) ?? 'not stored yet';
 }
 
 /** Everything known about one vacancy, with the full change history at the bottom. */
-export default function VacancyModal({ card, onClose, onArchive, onRestore }: VacancyModalProps) {
+export default function VacancyModal({
+  card,
+  onClose,
+  onArchive,
+  onRestore,
+  onRemove,
+}: VacancyModalProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -86,7 +102,7 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
             <span className={`rounded px-2 py-0.5 text-xs font-medium ring-1 ${stage?.chip ?? ''}`}>
               {stage?.label ?? card.stage}
             </span>
-            {card.stage === 'created' && (
+            {card.stage === 'prepare' && (
               <span
                 className={`rounded px-2 py-0.5 text-xs font-medium ring-1 ${
                   tailoringMeta(tailoring).chip
@@ -103,10 +119,11 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
             <span className="text-xs text-slate-400">#{card.externalId}</span>
           </div>
 
-          {card.stage === 'created' && (
+          {card.stage === 'prepare' && (
             <p className="mt-2 text-[11px] text-slate-500">
               The tailoring sub-state follows the worker's status (<code>{card.status}</code>) - it is
-              not set from here.
+              not set from here. Dropping a card into this column is what queues tailoring; a parked
+              card is retried by dropping it here again.
             </p>
           )}
 
@@ -131,8 +148,16 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
 
           {(card.pdfUrl || card.docxPath) && (
             <p className="mt-2 text-[11px] text-slate-500">
-              The worker records the artifact's <em>path on its volume</em>, so the links below go
-              through the board, which resolves that path against <code>ARTIFACTS_DIR</code>.
+              The worker records the artifact&rsquo;s <em>path on its volume</em>, so the links
+              below go through the board, which resolves that path against{' '}
+              <code>ARTIFACTS_DIR</code>.
+              {missingArtifacts(card) && (
+                <>
+                  {' '}
+                  <strong>{missingArtifacts(card)}</strong> is not on this machine yet - mirror the
+                  volume with <code>.\scripts\storage-files.ps1 -Action download</code>.
+                </>
+              )}
             </p>
           )}
 
@@ -147,7 +172,7 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
                 Open the vacancy posting
               </a>
             )}
-            {card.pdfUrl && (
+            {card.pdfUrl && card.artifactAvailability.pdf && (
               <a
                 href={artifactUrl(card.jobId)}
                 target="_blank"
@@ -157,7 +182,7 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
                 Tailored PDF
               </a>
             )}
-            {card.docxPath && (
+            {card.docxPath && card.artifactAvailability.docx && (
               <a
                 href={artifactUrl(card.jobId, 'docx')}
                 target="_blank"
@@ -166,6 +191,11 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
               >
                 Tailored DOCX
               </a>
+            )}
+            {missingArtifacts(card) && (
+              <span className="rounded border border-amber-300 bg-amber-50 px-2 py-1 font-medium text-amber-800">
+                {missingArtifacts(card)} not mirrored here
+              </span>
             )}
             {!card.archived && onArchive && (
               <button
@@ -183,6 +213,16 @@ export default function VacancyModal({ card, onClose, onArchive, onRestore }: Va
                 className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50"
               >
                 🔄 Restore
+              </button>
+            )}
+            {card.archived && onRemove && (
+              <button
+                type="button"
+                onClick={() => onRemove(card.jobId)}
+                title="Remove this vacancy and its files for good"
+                className="rounded border border-rose-300 px-2 py-1 font-medium text-rose-700 hover:bg-rose-50"
+              >
+                🗑 Remove for good
               </button>
             )}
           </div>

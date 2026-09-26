@@ -19,6 +19,7 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
   return {
     jobId: 'job-1',
     externalId: '374001',
+    source: 'djinni',
     title: 'Senior Data Engineer',
     company: 'InScale',
     sourceUrl: null,
@@ -37,6 +38,7 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
     archivedActor: null,
     archivedReason: null,
     archived: false,
+    artifactAvailability: { pdf: false, docx: false },
     history: [],
     ...overrides,
   };
@@ -175,7 +177,7 @@ describe('stage and action filters', () => {
           actor: 'Candidate',
           action: 'Applied via portal',
           kind: 'move',
-          from: 'created',
+          from: 'prepare',
           to: 'applied',
         },
         {

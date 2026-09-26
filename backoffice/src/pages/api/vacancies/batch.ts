@@ -1,14 +1,10 @@
 import type { APIRoute } from 'astro';
 import { randomUUID } from 'node:crypto';
-import {
-  deleteSubmittedRows,
-  findExistingVacancies,
-  insertSubmittedRows,
-} from '../../../lib/db';
+import { findExistingVacancies, insertSubmittedRows } from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
 import { INGEST_STATUS, planIngest } from '../../../lib/ingest';
-import { cvVersion, publishResumeTasks, queueDepth, queueName } from '../../../lib/queue';
-import { parseBatchRequest, toTaskMessage } from '../../../lib/vacancies';
+import { cvVersion } from '../../../lib/queue';
+import { parseBatchRequest } from '../../../lib/vacancies';
 
 export const prerender = false;
 
@@ -56,6 +52,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
       session.sub,
       parsed.vacancies.map((vacancy) => vacancy.external_id),
       version,
+      // Board scope: what the operator can see is what must not be queued twice, no matter
+      // which account created the row (the CLI/smoke-test rows carry no user id).
+      { scope: 'board', source: parsed.source },
     );
   } catch (error) {
     return json({ ok: false, error: `job store unavailable: ${errorMessage(error)}` }, 503);
@@ -65,36 +64,26 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
   let created: string[] = [];
   try {
-    created = await insertSubmittedRows(plan.insert, session.sub, version, INGEST_STATUS);
+    created = await insertSubmittedRows(
+      plan.insert,
+      session.sub,
+      version,
+      INGEST_STATUS,
+      parsed.source,
+    );
   } catch (error) {
     return json({ ok: false, error: `could not create the board cards: ${errorMessage(error)}` }, 503);
   }
 
-  // A row that lost a race (a concurrent request created it) is that request's to
-  // publish; this one only queues what it created, plus the retries.
-  const own = new Set(created);
-  const pending = plan.publish.filter((item) => item.retry || own.has(item.jobId));
-  const messages = pending.map((item) =>
-    toTaskMessage(item.vacancy, session.sub, { jobId: item.jobId, cvVersion: version }),
-  );
-
-  const payload = {
-    ok: true as const,
-    published: messages.length,
+  // Nothing is published here: the cards appear in Scraped, and the operator's drag into
+  // Prepare is what queues tailoring (`POST /api/board/move`). That is what makes a scrape
+  // free - no Gemini request, no broker round trip - and it is why this route no longer needs
+  // a compensation path for a failed publish.
+  return json({
+    ok: true,
+    source: parsed.source,
+    created: created.length,
     duplicates: parsed.duplicates + plan.duplicates,
-    retries: plan.retries,
-    queue: queueName(),
-    jobIds: pending.map((item) => item.jobId),
-  };
-
-  // Nothing to publish (a page the board already knows): no broker round trip.
-  if (messages.length === 0) return json({ ...payload, depth: null });
-
-  try {
-    const published = await publishResumeTasks(messages);
-    return json({ ...payload, published, depth: await queueDepth() });
-  } catch (error) {
-    await deleteSubmittedRows(created, INGEST_STATUS).catch(() => undefined);
-    return json({ ok: false, error: errorMessage(error) }, 502);
-  }
+    jobIds: created,
+  });
 };

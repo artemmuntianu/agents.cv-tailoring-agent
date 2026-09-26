@@ -10,10 +10,57 @@ interface VacancyCardProps {
   onOpen: (jobId: string) => void;
   onArchive: (jobId: string) => void;
   onRestore: (jobId: string) => void;
+  /** Irreversible: the board asks for confirmation before calling this. */
+  onRemove: (jobId: string) => void;
 }
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+}
+
+const MIRROR_HINT =
+  'stored by the worker, but not mirrored on this machine yet - run ' +
+  '.\\scripts\\storage-files.ps1 -Action download';
+
+/**
+ * One document chip. The board only serves files under its artifact root, so when the file has
+ * not been mirrored yet the chip says so instead of offering a link that 404s.
+ */
+function ArtifactChip({
+  jobId,
+  path,
+  available,
+  label,
+}: {
+  jobId: string;
+  path: string | null;
+  available: boolean;
+  label: 'PDF' | 'DOCX';
+}) {
+  if (!path) return null;
+
+  if (!available) {
+    return (
+      <span
+        title={MIRROR_HINT}
+        className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 ring-1 ring-amber-200"
+      >
+        {label} · sync
+      </span>
+    );
+  }
+
+  return (
+    <a
+      href={artifactUrl(jobId, label === 'DOCX' ? 'docx' : 'pdf')}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 hover:bg-slate-200"
+    >
+      {label}
+    </a>
+  );
 }
 
 /**
@@ -35,6 +82,7 @@ export default function VacancyCard({
   onOpen,
   onArchive,
   onRestore,
+  onRemove,
 }: VacancyCardProps) {
   const lastAction = card.history[card.history.length - 1];
   const tailoring = tailoringFromStatus(card.status);
@@ -64,17 +112,31 @@ export default function VacancyCard({
     >
       <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition focus-within:opacity-100 group-hover:opacity-100">
         {archived ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onRestore(card.jobId);
-            }}
-            aria-label={`Restore ${card.title || card.externalId}`}
-            className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50"
-          >
-            🔄 Restore
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRestore(card.jobId);
+              }}
+              aria-label={`Restore ${card.title || card.externalId}`}
+              className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50"
+            >
+              🔄 Restore
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove(card.jobId);
+              }}
+              aria-label={`Remove ${card.title || card.externalId} for good`}
+              title="Remove this vacancy and its files for good"
+              className="rounded border border-rose-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-50"
+            >
+              🗑 Remove
+            </button>
+          </>
         ) : (
           <button
             type="button"
@@ -99,7 +161,7 @@ export default function VacancyCard({
         >
           {card.title || `Vacancy ${card.externalId}`}
         </h3>
-        {!archived && card.stage === 'created' && (
+        {!archived && card.stage === 'prepare' && (
           <span
             className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${
               tailoringMeta(tailoring).chip
@@ -140,20 +202,20 @@ export default function VacancyCard({
         <span>
           {card.history.length} history {card.history.length === 1 ? 'entry' : 'entries'}
         </span>
-        {card.pdfUrl && (
-          // Never `card.pdfUrl`: that is the worker's storage path (e.g.
-          // /data/output/848944.pdf), which the browser would resolve against this
-          // origin and 404 on.
-          <a
-            href={artifactUrl(card.jobId)}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(event) => event.stopPropagation()}
-            className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 hover:bg-slate-200"
-          >
-            PDF
-          </a>
-        )}
+        <span className="flex items-center gap-1">
+          <ArtifactChip
+            jobId={card.jobId}
+            path={card.pdfUrl}
+            available={card.artifactAvailability.pdf}
+            label="PDF"
+          />
+          <ArtifactChip
+            jobId={card.jobId}
+            path={card.docxPath}
+            available={card.artifactAvailability.docx}
+            label="DOCX"
+          />
+        </span>
       </div>
     </article>
   );

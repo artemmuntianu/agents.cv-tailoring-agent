@@ -82,6 +82,14 @@ class ResumeTaskMessage(BaseModel):
     )
     user_id: str | None = None
     external_id: str = Field(description="Vacancy id from the source site (e.g. 848944).")
+    source: str = Field(
+        default="djinni",
+        pattern=r"^[a-z0-9][a-z0-9-]{1,31}$",
+        description=(
+            "Slug of the site the vacancy came from ('djinni', 'dou'). Part of the "
+            "idempotency key: two sites number their vacancies independently."
+        ),
+    )
     title: str = ""
     company: str = ""
     source_url: str | None = None
@@ -96,7 +104,7 @@ class ResumeTaskMessage(BaseModel):
     # -- helpers ----------------------------------------------------------- #
     def key(self) -> str:
         """Idempotency key (same vacancy + same master CV => same work)."""
-        return job_key(self.user_id, self.external_id, self.cv_version)
+        return job_key(self.user_id, self.external_id, self.cv_version, self.source)
 
     def cv_data_dict(self) -> dict[str, Any] | None:
         return self.cv_data.model_dump() if self.cv_data is not None else None
@@ -106,9 +114,11 @@ class ResumeTaskMessage(BaseModel):
             "job_id": self.job_id,
             "user_id": self.user_id,
             "external_id": self.external_id,
+            "source": self.source,
             "title": self.title,
             "company": self.company,
             "source_url": self.source_url,
+            "description_raw": self.description_raw,
             "cv_version": self.cv_version,
             "status": status,
             "attempts": self.attempt,

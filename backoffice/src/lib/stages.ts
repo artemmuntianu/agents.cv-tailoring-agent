@@ -14,9 +14,16 @@ export interface StageMeta {
 /** Columns in board order. Class strings are literal so Tailwind can see them. */
 export const STAGES: StageMeta[] = [
   {
-    id: 'created',
-    label: 'Created',
-    hint: 'tailored or being tailored',
+    id: 'scraped',
+    label: 'Scraped',
+    hint: 'found by the scout or scraped by you - nothing runs yet',
+    chip: 'bg-zinc-100 text-zinc-700 ring-zinc-200',
+    head: 'border-zinc-300 bg-zinc-50',
+  },
+  {
+    id: 'prepare',
+    label: 'Prepare',
+    hint: 'tailoring starts when you drag a card here',
     chip: 'bg-slate-100 text-slate-700 ring-slate-200',
     head: 'border-slate-300 bg-slate-50',
   },
@@ -56,7 +63,7 @@ export interface TailoringMeta {
   chip: string;
 }
 
-/** Sub-states shown on cards that are still in the `created` column. */
+/** Sub-states shown on cards in the `prepare` column. */
 export const TAILORING_STATES: TailoringMeta[] = [
   {
     id: 'in_progress',
@@ -143,7 +150,7 @@ export function isStageId(value: unknown): value is StageId {
 }
 
 /**
- * The `created` sub-state is derived from the worker's own `resumes.status` - the
+ * The `prepare` sub-state is derived from the worker's own `resumes.status` - the
  * board never writes that column, because it is the worker's claim/idempotency
  * state (`ACTIVE_STATUSES` in `utils/db.py`). Anything still in flight reads as
  * "Tailoring In Progress" (including `submitted`, the row the ingest gateway creates

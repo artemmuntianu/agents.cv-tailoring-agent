@@ -65,19 +65,18 @@ async function scrapeAndQueue() {
       );
     }
 
-    status(`Queueing ${result.vacancies.length} vacancy(ies)…`);
+    status(`Scraping ${result.vacancies.length} vacancy(ies)…`);
     const response = await send({ type: 'publish', payload: { vacancies: result.vacancies } });
 
     if (!response.ok) {
       await refresh();
       return status(response.error || 'publish failed', 'error');
     }
-    const parts = [`Queued ${response.published} message(s) on ${response.queue}.`];
+    const created = Number(response.created) || 0;
+    const parts = [`Created ${created} card(s) in Scraped.`];
     if (response.duplicates) parts.push(`${response.duplicates} already on the board.`);
-    if (response.retries) parts.push(`${response.retries} failed card(s) re-queued.`);
     if (result.skipped) parts.push(`${result.skipped} card(s) skipped (no id or no text).`);
-    if (typeof response.depth === 'number') parts.push(`Queue depth now ${response.depth}.`);
-    parts.push('The cards are in Created - open the board to watch them.');
+    if (created > 0) parts.push('Drag a card into Prepare to have the worker tailor it.');
     status(parts.join('\n'), 'ok');
   } catch (error) {
     status(error && error.message ? error.message : String(error), 'error');

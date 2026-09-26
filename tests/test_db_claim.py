@@ -90,10 +90,30 @@ def test_completed_vacancy_is_reported_completed_not_duplicate():
             store.update_job(first["job_id"], status=JobStatus.COMPLETED, pdf_url="u/p.pdf")
 
             # find_completed() is the primary duplicate guard in the worker...
-            assert store.find_completed("local:848944:v1") is not None
+            assert store.find_completed("local:djinni:848944:v1") is not None
             # ...and the claim path also refuses to adopt the row.
             again = store.upsert_job(_row(sample_task(job_id="job-848944-again")))
             assert again["outcome"] == "duplicate"
+
+
+def test_the_same_number_on_two_sites_is_two_vacancies():
+    """`source` is part of the business key on purpose: djinni's 848944 and DOU's 848944
+    are different vacancies, so neither may be reported as a duplicate of the other.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            store = db_module.get_db()
+            assert store.upsert_job(_row(sample_task()))["outcome"] == "claimed"
+
+            other = _row(sample_task(job_id="job-dou-848944"))
+            other["source"] = "dou"
+            assert store.upsert_job(other)["outcome"] == "claimed"
+
+            assert len(store.list_jobs()) == 2, "one row per site"
+            # ...and the *same* site is still one row (the key kept working).
+            again = _row(sample_task(job_id="job-dou-848944-again"))
+            again["source"] = "dou"
+            assert store.upsert_job(again)["outcome"] == "duplicate"
 
 
 def test_worker_acks_an_in_flight_duplicate_without_any_llm_call():

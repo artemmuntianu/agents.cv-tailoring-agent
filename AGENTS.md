@@ -73,7 +73,7 @@ python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the j
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
 ```
 
-The 17 Postgres integration tests only run when pointed at a throwaway database:
+The 18 Postgres integration tests only run when pointed at a throwaway database:
 
 ```sh
 make test-postgres
@@ -217,6 +217,16 @@ Do not add a dependency just to answer a reference/dead-code question.
     went red in CI only (`python -m ruff check . --show-files` lists 33 files and omits
     `tools/analyze.py`). Lint the tool explicitly before pushing a tooling change:
     `python -m ruff check tools/analyze.py`.
+17. **The Astro dev server and vitest share `backoffice/node_modules/.vite`.** Killing
+    `npm run dev` with `Stop-Process -Force` (or any hard stop mid-build) can leave that
+    cache unusable, and then `npm test` reports
+    `FAIL src/lib/scraper.test.ts ... Error: Cannot find module
+    '/@fs/e:/CVTailoringAgent/extension/src/extract.js' ... Does the file exist?` - while
+    the file is right there, unmodified and readable. That test is the only one importing
+    from *outside* the Vite root (`extension/src/extract.js`), which is why it alone fails.
+    Fix (verified 2026-09-26, 91/91 afterwards):
+    `Remove-Item -Recurse -Force backoffice/node_modules/.vite`. Do not go hunting for a
+    deleted file, a bad import, or a `server.fs.allow` misconfiguration.
 
 ## Shell / commands (Windows PowerShell 5.1)
 

@@ -18,6 +18,36 @@ Operational procedures for the event-driven deployment. All commands assume
 5. A scaled-to-zero worker takes its logs with it: tail them live, or read the durable
    evidence instead (the `resumes` row, `/data/output/*`, the queue depth).
 
+## Reading the worker's artifacts from the host (dev convenience)
+
+The board serves documents out of `OUTPUT_DIR`. On a dev machine the cluster volume is a
+foreign filesystem, so pick one:
+
+1. **Read it directly - nothing is copied.** Docker Desktop keeps its PersistentVolumes on
+   the VM disk, and Windows sees that disk through WSL:
+
+   ```powershell
+   .\scripts\storage-files.ps1 -Action path
+   # [ok]   pv host path: /var/lib/k8s-pvs/cv-artifacts/pvc-<id>
+   # [ok]   distro path: /mnt/docker-desktop-disk/data/k8s-pvs
+   # [ok]   readable from the host: 40 file(s) in output
+   #   ARTIFACTS_DIR=\\wsl$\docker-desktop\mnt\docker-desktop-disk\data\k8s-pvs\cv-artifacts\pvc-<id>
+   #   OUTPUT_DIR=\\wsl$\docker-desktop\...\pvc-<id>\output
+   ```
+
+   Paste those two lines into `backoffice/.env` and restart the dev server. The path carries
+   the PVC's own id, so re-run the action if the PVC is ever recreated (`helm uninstall` keeps
+   it: the claim is annotated `helm.sh/resource-policy: keep`). With this root the board is
+   looking at the *worker's* volume, so removing a vacancy deletes the real file - no
+   `-Action purge` follow-up. Docker Desktop only.
+
+2. **Mirror a copy** with `.\scripts\storage-files.ps1 -Action download` -> `artifacts\output`.
+   Works on any cluster, but the copy goes stale after every batch (and removals queue their
+   paths for `-Action purge`).
+
+Symptoms of having neither: cards show `PDF · sync` / `DOCX · sync` chips, and the modal says
+`is not on this machine yet` with the same two options.
+
 ## Daily checks
 
 ```bash

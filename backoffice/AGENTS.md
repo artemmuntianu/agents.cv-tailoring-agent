@@ -1,7 +1,7 @@
 # backoffice/ - the operator UI and the API gateway (POC)
 
 A desktop kanban board for tracking vacancies through the hiring pipeline, plus the
-authenticated gateway that turns a scraped listing page into queue messages. Astro
+authenticated gateway that turns a scraped listing page into board cards (the operator's
 (SSR) + React (one client island per component) + Tailwind v4, vitest for tests.
 
 It persists into the **same Postgres the worker uses**: it reads the worker's
@@ -39,6 +39,13 @@ any deployed release already has them. A fresh database can be bootstrapped with
 `python -c "from utils import db; db.get_db().ping()"` (`DB_BACKEND=postgres` +
 `DATABASE_URL` set).
 
+Two local traps worth knowing before `npm test` surprises you: the test suite and the
+dev server share `node_modules/.vite`, so a hard-killed `npm run dev` can corrupt it and
+`scraper.test.ts` then fails with `Cannot find module '/@fs/.../extension/src/extract.js'`
+even though the file exists - clear the cache (`Remove-Item -Recurse -Force
+node_modules/.vite`), see trap 17 in the root `AGENTS.md`. And `npm test` reads nothing
+from the cluster: it is hermetic, so it passes with both port-forwards down.
+
 ## Layout
 
 | Path | Owns |
@@ -49,17 +56,18 @@ any deployed release already has them. A fresh database can be bootstrapped with
 | `src/pages/403.astro` | Where a non-admin who asks for `/admin` lands |
 | `src/pages/index.astro` | Board shell; passes the session name/email down |
 | `src/pages/api/board.ts` | `GET` the cards |
-| `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts` | The three mutations: move a card, refuse it, undo a refusal |
+| `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card, refuse it, undo a refusal, purge it for good |
 | `src/pages/api/board/actions.ts` | `GET` the Action vocabulary (`board_actions`) |
 | `src/pages/api/admin/vocabulary.ts`, `src/pages/api/admin/actions.ts` | Admin-only: read every vocabulary · add / reword / remove an Action |
 | `src/pages/api/vacancies/batch.ts` | `POST` a scraped batch -> the cards + one AMQP message per vacancy |
+| `src/pages/api/vacancies/status.ts` | `GET` "has the board got this vacancy?" for the extension's injected per-card buttons |
 | `src/pages/api/artifacts/[jobId].ts` | `GET` the tailored PDF/DOCX (`?format=docx`), streamed from the artifact root |
 | `src/pages/api/auth/{login,token,logout,me}.ts` | Cookie login, bearer token (extension), logout, who-am-I |
 | `src/lib/auth.ts` | scrypt password hashing + HS256 session tokens + cookie/bearer extraction |
 | `src/lib/users.ts` | `app_users` lookup, credential check, `last_login_at` |
 | `src/lib/queue.ts` | amqplib publisher; mirrors the Python queue topology |
 | `src/lib/vacancies.ts` | Pure batch validation + `ResumeTaskMessage` builder |
-| `src/lib/ingest.ts` | Pure ingest decision: new card / duplicate / retry (+ the `submitted` status) |
+| `src/lib/ingest.ts` | Pure ingest decision: new card / duplicate (+ the `submitted` status) |
 | `src/lib/artifacts.ts` | Server-only artifact resolution (root from `ARTIFACTS_DIR`/`OUTPUT_DIR`, traversal-refused) |
 | `src/lib/artifact-link.ts` | Isomorphic `/api/artifacts/...` link builder for the React islands |
 | `src/lib/db.ts` | Server-only pg pool; board reads, one transaction per move, the ingest rows |
@@ -68,7 +76,7 @@ any deployed release already has them. A fresh database can be bootstrapped with
 | `src/lib/actions.ts` | The Action combobox's ranking and normalisation (`board_actions` is the data) |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
-| `src/components/*` | `App` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `ActionCombobox` · `LoginForm` |
+| `src/components/*` | `App` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
 ## Vocabulary admin (`/admin`)
@@ -126,41 +134,62 @@ any deployed release already has them. A fresh database can be bootstrapped with
 - Validation happens **before** publishing (`src/lib/vacancies.ts`): required
   `external_id` + `description_raw`, http(s) only for `source_url`, at most 25 cards,
   duplicates within a batch collapsed. A rejected batch never reaches the broker.
-- **The card is created before the message is published**, and that order is the
-  contract (`src/lib/ingest.ts`):
+- **A batch creates cards and queues nothing**, and that is the contract
+  (`src/lib/ingest.ts`):
   1. read what the board already has, by business key
-     (`user_id` + `external_id` + `cv_version`);
-  2. insert the `resumes` row for each new vacancy with
-     `status = 'submitted'` (`INGEST_STATUS`), `job_id` = the id the message will
-     carry - so the vacancy is in Created at once, not after KEDA boots a worker;
-  3. publish one message per created card, then report the queue depth.
+     (`user_id` + `source` + `external_id` + `cv_version`);
+  2. insert the `resumes` row for each new vacancy with `status = 'submitted'`
+     (`INGEST_STATUS`) - so the vacancy is in **Scraped** at once, and scraping costs
+     neither a Gemini request nor a broker round trip.
+  There is no `publish`/`retry` half any more, and therefore no compensation path: the
+  drag into Prepare is what queues tailoring (next bullet).
 - `submitted` is **claimable, not active**. It must never be added to
   `utils/db.py::ACTIVE_STATUSES`: an active sibling makes the worker's claim ack the
-  message as a duplicate delivery and the card would sit in Created forever. Being
+  message as a duplicate delivery and the card would sit in Scraped forever. Being
   non-active, the claim *adopts* that row - same `job_id`, status -> `processing` -
   so the card the gateway created is the card the worker finishes.
   `tests/test_postgres_store.py` pins both halves (`JobStatus.SUBMITTED not in
   ACTIVE_STATUSES`, and a pre-created `queued` row *would* be a duplicate).
-- A vacancy the board already knows is not queued twice: `completed`/`skipped` (and
-  anything in flight) count as duplicates; `failed`/`rate_limited`/`dead_lettered`
-  are re-queued **under their existing `job_id`** (one row per user + vacancy + CV
-  version, `resumes_job_key_idx`), and a `submitted` card older than 15 minutes (a
-  publish that never confirmed) is re-queued too.
-- If the publish fails, the rows this request created are deleted again
-  (`status = 'submitted'` only, so a row the worker already claimed is untouched) and
-  the endpoint answers 502 - the board never shows work that will not run.
+- The duplicate rule is simply "already on the board": one row per user + site + vacancy
+  + CV version (`resumes_job_key_idx`), refused cards included. A **failed** card is not
+  re-queued by a scrape either - retrying is the operator's drag.
+- **The drag into Prepare queues tailoring** (`POST /api/board/move`):
+  `lib/board.ts::tailoringRequest` answers queue/retry/none, the route publishes first and
+  moves second, and a card that just left Scraped is moved back if the broker refuses - so
+  "in Prepare" cannot quietly mean "no message was ever sent" (`CONSTITUTION.md` invariant
+  23). A card whose stored `description_raw` is still null (scraped before 2026-09-26) is
+  refused with 409 instead of poisoning the DLQ.
 - One message per vacancy, shaped like `agent/contracts.py::ResumeTaskMessage`
-  (`user_id` = session `sub`, `cv_data` omitted so the worker downloads the master CV
-  it validates against `cv.docx`).
+  (`user_id` = the **row's** owner, `source` = the site slug, `cv_data` omitted so the
+  worker downloads the master CV it validates against `cv.docx`).
 - `src/lib/queue.ts` mirrors the Python topology field for field (durable queue,
   direct DLX, DLQ binding, the 60/300/900/1800/3600s TTL retry ladder) because
   RabbitMQ rejects a mismatched redeclare with a 406. Three declarers must agree:
   this publisher, `utils/messaging.py` and the chart's definitions.
-- Publishing is AMQP-only: the gateway does not reimplement the `directory` backend,
-  so `RABBITMQ_URL` (or `RABBITMQ_USERNAME`/`RABBITMQ_PASSWORD`) is required and the
-  endpoint answers 502 with the broker's error when it cannot publish. A batch that
-  is entirely duplicates never touches the broker at all (`published: 0, depth: null`).
+- Publishing is AMQP-only: neither the move route nor the gateway reimplements the
+  `directory` backend, so `RABBITMQ_URL` (or `RABBITMQ_USERNAME`/`RABBITMQ_PASSWORD`) is
+  required and a failed publish answers 502 with the broker's error. The batch route never
+  touches the broker at all: `created` counts cards, and `jobIds` are the rows it made.
 - `QUEUE_NAME`/`CV_VERSION` must match the worker's configmap.
+
+## Status lookup (the extension's per-card buttons)
+
+- `GET /api/vacancies/status?external_ids=850374,850359` answers "is this already on the
+  board?" for a whole listing page in **one** request (the ids are de-duplicated and the
+  list is capped at `MAX_STATUS_IDS` = 200; a bad id or a missing parameter is a 400).
+- `{ ok: true, cvVersion, known: { "<external_id>": { jobId, status, archived } } }` - only
+  the ids the board knows appear, and `jobId` is what the extension's `Scraped` link points
+  at (`/?card=<job_id>`, opened by `App.tsx`).
+- It is the *same* lookup the batch route uses for dedupe (invariant 17) - so the two can
+  never disagree - and it is deliberately **board-scoped**
+  (`findExistingVacancies(..., { scope: 'board' })`): the board renders every row whatever
+  its `user_id`, so an account-scoped answer would offer to scrape a card that is already
+  visible (rows created by the CLI carry `user_id = NULL`). The `user` scope (the default)
+  stays the worker-shaped business key and is still what `findExistingVacancies` means when
+  called without options.
+- Auth is the usual session cookie or `Authorization: Bearer` (the extension's token);
+  without it the route is a 401. Not signed in is a *normal* extension state, so the buttons
+  simply stay `Scrape` until the popup signs in.
 
 ## Artifact links
 
@@ -174,11 +203,27 @@ any deployed release already has them. A fresh database can be bootstrapped with
   only and resolves it against `OUTPUT_DIR` (default `ARTIFACTS_DIR/output`, itself
   defaulting to the repo's `artifacts/`), refusing anything that escapes that
   directory. The route is cookie-authenticated like every other page, so
-  `<a target="_blank">` works.
-- The worker's volume is not on a dev machine: mirror it with
-  `.\scripts\storage-files.ps1 -Action download` (writes `artifacts\output\`, the
-  default root) or set `ARTIFACTS_DIR`/`OUTPUT_DIR`. When the file is missing the
-  route says exactly that, with the hint, instead of a bare 404.
+  `<a target="_blank">` works. **Both** documents are served - the `-Action download`
+  mirror used to fetch only `*.pdf`, which is why a DOCX link 404'd while the PDF worked
+  (fixed 2026-09-26).
+- **The board only offers a link it can serve.** `fetchBoard` decorates every card with
+  `artifactAvailability` (`lib/artifacts.ts`: two `stat`s against the artifact root), so a
+  card whose file has not been mirrored yet shows a muted `PDF · sync` / `DOCX · sync` chip
+  and the modal says which document is missing plus the command to mirror it. The `resumes`
+  path alone only means "the worker stored one".
+- The worker's volume is not on a dev machine, so the board has **two** ways to reach
+  the documents, and neither puts a script in the loop:
+  1. **Read the volume directly.** Docker Desktop keeps its PersistentVolumes on the VM
+     disk, which Windows reaches through WSL
+     (`\\wsl$\docker-desktop\mnt\docker-desktop-disk\data\k8s-pvs\<pvc>\output`).
+     `.\scripts\storage-files.ps1 -Action path` prints the `ARTIFACTS_DIR`/`OUTPUT_DIR`
+     lines for `.env`; re-run it if the PVC is ever recreated. `isWorkerVolumeRoot`
+     recognises this root (`isClusterVolumePath`: Windows path + `k8s-pvs`), so a removal
+     deletes the worker's real file instead of queueing it for `-Action purge`.
+  2. **Mirror it** with `.\scripts\storage-files.ps1 -Action download` (writes
+     `artifacts\output\`, the default root).
+  When the file is in neither place the route says exactly that, with the hint, instead of
+  a bare 404.
 
 ## Board contract
 
@@ -227,6 +272,26 @@ any deployed release already has them. A fresh database can be bootstrapped with
 - 404 unknown `job_id`, 409 wrong state (already refused / not refused), 400 bad body -
   the UI reports the message and re-reads the board, which stays the display.
 
+## Removal: the one irreversible action
+
+- `POST /api/board/remove` purges a card **completely**: the artifact files the board can
+  reach, then the `resumes` row - and with it `resume_board`, the whole `resume_history` and
+  the refusal record, because both cascade. The UI guards it with `RemoveDialog` (it lists
+  what disappears), and the API guards it twice: the card must be **archived** (409) and no
+  worker may own the vacancy (409, `REMOVABLE_STATUSES` in `lib/board.ts`) - a task that
+  finished after the purge would leave artifacts behind with nothing pointing at them.
+- **The artifacts are a two-part job**, because a board outside the cluster cannot reach the
+  volume: `deleteArtifact` removes what it can under `ARTIFACTS_DIR`/`OUTPUT_DIR` and reports
+  `removed` (that root *is* the worker's directory, in-cluster), `mirror-only` (it deleted a
+  local copy) or `absent`; everything but `removed` is queued in `artifact_purge`, and
+  `scripts/storage-files.ps1 -Action purge` runs `rm -f` for those paths inside the
+  `cv-files` pod and clears the queue. The route's `note` says which command to run, and the
+  board shows it as a banner.
+- **Nothing is tombstoned**: the vacancy becomes unknown to the system again, so re-scraping
+  the same page creates a fresh card and pays for tailoring again. That is the point of
+  "remove" as opposed to "archive" (invariant 22), and the dialog says so.
+- 404 unknown `job_id`, 409 not archived / worker still owns it, 400 bad body.
+
 ## The toolbar and its Filters panel
 
 - The top bar is three controls: **search**, **date range**, **Filters**. Everything else
@@ -255,12 +320,12 @@ any deployed release already has them. A fresh database can be bootstrapped with
 - No rate limiting / lockout on the login endpoint.
 - Worker status transitions are not copied into `resume_history`; they appear as the
   sub-state badge. Only manual changes are historicised.
-- A `submitted` card whose message never confirmed is invisible to the worker: it is
-  re-queued by the next scrape of the same vacancy after 15 minutes
-  (`STALE_INGEST_MS`), not by a reaper - there is no background sweeper.
-- The ingest row is written by the *gateway*, not by the worker: a vacancy published by
-  anything else (`.scripts\send-test-job.ps1 -Smoke`, `publisher.py`) appears when the
-  worker claims it, not at publish time.
+- A card in Scraped is *supposed* to wait: the intake creates cards and nothing else, so
+  there is no staleness rule and no background sweeper - the retry for a parked card is the
+  operator's drag into Prepare again.
+- The card is written by the *intake* (the batch route, and the scout), not by the worker: a
+  vacancy published by anything else (`.\scripts\send-test-job.ps1 -Smoke`, `publisher.py`)
+  appears when the worker claims it, not at publish time.
 - No "add vacancy", no pagination (200 cards, newest first).
 - **No dark theme**: the board is light-only on purpose (`global.css` says "no dark mode
   switch"), so the UX spec's `dark:` variants are deliberately not half-applied.
@@ -270,6 +335,9 @@ any deployed release already has them. A fresh database can be bootstrapped with
 - **No undo toast** for a refusal: `🔄 Restore` *is* the undo, and it is audited.
 - The Actor vocabulary is fixed in code (`Candidate`/`Company`, matching the DB CHECK);
   only Actions grow, by being typed in a dialog. Neither has an admin UI.
+- **No undo for a removal** and no recycle bin: the confirm dialog is the guard, and
+  re-scraping the page is the only way back.
+- No removal of an active card, and no bulk removal: archive first, one card at a time.
 - Not deployed in-cluster yet (`CONSTITUTION.md` D11) - run it against port-forwards.
 
 ## Don't
@@ -297,3 +365,6 @@ any deployed release already has them. A fresh database can be bootstrapped with
 - Add a second home for the Action vocabulary (a JSON file, a code list, a settings table):
   `board_actions` is it, and `/admin` is the only writer.
 - Make Actors, columns or sub-states editable from `/admin`: they are code/DB constraints.
+- Let removal run on a card that is not archived, or on one a worker still owns.
+- Delete artifacts without recording what could not be deleted: the `artifact_purge` queue
+  plus `storage-files.ps1 -Action purge` is the only path that reaches inside the cluster.

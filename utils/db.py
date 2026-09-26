@@ -31,6 +31,8 @@ JOB_FIELDS = (
     "title",
     "company",
     "source_url",
+    "source",
+    "description_raw",
     "cv_version",
     "status",
     "attempts",
@@ -49,9 +51,15 @@ def now_iso():
     return datetime.now(UTC).isoformat()
 
 
-def job_key(user_id, external_id, cv_version="v1"):
-    """Stable idempotency key: same vacancy + same CV version => same work."""
-    return f"{user_id or 'local'}:{external_id}:{cv_version or 'v1'}"
+def job_key(user_id, external_id, cv_version="v1", source="djinni"):
+    """Stable idempotency key: same vacancy + same CV version => same work.
+
+    `source` belongs in the key because two sites number their vacancies
+    independently: djinni's 848944 and DOU's 848944 are different vacancies, and
+    without the site in the key one would look like a duplicate of the other
+    (`resumes_job_key_idx`, and the board's Scraped intake).
+    """
+    return f"{user_id or 'local'}:{source or 'djinni'}:{external_id}:{cv_version or 'v1'}"
 
 
 def new_job_id():
@@ -98,10 +106,18 @@ class LocalDb:
         jobs = data["jobs"]
         job_id = str(job.get("job_id") or new_job_id())
         job = {**job, "job_id": job_id}
-        key = job_key(job.get("user_id"), job.get("external_id"), job.get("cv_version"))
+        key = job_key(
+            job.get("user_id"),
+            job.get("external_id"),
+            job.get("cv_version"),
+            job.get("source"),
+        )
 
         existing = jobs.get(job_id)
-        if existing is not None and existing.get("external_id") != job.get("external_id"):
+        if existing is not None and (
+            existing.get("external_id") != job.get("external_id")
+            or (existing.get("source") or "djinni") != (job.get("source") or "djinni")
+        ):
             log.warning(
                 "job_id already belongs to another vacancy - refusing to reuse it",
                 job_id=job_id,
@@ -113,7 +129,13 @@ class LocalDb:
             (
                 row
                 for row in jobs.values()
-                if job_key(row.get("user_id"), row.get("external_id"), row.get("cv_version")) == key
+                if job_key(
+                    row.get("user_id"),
+                    row.get("external_id"),
+                    row.get("cv_version"),
+                    row.get("source"),
+                )
+                == key
             ),
             None,
         )
@@ -166,7 +188,12 @@ class LocalDb:
         record["updated_at"] = now_iso()
         if record.get("status") == "completed":
             data["completed"][
-                job_key(record.get("user_id"), record.get("external_id"), record.get("cv_version"))
+                job_key(
+                    record.get("user_id"),
+                    record.get("external_id"),
+                    record.get("cv_version"),
+                    record.get("source"),
+                )
             ] = job_id
         data["jobs"][job_id] = record
         self._save(data)
@@ -207,16 +234,25 @@ ACTIVE_STATUSES = ("queued", "processing", "rendering", "validating", "uploading
 # the gateway may send `848944-1789668742`, a UUID, or anything else sane - it is
 # the row identity, not a business key. Uniqueness comes from the primary key and
 # the shape guard below stops nonsense reaching the table. The business identity
-# (user_id, external_id, cv_version) is enforced separately by
+# (user_id, source, external_id, cv_version) is enforced separately by
 # `resumes_job_key_idx`.
 SCHEMA_SQL = """
 create table if not exists resumes (
     job_id          text primary key,
     user_id         text,
     external_id     text not null,
+    -- Which site the vacancy came from ('djinni', 'dou', ...). Part of the business key:
+    -- two sites number their vacancies independently, so the number alone cannot tell
+    -- "the same vacancy" from "two vacancies that happen to share a number".
+    source          text not null default 'djinni',
     title           text,
     company         text,
     source_url      text,
+    -- The job description as plain text. The queue message carries it for the tailoring
+    -- task, but a cover letter may be asked for days later - then this is the only copy.
+    -- Null for rows created before 2026-09-26 and whenever a publisher had none; such a
+    -- card cannot generate a cover letter until it is scraped again.
+    description_raw text,
     cv_version      text not null default 'v1',
     -- 'queued' is only a *default*: the ingest gateway (backoffice batch route)
     -- creates the row with 'submitted' before it publishes, so the worker's claim
@@ -233,8 +269,14 @@ create table if not exists resumes (
     updated_at      timestamptz not null default now()
 );
 
+-- Before the index below: Postgres resolves the columns an index names even when
+-- `if not exists` makes the statement a no-op, so a legacy table without `source` would
+-- fail right here. Both columns are part of the 2026-09-26 rework.
+alter table resumes add column if not exists source text not null default 'djinni';
+alter table resumes add column if not exists description_raw text;
+
 create unique index if not exists resumes_job_key_idx
-    on resumes (coalesce(user_id, 'local'), external_id, cv_version);
+    on resumes (coalesce(user_id, 'local'), source, external_id, cv_version);
 
 create table if not exists model_availability (
     name        text primary key,
@@ -251,7 +293,7 @@ create table if not exists app_settings (
 -- Board-owned state for the backoffice kanban (`backoffice/`). The worker never
 -- touches these tables, and the board never writes `resumes.status`: that column is
 -- the worker's claim/idempotency state (see ACTIVE_STATUSES), so the board's
--- `created` sub-state is *derived* from it instead of stored.
+-- `prepare` sub-state is *derived* from it instead of stored.
 --
 -- `archived_*` is the board's **in-place soft delete**: a refused vacancy keeps its
 -- `stage`, so the funnel still shows where the application dropped out, and only the
@@ -259,7 +301,7 @@ create table if not exists app_settings (
 -- (guard below), which is what makes "archive" and "restore" single-column updates.
 create table if not exists resume_board (
     job_id          text primary key references resumes (job_id) on delete cascade,
-    stage           text not null default 'created',
+    stage           text not null default 'scraped',
     archived_at     timestamptz,
     archived_actor  text,
     archived_reason text,
@@ -270,6 +312,35 @@ create table if not exists resume_board (
 alter table resume_board add column if not exists archived_at timestamptz;
 alter table resume_board add column if not exists archived_actor text;
 alter table resume_board add column if not exists archived_reason text;
+
+-- The source + Scraped rework (2026-09-26): `source` joins the business key, the job
+-- description becomes durable, and the board's intake column is `scraped` while the former
+-- `created` column is the `prepare` one (a card is tailored only once the operator drags it
+-- there). Every statement is idempotent: after the first boot nothing matches any more.
+-- (`resumes.source` / `description_raw` are added next to the table above: the business-key
+-- index resolves them further down.)
+alter table resume_board alter column stage set default 'scraped';
+update resume_board set stage = 'prepare' where stage = 'created';
+
+-- Rows that predate the Scraped column have no board row of their own, so they would read as
+-- `scraped` through the join's default. Anything that was queued or tailored already belongs to
+-- Prepare - that is the column meaning "tailoring was requested" (found live on 2026-09-26).
+insert into resume_board (job_id, stage)
+select job_id, 'prepare'
+  from resumes
+ where status in ('queued', 'processing', 'rendering', 'validating', 'uploading',
+                  'completed', 'skipped')
+on conflict (job_id) do nothing;
+
+-- Guarded: on a fresh database `resume_history` is created further down this script, so the
+-- vocabulary rewrite has to wait until the table exists.
+do $ddl$
+begin
+    if to_regclass('public.resume_history') is not null then
+        update resume_history set from_state = 'prepare' where from_state = 'created';
+        update resume_history set to_state = 'prepare' where to_state = 'created';
+    end if;
+end $ddl$;
 
 create table if not exists resume_history (
     id         bigserial primary key,
@@ -317,6 +388,19 @@ insert into board_actions (action, kind) values
 on conflict (action) do nothing;
 
 
+-- Artifacts queued for deletion from the worker's volume.
+--
+-- A board that runs outside the cluster (the dev setup) cannot reach `/data/output`, so
+-- "remove this vacancy completely" has two halves: the board deletes what it can see and
+-- records every stored path it could not, and `scripts/storage-files.ps1 -Action purge`
+-- finishes the sweep inside the `cv-files` pod and clears the rows here. No foreign key to
+-- `resumes` on purpose - the card is already gone when these rows exist.
+create table if not exists artifact_purge (
+    stored_path text primary key,
+    job_id      text not null,
+    queued_at   timestamptz not null default now()
+);
+
 -- Backoffice accounts. There is NO public signup: an administrator provisions
 -- users out of band (`backoffice/scripts/user.mjs`) exactly like the design's
 -- "manual provisioning" rule; the UI only ever authenticates.
@@ -340,6 +424,33 @@ begin
             add constraint resumes_job_id_shape
             check (char_length(job_id) between 4 and 80
                    and job_id !~ '[^A-Za-z0-9_.:-]');
+    end if;
+end $ddl$;
+
+-- The source is a slug, not free text: it ends up in the business key.
+do $ddl$
+begin
+    if not exists (select 1 from pg_constraint where conname = 'resumes_source_shape') then
+        alter table resumes
+            add constraint resumes_source_shape
+            check (source ~ '^[a-z0-9][a-z0-9-]{1,31}$');
+    end if;
+end $ddl$;
+
+-- A database that predates `source` still carries the three-column unique index; rebuild it
+-- once, so the enforced business key is the one the code claims.
+do $ddl$
+declare
+    definition text;
+begin
+    select indexdef into definition from pg_indexes where indexname = 'resumes_job_key_idx';
+    if definition is not null and position('source' in definition) = 0 then
+        drop index resumes_job_key_idx;
+        definition := null;
+    end if;
+    if definition is null then
+        create unique index resumes_job_key_idx
+            on resumes (coalesce(user_id, 'local'), source, external_id, cv_version);
     end if;
 end $ddl$;
 
@@ -496,9 +607,11 @@ class PostgresDb:
             "job_id": str(job.get("job_id") or new_job_id()),
             "user_id": job.get("user_id"),
             "external_id": job["external_id"],
+            "source": job.get("source") or "djinni",
             "title": job.get("title"),
             "company": job.get("company"),
             "source_url": job.get("source_url"),
+            "description_raw": job.get("description_raw"),
             "cv_version": job.get("cv_version") or "v1",
             "status": job.get("status") or "processing",
             "attempts": int(job.get("attempts") or 0),
@@ -508,15 +621,19 @@ class PostgresDb:
         """Steps 1-3 of the claim; runs inside a transaction."""
         # 1. Same job_id but a different vacancy -> a foreign row: hands off.
         cur.execute(
-            "select job_id, external_id, status, pdf_url from resumes where job_id = %s",
+            "select job_id, external_id, source, status, pdf_url from resumes where job_id = %s",
             (payload["job_id"],),
         )
         existing = cur.fetchone()
-        if existing is not None and existing["external_id"] != payload["external_id"]:
+        if existing is not None and (
+            existing["external_id"] != payload["external_id"]
+            or existing["source"] != payload["source"]
+        ):
             log.warning(
                 "job_id already belongs to another vacancy - refusing to reuse it",
                 job_id=payload["job_id"],
                 owner_external_id=existing["external_id"],
+                owner_source=existing["source"],
             )
             return {
                 "job_id": str(existing["job_id"]),
@@ -548,6 +665,7 @@ class PostgresDb:
                    set status = %(status)s,
                        attempts = greatest(attempts, %(attempts)s),
                        error = null,
+                       description_raw = coalesce(%(description_raw)s, description_raw),
                        updated_at = now()
                  where job_id = %(row_id)s
                 returning job_id, status
@@ -556,20 +674,23 @@ class PostgresDb:
                     "row_id": sibling["job_id"],
                     "status": payload["status"],
                     "attempts": payload["attempts"],
+                    "description_raw": payload.get("description_raw"),
                 },
             )
         else:
             cur.execute(
                 """
-                insert into resumes (job_id, user_id, external_id, title, company,
-                                     source_url, cv_version, status, attempts)
-                values (%(job_id)s, %(user_id)s, %(external_id)s, %(title)s,
-                        %(company)s, %(source_url)s, %(cv_version)s, %(status)s,
-                        %(attempts)s)
+                insert into resumes (job_id, user_id, external_id, source, title, company,
+                                     source_url, description_raw, cv_version, status, attempts)
+                values (%(job_id)s, %(user_id)s, %(external_id)s, %(source)s, %(title)s,
+                        %(company)s, %(source_url)s, %(description_raw)s, %(cv_version)s,
+                        %(status)s, %(attempts)s)
                 on conflict (job_id) do update
                     set status = excluded.status,
                         attempts = greatest(resumes.attempts, excluded.attempts),
                         error = null,
+                        description_raw = coalesce(excluded.description_raw,
+                                                   resumes.description_raw),
                         updated_at = now()
                 returning job_id, status
                 """,
@@ -599,6 +720,7 @@ class PostgresDb:
             """
             select job_id, status, pdf_url from resumes
             where coalesce(user_id, 'local') = coalesce(%(user_id)s, 'local')
+              and source = %(source)s
               and external_id = %(external_id)s
               and cv_version = %(cv_version)s
             limit 1
@@ -638,19 +760,20 @@ class PostgresDb:
     def find_completed(self, key):
         """Return an existing *completed* row for the idempotency key."""
         self.ensure_schema()
-        user_id, external_id, cv_version = key.split(":", 2)
+        user_id, source, external_id, cv_version = key.split(":", 3)
         with self.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     select * from resumes
                     where coalesce(user_id, 'local') = %s
+                      and source = %s
                       and external_id = %s
                       and cv_version = %s
                       and status = 'completed'
                     limit 1
                     """,
-                    (user_id, external_id, cv_version),
+                    (user_id, source, external_id, cv_version),
                 )
                 row = cur.fetchone()
         return dict(row) if row else None

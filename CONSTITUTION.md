@@ -30,7 +30,10 @@ cloud account, no object storage and no managed database. The only outbound call
 is to the Gemini API.
 
 ```
-publisher / Chrome extension --> RabbitMQ (rabbitmq-0, resumes.generate)
+Chrome extension / scout --> backoffice board (one card per vacancy, column "Scraped")
+                                     |  the operator drags a card into "Prepare"
+                                     v
+                     RabbitMQ (rabbitmq-0, resumes.generate)
                                      |  KEDA: queue depth -> replicas (0 -> M -> 0)
                                      v
                      ai-agent-worker pod (prefetch = 1, one vacancy per message)
@@ -124,23 +127,44 @@ automation         .github/workflows/
     authenticates and never creates. A session is an HS256 token (cookie for the
     browser, `Authorization: Bearer` for the extension) signed with
     `BACKOFFICE_JWT_SECRET`, and `backoffice/src/middleware.ts` is the only gate.
-16. **The gateway publishes what the worker can consume.** `POST /api/vacancies/batch`
-    validates the whole batch *before* the first publish (required `external_id` +
-    `description_raw`, http(s) `source_url`, ≤25 cards) and emits exactly
+16. **The batch route validates and creates cards; the operator's drag publishes.**
+    `POST /api/vacancies/batch` rejects anything the worker could not consume (required
+    `external_id` + `description_raw`, http(s) `source_url`, a `[a-z0-9-]{2,32}` source slug,
+    ≤ 25 cards) and then only creates `resumes` rows in the board's **Scraped** column -
+    no broker round trip and no Gemini request. The message is published by
+    `POST /api/board/move` when a card enters **Prepare**
+    (`lib/board.ts::tailoringRequest` decides queue/retry/none), and it is exactly
     `ResumeTaskMessage`; the AMQP topology in `backoffice/src/lib/queue.ts` mirrors
     `utils/messaging.py` field for field (a mismatch is a 406 from the broker).
 17. **A scraped vacancy is a card immediately, and the worker's claim adopts it.** The
-    batch gateway inserts the `resumes` row (`status = 'submitted'`, `job_id` = the
-    one it puts in the message) *before* publishing, and deletes the rows it created if
-    the publish fails. `submitted` must stay out of `ACTIVE_STATUSES`, otherwise the
-    claim would ack the message as a duplicate and the card would never run; being
-    non-active makes `_claim_row` re-claim that exact row. The board's *move* path
-    still never writes `resumes.status`.
+    intake (the batch route, and the scheduled scout) inserts the `resumes` row with
+    `status = 'submitted'`; that row **is** the card, and it waits in Scraped until the
+    operator drags it to Prepare. `submitted` must stay out of `ACTIVE_STATUSES`, otherwise
+    the claim would ack the message as a duplicate and the card would never run; being
+    non-active makes `_claim_row` re-claim that exact row. The board's *move* path still never
+    writes `resumes.status`. **Its duplicate check is board-scoped, not account-scoped**
+    (`findExistingVacancies(..., { scope: 'board', source })`): the board renders every row
+    whatever its `user_id` (D11), so a check limited to the session account would offer to
+    scrape a card the operator can already see - and the row it then created would look like a
+    duplicate card. The business key includes `source`, so the same number on two sites is two
+    vacancies. Rows created outside the board (the CLI `send-test-job.ps1`, the Helm smoke
+    test) carry `user_id = NULL`, and every publisher queues with the *row's* `user_id` - a
+    different owner would make the claim insert a second row. That is how this was found live
+    on 2026-09-26.
 18. **`resumes.pdf_url` / `docx_path` are storage paths, not URLs.** They are what
     `utils/storage.LocalStorage.upload` returned (`/data/output/848944.pdf` in the
     cluster), so nothing in a browser may link them: the board serves downloads from
     `GET /api/artifacts/<job_id>` (keyed by `job_id`, resolved against `ARTIFACTS_DIR`,
-    traversal-refused) and reports "not on this machine" instead of a bare 404.
+    traversal-refused) and reports "not on this machine" instead of a bare 404. **Both
+    documents are served** (`?format=docx` included - the mirror used to copy only PDFs),
+    and `fetchBoard` reports per-card `artifactAvailability`, so the UI labels an
+    unmirrored document instead of offering a link that cannot resolve.
+    On a dev machine the board can also point straight at the volume: Docker Desktop keeps
+    its PVs on the VM disk, which Windows reaches through WSL
+    (`\\wsl$\<distro>\mnt\docker-desktop-disk\data\k8s-pvs\<pvc>\output`) -
+    `scripts/storage-files.ps1 -Action path` prints that `OUTPUT_DIR`. `isWorkerVolumeRoot`
+    recognises the root, so removing a vacancy deletes the worker's file instead of queueing
+    it for the volume sweep.
 19. **Refusing a vacancy is an in-place soft delete.** `resume_board.archived_at` /
     `archived_actor` / `archived_reason` are set (or cleared) in one transaction with the
     `resume_history` row (`kind` `archive`/`restore`, `from_state`/`to_state`
@@ -169,6 +193,25 @@ automation         .github/workflows/
     the words they were recorded with, and a removed value stays filterable as
     `catalogued: false` (dialog comboboxes stop suggesting it; the Filters panel keeps
     offering it, because deleting a word must not make past cards unfindable).
+22. **Removal is a purge, and it is the only irreversible action.** `POST /api/board/remove`
+    requires an **archived** card whose status is terminal (`REMOVABLE_STATUSES`) - a
+    vacancy a worker still owns is refused, because the task that finishes after the purge
+    would leave artifacts behind with nothing pointing at them. It deletes the artifact
+    files the board can reach, queues every stored path it cannot in `artifact_purge`
+    (`scripts/storage-files.ps1 -Action purge` sweeps the volume and clears the rows), and
+    last deletes the `resumes` row - taking `resume_board`, the whole `resume_history` and
+    the refusal record with it, because both cascade. **Nothing is tombstoned**: the vacancy
+    becomes unknown again, so re-scraping its page creates a fresh card and pays for
+    tailoring again.
+23. **Tailoring is operator-triggered, and a failed request is rolled back.** Scraping - the
+    browser extension or a scheduled scout - never spends Gemini: cards land in Scraped and
+    stay there until the operator drags one into Prepare (`lib/board.ts::tailoringRequest`).
+    That request publishes first and moves second, and if the broker refuses, a card that just
+    left Scraped is moved back with the reason recorded in `resume_history` - so "in Prepare"
+    can never quietly mean "no message was ever sent". A card whose stored `description_raw`
+    is null (scraped before 2026-09-26) is refused with 409 and stays where it is rather than
+    poisoning the DLQ, and a parked card already in Prepare is *retried* by the same request
+    without a stage change.
 
 ## 5. Known discrepancies, dead code and legacy paths
 
@@ -184,12 +227,12 @@ so that a change which depends on them is a conscious one.
 | D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
 | D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
 | D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
-| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **56 collected, 17 skipped, 39 passed** (`python -m pytest -q`, 2026-09-26); the 17 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
+| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **57 collected, 18 skipped, 39 passed** (`python -m pytest -q`, 2026-09-26); the 18 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
 | D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
-| D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
-| D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box |
+| D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), its `GET /api/vacancies/status?external_ids=...` answers "already on the board?" for the extension's injected per-card buttons (the same lookup, board-scoped), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI. A refused card can also be **removed for good** (invariant 22): the row, its board state, its whole history and its artifacts - with whatever the board cannot reach queued in `artifact_purge` for `scripts/storage-files.ps1 -Action purge` | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
+| D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box (it scrapes before the gateway; and its loading `content_scripts` entry injects a `Scrape`/`Scraped` button into every listing card, the `Scraped` link deep-linking to `/?card=<job_id>` on the board) |
 
 ### Legacy / removed (do not reintroduce)
 

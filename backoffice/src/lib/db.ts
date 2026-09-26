@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import type { PoolClient } from 'pg';
 import type { ActionInput } from './admin';
+import { artifactAvailability } from './artifacts';
 import type { ExistingVacancy, InsertPlan } from './ingest';
 import type { Actor, ArchiveRequest, BoardAction, BoardCard, MoveRequest } from './types';
 
@@ -13,7 +14,7 @@ import type { Actor, ArchiveRequest, BoardAction, BoardCard, MoveRequest } from 
  *   resume_history one row per confirmed manual change
  *
  * `resumes.status` is read-only for the board: it is the worker's claim and
- * idempotency state, and the `created` sub-state is derived from it instead.
+ * idempotency state, and the `prepare` sub-state is derived from it instead.
  */
 
 const BOARD_LIMIT = 200;
@@ -21,6 +22,7 @@ const BOARD_LIMIT = 200;
 interface CardRow {
   job_id: string;
   external_id: string;
+  source: string;
   title: string | null;
   company: string | null;
   source_url: string | null;
@@ -95,10 +97,10 @@ function toIso(value: Date | string): string {
  * selected in both).
  */
 const CARD_SELECT = `
-  select r.job_id, r.external_id, r.title, r.company, r.source_url, r.cv_version,
+  select r.job_id, r.external_id, r.source, r.title, r.company, r.source_url, r.cv_version,
          r.status, r.attempts, r.revision_count, r.duration_ms, r.error,
          r.pdf_url, r.docx_path, r.created_at, r.updated_at,
-         coalesce(b.stage, 'created') as stage,
+         coalesce(b.stage, 'scraped') as stage,
          b.archived_at, b.archived_actor, b.archived_reason
     from resumes r
     left join resume_board b on b.job_id = r.job_id`;
@@ -118,6 +120,7 @@ function toCard(row: CardRow, history: HistoryRow[]): BoardCard {
   return {
     jobId: row.job_id,
     externalId: row.external_id,
+    source: row.source,
     title: row.title ?? '',
     company: row.company ?? '',
     sourceUrl: row.source_url,
@@ -136,6 +139,9 @@ function toCard(row: CardRow, history: HistoryRow[]): BoardCard {
     archivedActor: (row.archived_actor as BoardCard['archivedActor']) ?? null,
     archivedReason: row.archived_reason,
     archived: row.archived_at !== null,
+    // The worker stored these paths; whether *this* board can serve them depends on its
+    // artifact root (a mirror, in dev) - so the UI never offers a link that would 404.
+    artifactAvailability: artifactAvailability(row.pdf_url, row.docx_path),
     history: history
       .filter((entry) => entry.job_id === row.job_id)
       .map((entry) => ({
@@ -189,7 +195,7 @@ export async function moveCard(move: MoveRequest): Promise<BoardCard | null> {
       'select stage from resume_board where job_id = $1',
       [move.jobId],
     );
-    const from = current.rows[0]?.stage ?? 'created';
+    const from = current.rows[0]?.stage ?? 'scraped';
 
     await client.query(
       `insert into resume_board (job_id, stage, updated_at) values ($1, $2, now())
@@ -332,6 +338,82 @@ export async function deleteAction(value: string): Promise<boolean> {
   return (deleted.rowCount ?? 0) > 0;
 }
 
+// -- removal (the board's only irreversible action) ---------------------------- #
+
+/** What a removal has to know before it deletes anything. */
+export interface CardForRemoval {
+  status: string;
+  archived: boolean;
+  pdfUrl: string | null;
+  docxPath: string | null;
+}
+
+export async function cardForRemoval(jobId: string): Promise<CardForRemoval | null> {
+  const rows = await pool().query<{
+    status: string;
+    archived_at: Date | string | null;
+    pdf_url: string | null;
+    docx_path: string | null;
+  }>(
+    `select r.status, b.archived_at, r.pdf_url, r.docx_path
+       from resumes r
+       left join resume_board b on b.job_id = r.job_id
+      where r.job_id = $1`,
+    [jobId],
+  );
+  const row = rows.rows[0];
+  if (!row) return null;
+  return {
+    status: row.status,
+    archived: row.archived_at !== null,
+    pdfUrl: row.pdf_url,
+    docxPath: row.docx_path,
+  };
+}
+
+/**
+ * Remove the card for good: the `resumes` row, its board state and its **entire** history
+ * (`resume_board` and `resume_history` cascade from it). No tombstone is written - that is
+ * what removal means here (invariant 22) - so the vacancy becomes unknown to the system
+ * again and re-scraping its page starts from scratch.
+ *
+ * The caller must have read the artifact paths first: this deletes the only record of them.
+ */
+export async function purgeCard(jobId: string): Promise<boolean> {
+  const deleted = await pool().query('delete from resumes where job_id = $1', [jobId]);
+  return (deleted.rowCount ?? 0) > 0;
+}
+
+/**
+ * Record the artifact paths this board could not delete, so the cluster volume can be swept
+ * later (`scripts/storage-files.ps1 -Action purge`). Idempotent per path: re-queueing only
+ * moves the row's job id and timestamp.
+ */
+export async function queueArtifactPurge(jobId: string, storedPaths: string[]): Promise<number> {
+  if (storedPaths.length === 0) return 0;
+  const queued = await pool().query(
+    `insert into artifact_purge (stored_path, job_id)
+     select * from unnest($1::text[], $2::text[])
+     on conflict (stored_path) do update set job_id = excluded.job_id, queued_at = now()`,
+    [storedPaths, storedPaths.map(() => jobId)],
+  );
+  return queued.rowCount ?? 0;
+}
+
+/** What is still waiting for the volume sweep (the admin page and the script both read it). */
+export async function pendingArtifactPurge(): Promise<
+  { storedPath: string; jobId: string; queuedAt: string }[]
+> {
+  const rows = await pool().query<{ stored_path: string; job_id: string; queued_at: Date | string }>(
+    'select stored_path, job_id, queued_at from artifact_purge order by queued_at asc',
+  );
+  return rows.rows.map((row) => ({
+    storedPath: row.stored_path,
+    jobId: row.job_id,
+    queuedAt: toIso(row.queued_at),
+  }));
+}
+
 /** Archive/restore answer with the card they wrote, or say why they refused. */
 export type MutationOutcome =
   | { ok: true; card: BoardCard }
@@ -365,11 +447,11 @@ export async function archiveCard(request: ArchiveRequest): Promise<MutationOutc
       return { ok: false, reason: 'state' };
     }
 
-    // No board row yet (a card still in Created): the insert seeds stage 'created',
+    // No board row yet (a card still in Scraped): the insert seeds stage 'scraped',
     // exactly like the column default.
     await client.query(
       `insert into resume_board (job_id, stage, archived_at, archived_actor, archived_reason, updated_at)
-       values ($1, 'created', now(), $2, $3, now())
+       values ($1, 'scraped', now(), $2, $3, now())
        on conflict (job_id) do update
           set archived_at = now(),
               archived_actor = excluded.archived_actor,
@@ -449,17 +531,35 @@ export async function restoreCard(
 // -- ingest (the batch gateway) -------------------------------------------- #
 
 /**
- * The board's view of the vacancies in this batch: one query, keyed by
- * `external_id`, so the gateway can tell "new" from "already on the board" before it
- * publishes anything. `archived_at` is part of the answer because a refused vacancy
- * must never be queued again (see `lib/ingest.ts`).
+ * The vacancies in this batch, keyed by `external_id`.
+ *
+ * `scope` decides whose rows count:
+ *
+ * Both scopes are per **site**: `source` is half of the vacancy's identity (djinni's
+ * 848944 and DOU's 848944 are different vacancies), so a lookup always asks about one.
+ *
+ *   `'user'`  (default) - the rows this account owns, the way the worker's business key
+ *               (`coalesce(user_id,'local') : source : external_id : cv_version`) sees them.
+ *   `'board'` - **any** row for that vacancy + CV version, which is what the operator can
+ *               actually see: the board renders every row regardless of `user_id`, so a
+ *               lookup scoped to one account would offer to scrape a card that is already
+ *               there (and a second row for it would then appear as a duplicate card).
+ *               Cards created by the CLI/smoke test carry `user_id = NULL`, which is exactly
+ *               the case that exposed this (2026-09-26).
+ *
+ * `archived_at` is part of the answer because a refused vacancy must never be queued again
+ * (see `lib/ingest.ts`). When several rows match a board-scoped lookup, the most recently
+ * touched one wins.
  */
 export async function findExistingVacancies(
-  userId: string,
+  userId: string | null,
   externalIds: string[],
   cvVersion: string,
+  options: { scope?: 'user' | 'board'; source?: string } = {},
 ): Promise<Map<string, ExistingVacancy>> {
   if (externalIds.length === 0) return new Map();
+  const boardScope = (options.scope ?? 'user') === 'board';
+  const source = options.source ?? 'djinni';
 
   const rows = await pool().query<{
     job_id: string;
@@ -471,23 +571,25 @@ export async function findExistingVacancies(
     `select r.job_id, r.external_id, r.status, r.updated_at, b.archived_at
        from resumes r
        left join resume_board b on b.job_id = r.job_id
-      where coalesce(r.user_id, 'local') = coalesce($1, 'local')
-        and r.cv_version = $2
-        and r.external_id = any($3::text[])`,
-    [userId, cvVersion, externalIds],
+      where r.cv_version = $2
+        and r.external_id = any($3::text[])
+        and r.source = $5
+        and ($4::boolean or coalesce(r.user_id, 'local') = coalesce($1, 'local'))
+      order by r.updated_at desc`,
+    [userId, cvVersion, externalIds, boardScope, source],
   );
 
-  return new Map(
-    rows.rows.map((row) => [
-      row.external_id,
-      {
-        jobId: row.job_id,
-        status: row.status,
-        updatedAt: toIso(row.updated_at),
-        archived: row.archived_at !== null,
-      },
-    ]),
-  );
+  const found = new Map<string, ExistingVacancy>();
+  for (const row of rows.rows) {
+    if (found.has(row.external_id)) continue; // ordered newest first
+    found.set(row.external_id, {
+      jobId: row.job_id,
+      status: row.status,
+      updatedAt: toIso(row.updated_at),
+      archived: row.archived_at !== null,
+    });
+  }
+  return found;
 }
 
 /**
@@ -505,14 +607,18 @@ export async function insertSubmittedRows(
   userId: string,
   cvVersion: string,
   status: string,
+  source: string,
 ): Promise<string[]> {
   if (rows.length === 0) return [];
 
   const created = await pool().query<{ job_id: string }>(
-    `insert into resumes (job_id, user_id, external_id, title, company, source_url, cv_version, status)
-     select t.job_id, t.user_id, t.external_id, t.title, t.company, t.source_url, $7, $8
-       from unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[])
-         as t(job_id, user_id, external_id, title, company, source_url)
+    `insert into resumes (job_id, user_id, external_id, source, title, company, source_url,
+                          description_raw, cv_version, status)
+     select t.job_id, t.user_id, t.external_id, $10, t.title, t.company, t.source_url,
+            t.description_raw, $8, $9
+       from unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                   $7::text[])
+         as t(job_id, user_id, external_id, title, company, source_url, description_raw)
      on conflict do nothing
      returning job_id`,
     [
@@ -522,26 +628,14 @@ export async function insertSubmittedRows(
       rows.map((row) => row.vacancy.title),
       rows.map((row) => row.vacancy.company),
       rows.map((row) => row.vacancy.source_url ?? null),
+      rows.map((row) => row.vacancy.description_raw),
       cvVersion,
       status,
+      source,
     ],
   );
 
   return created.rows.map((row) => row.job_id);
-}
-
-/**
- * Compensation for a failed publish: drop the cards this request created. Only rows
- * still in the ingest status are removed, so a row the worker has already claimed
- * (its status moved on) is never touched.
- */
-export async function deleteSubmittedRows(jobIds: string[], status: string): Promise<number> {
-  if (jobIds.length === 0) return 0;
-  const deleted = await pool().query(
-    'delete from resumes where job_id = any($1::text[]) and status = $2',
-    [jobIds, status],
-  );
-  return deleted.rowCount ?? 0;
 }
 
 /** The artifact paths of one vacancy, for `GET /api/artifacts/<job_id>`. */
@@ -555,3 +649,67 @@ export async function jobArtifact(
   const row = rows.rows[0];
   return row ? { status: row.status, pdfUrl: row.pdf_url, docxPath: row.docx_path } : null;
 }
+
+/** Everything one card needs to become a `ResumeTaskMessage` - and its current state. */
+export interface TaskMessageRow {
+  jobId: string;
+  userId: string | null;
+  externalId: string;
+  source: string;
+  cvVersion: string;
+  title: string;
+  company: string;
+  sourceUrl: string | null;
+  /** `resumes.description_raw`; null for rows that predate the column (2026-09-26). */
+  descriptionRaw: string | null;
+  status: string;
+  stage: string;
+}
+
+/**
+ * Read the row that a drag into Prepare has to queue, plus the state the caller judges it by
+ * (`stage`/`status` feed `lib/board.ts::tailoringRequest`).
+ *
+ * `user_id` is read, not assumed: the message must carry the *row's* owner or the worker's
+ * claim would look up a different business key and insert a second card for the same vacancy.
+ */
+export async function taskMessageRow(jobId: string): Promise<TaskMessageRow | null> {
+  const rows = await pool().query<{
+    job_id: string;
+    user_id: string | null;
+    external_id: string;
+    source: string;
+    cv_version: string;
+    title: string | null;
+    company: string | null;
+    source_url: string | null;
+    description_raw: string | null;
+    status: string;
+    stage: string;
+  }>(
+    `select r.job_id, r.user_id, r.external_id, r.source, r.cv_version, r.title, r.company,
+            r.source_url, r.description_raw, r.status,
+            coalesce(b.stage, 'scraped') as stage
+       from resumes r
+       left join resume_board b on b.job_id = r.job_id
+      where r.job_id = $1`,
+    [jobId],
+  );
+  const row = rows.rows[0];
+  if (!row) return null;
+
+  return {
+    jobId: row.job_id,
+    userId: row.user_id,
+    externalId: row.external_id,
+    source: row.source,
+    cvVersion: row.cv_version,
+    title: row.title ?? '',
+    company: row.company ?? '',
+    sourceUrl: row.source_url,
+    descriptionRaw: row.description_raw,
+    status: row.status,
+    stage: row.stage,
+  };
+}
+

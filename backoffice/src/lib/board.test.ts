@@ -7,17 +7,21 @@ import {
   countColumns,
   groupByStage,
   historyLine,
+  isRemovableStatus,
   parseArchiveRequest,
   parseMoveRequest,
+  parseRemoveRequest,
   parseRestoreRequest,
 } from './board';
 import { STAGES, isStageId, tailoringFromStatus } from './stages';
+import { tailoringRequest } from './board';
 import type { BoardCard } from './types';
 
 function card(overrides: Partial<BoardCard> = {}): BoardCard {
   return {
     jobId: '374001-1',
     externalId: '374001',
+    source: 'djinni',
     title: 'Senior Data Engineer',
     company: 'InScale',
     sourceUrl: null,
@@ -31,11 +35,12 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
     docxPath: null,
     createdAt: '2026-09-25T10:00:00.000Z',
     updatedAt: '2026-09-25T10:05:00.000Z',
-    stage: 'created',
+    stage: 'prepare',
     archivedAt: null,
     archivedActor: null,
     archivedReason: null,
     archived: false,
+    artifactAvailability: { pdf: false, docx: false },
     history: [],
     ...overrides,
   };
@@ -96,16 +101,21 @@ describe('parseMoveRequest (the dialog contract)', () => {
 describe('board grouping', () => {
   it('buckets cards per column, newest change first, and counts them', () => {
     const columns = groupByStage([
-      card({ jobId: 'a', stage: 'created', updatedAt: '2026-09-25T10:00:00.000Z' }),
-      card({ jobId: 'b', stage: 'created', updatedAt: '2026-09-25T11:00:00.000Z' }),
+      card({ jobId: 'a', stage: 'prepare', updatedAt: '2026-09-25T10:00:00.000Z' }),
+      card({ jobId: 'b', stage: 'prepare', updatedAt: '2026-09-25T11:00:00.000Z' }),
       card({ jobId: 'c', stage: 'offer' }),
     ]);
 
     expect(columns.map((column) => column.stage)).toEqual(STAGES.map((stage) => stage.id));
-    expect(columns[0].cards.map((item) => item.jobId)).toEqual(['b', 'a']);
-    expect(columns[4].cards.map((item) => item.jobId)).toEqual(['c']);
-    expect(countByStage([card({ stage: 'created' }), card({ stage: 'created' }), card({ stage: 'applied' })])).toEqual({
-      created: 2,
+    // Addressed by stage id, not index: the board gained a column (Scraped) once already.
+    const column = (id: string) => columns.find((item) => item.stage === id);
+    expect(column('prepare')?.cards.map((item) => item.jobId)).toEqual(['b', 'a']);
+    expect(column('offer')?.cards.map((item) => item.jobId)).toEqual(['c']);
+    expect(
+      countByStage([card({ stage: 'prepare' }), card({ stage: 'prepare' }), card({ stage: 'applied' })]),
+    ).toEqual({
+      scraped: 0,
+      prepare: 2,
       applied: 1,
       negotiating: 0,
       interviewing: 0,
@@ -147,6 +157,26 @@ describe('archive and restore requests (the refusal dialog)', () => {
     expect(RESTORE_ACTION).toBe('Restored to the active pipeline');
   });
 
+  it('takes a job id and nothing else for a removal', () => {
+    expect(parseRemoveRequest({ jobId: ' a-1 ' })).toEqual({ ok: true, value: { jobId: 'a-1' } });
+    expect(parseRemoveRequest({}).ok).toBe(false);
+    expect(parseRemoveRequest(null).ok).toBe(false);
+    expect(parseRemoveRequest(['a-1']).ok).toBe(false);
+  });
+
+  it('removes only what no worker owns any more', () => {
+    // Terminal statuses: the task will not touch the row again, so purging it is safe.
+    for (const status of ['completed', 'skipped', 'failed', 'rate_limited', 'dead_lettered']) {
+      expect(isRemovableStatus(status), status).toBe(true);
+    }
+    expect(isRemovableStatus('COMPLETED')).toBe(true);
+    // In flight (including `submitted`, whose message may still be queued): removal would
+    // leave the artifacts of a task that finishes after the purge.
+    for (const status of ['submitted', 'queued', 'processing', 'rendering', 'validating', 'uploading', '']) {
+      expect(isRemovableStatus(status), status).toBe(false);
+    }
+  });
+
   it('still refuses "archived" as a column id on a move', () => {
     expect(parseMoveRequest({ jobId: 'a-1', to: 'archived', actor: 'Candidate', action: 'x' }).ok).toBe(
       false,
@@ -163,8 +193,14 @@ describe('active vs archived counting (column headers)', () => {
       archivedCard({ jobId: 'd', stage: 'applied' }),
     ];
 
-    expect(countColumns(cards)[3]).toEqual({ stage: 'interviewing', active: 2, archived: 1, total: 3 });
-    expect(countColumns(cards)[1]).toEqual({ stage: 'applied', active: 0, archived: 1, total: 1 });
+    const byStage = new Map(countColumns(cards).map((column) => [column.stage, column]));
+    expect(byStage.get('interviewing')).toEqual({
+      stage: 'interviewing',
+      active: 2,
+      archived: 1,
+      total: 3,
+    });
+    expect(byStage.get('applied')).toEqual({ stage: 'applied', active: 0, archived: 1, total: 1 });
     // countByStage feeds the nav panel, which counts the pipeline *in play*.
     expect(countByStage(cards).interviewing).toBe(2);
     expect(countByStage(cards).applied).toBe(0);
@@ -201,9 +237,37 @@ describe('active vs archived counting (column headers)', () => {
         actor: 'Candidate',
         action: 'Applied online',
         kind: 'move',
-        from: 'created',
+        from: 'prepare',
         to: 'applied',
       }),
-    ).toBe('stage: Created → Applied');
+    ).toBe('stage: Prepare → Applied');
+  });
+});
+
+describe('entering Prepare is what requests tailoring', () => {
+  it('queues a card that was waiting in Scraped', () => {
+    expect(tailoringRequest('scraped', 'submitted', 'prepare')).toBe('queue');
+    // A card the CLI/smoke test published is `queued` already: nothing to add.
+    expect(tailoringRequest('scraped', 'queued', 'prepare')).toBe('none');
+  });
+
+  it('retries a parked card that is already in Prepare', () => {
+    for (const status of ['failed', 'rate_limited', 'dead_lettered']) {
+      expect(tailoringRequest('prepare', status, 'prepare'), status).toBe('retry');
+    }
+    expect(tailoringRequest('prepare', 'processing', 'prepare')).toBe('none');
+    expect(tailoringRequest('prepare', 'completed', 'prepare')).toBe('none');
+    expect(tailoringRequest('prepare', 'skipped', 'prepare')).toBe('none');
+  });
+
+  it('treats an already-tailored card as done, whatever column it is dragged into', () => {
+    expect(tailoringRequest('scraped', 'completed', 'prepare')).toBe('none');
+    expect(tailoringRequest('scraped', 'skipped', 'prepare')).toBe('none');
+  });
+
+  it('never queues anything for another column', () => {
+    for (const to of ['scraped', 'applied', 'negotiating', 'interviewing', 'offer']) {
+      expect(tailoringRequest('scraped', 'submitted', to), to).toBe('none');
+    }
   });
 });

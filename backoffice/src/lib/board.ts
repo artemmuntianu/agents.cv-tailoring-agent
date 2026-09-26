@@ -22,6 +22,14 @@ function parseJobId(raw: Record<string, unknown>): ParseResult<string> {
   return { ok: true, value: jobId };
 }
 
+/** The bodies that carry nothing but a job id (restore, remove). */
+function parseJobIdBody(body: unknown): ParseResult<{ jobId: string }> {
+  const object = asObject(body);
+  if (!object.ok) return object;
+  const jobId = parseJobId(object.value);
+  return jobId.ok ? { ok: true, value: { jobId: jobId.value } } : jobId;
+}
+
 function parseActor(raw: unknown): ParseResult<Actor> {
   if (raw !== 'Candidate' && raw !== 'Company') {
     return { ok: false, error: 'actor must be "Candidate" or "Company"' };
@@ -93,10 +101,36 @@ export function parseArchiveRequest(body: unknown): ParseResult<ArchiveRequest> 
 
 /** Validate a `POST /api/board/restore` body: a job id and nothing else. */
 export function parseRestoreRequest(body: unknown): ParseResult<{ jobId: string }> {
-  const object = asObject(body);
-  if (!object.ok) return object;
-  const jobId = parseJobId(object.value);
-  return jobId.ok ? { ok: true, value: { jobId: jobId.value } } : jobId;
+  return parseJobIdBody(body);
+}
+
+/**
+ * Validate a `POST /api/board/remove` body. Removal is the only irreversible action on the
+ * board, so its route additionally checks that the card is archived and that no worker owns
+ * the vacancy any more (see `REMOVABLE_STATUSES`).
+ */
+export function parseRemoveRequest(body: unknown): ParseResult<{ jobId: string }> {
+  return parseJobIdBody(body);
+}
+
+/**
+ * Statuses after which a card may be removed.
+ *
+ * A vacancy a worker still owns is excluded: the task writes its artifacts when it finishes,
+ * so purging the row mid-flight would leave the files behind with nothing pointing at them
+ * (and the worker's next `update` would silently touch no rows). `submitted` is in that
+ * in-flight set on purpose - a message may still be queued.
+ */
+export const REMOVABLE_STATUSES = [
+  'completed',
+  'skipped',
+  'failed',
+  'rate_limited',
+  'dead_lettered',
+];
+
+export function isRemovableStatus(status: string): boolean {
+  return REMOVABLE_STATUSES.includes((status || '').toLowerCase());
 }
 
 /** Cards per column, in board order, newest change first. */
@@ -138,3 +172,37 @@ export function historyLine(entry: HistoryEntry): string {
   return describeHistory(entry.kind, entry.from, entry.to);
 }
 
+
+/**
+ * What entering the `prepare` column asks for - the one place the board decides to spend
+ * Gemini.
+ *
+ * The pipeline is **operator-triggered**: scraping (the browser extension, the scheduled
+ * scout) only creates cards in Scraped, and this turns the drag into a queue message
+ * (`POST /api/board/move`):
+ *
+ *   `'queue'` - the card was not in Prepare and nothing is running for it: publish once;
+ *   `'retry'` - it is already in Prepare with a parked status, so the drag *is* the retry
+ *               (no stage change and no history noise);
+ *   `'none'`  - nothing to do: an active row is queued or already tailored (the worker would
+ *               ack the message as a duplicate), or the target is another column.
+ *
+ * The status sets mirror `utils/db.py`: `RUNNING_STATUSES` + `DONE_STATUSES` are what
+ * `ACTIVE_STATUSES` means on the worker side, plus `skipped` (a completed outcome the worker
+ * wrote without producing a new document). Keep them in sync deliberately.
+ */
+export type TailoringRequest = 'queue' | 'retry' | 'none';
+
+const RUNNING_STATUSES = ['queued', 'processing', 'rendering', 'validating', 'uploading'];
+const DONE_STATUSES = ['completed', 'skipped'];
+const PARKED_STATUSES = ['failed', 'rate_limited', 'dead_lettered'];
+
+export function tailoringRequest(stage: string, status: string, to: string): TailoringRequest {
+  if (to !== 'prepare') return 'none';
+
+  const current = (status || '').toLowerCase();
+  if (stage === 'prepare') {
+    return PARKED_STATUSES.includes(current) ? 'retry' : 'none';
+  }
+  return RUNNING_STATUSES.includes(current) || DONE_STATUSES.includes(current) ? 'none' : 'queue';
+}

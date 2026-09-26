@@ -18,6 +18,8 @@ interface ReasonDialogProps {
   confirmLabel?: string;
   /** 'danger' paints the confirm button the way the refusal it confirms reads. */
   tone?: 'neutral' | 'danger';
+  /** Something the operator must know *before* confirming (e.g. "this starts tailoring"). */
+  warning?: string;
   defaultActor?: Actor;
   onProceed: (actor: Actor, action: string) => void;
   onCancel: () => void;
@@ -42,6 +44,7 @@ export default function ReasonDialog({
   actionLabel = 'Action',
   confirmLabel = 'Proceed',
   tone = 'neutral',
+  warning,
   defaultActor = 'Candidate',
   onProceed,
   onCancel,
@@ -76,6 +79,12 @@ export default function ReasonDialog({
           <span aria-hidden>→</span>
           <span className="font-medium text-slate-900">{toLabel}</span>
         </div>
+
+        {warning && (
+          <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {warning}
+          </p>
+        )}
 
         <label className="mt-4 block text-xs font-medium uppercase tracking-wide text-slate-500">
           Actor

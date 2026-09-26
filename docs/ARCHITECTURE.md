@@ -64,13 +64,18 @@ of the same Secret, so the password still exists once.
 | ⑤ Artifacts | `PVC/cv-artifacts` (2 Gi, hostpath, `keep`) + `Deploy/cv-files` | `charts/cv-tailoring-platform/templates/storage.yaml` |
 
 The producer in the source design is Chrome extension → Vercel gateway → AMQP. Locally
-there are two producers and both publish the identical payload shape, so nothing
-downstream knows the difference:
+scraping only *creates cards*: `POST /api/vacancies/batch` validates the batch and inserts
+one `resumes` row per vacancy into the board's Scraped column (`CONSTITUTION.md` D12). The
+queue message is published when the operator drags a card into **Prepare**
+(`POST /api/board/move`), which is what keeps a scrape from spending Gemini; the other
+producer is the host-side smoke test.
 
 * `extension/` (Chrome MV3, loaded unpacked) scrapes every vacancy card on a listing
-  page and posts the batch to the backoffice gateway
-  (`POST /api/vacancies/batch` in `backoffice/`), which validates the batch and
-  publishes one message per vacancy - see `CONSTITUTION.md` D12;
+  page and posts the batch to the backoffice gateway. It is also loaded as a
+  `content_scripts` entry on the listing page, where it injects a `Scrape` button into
+  every card footer (a card the board already has shows `Scraped`, a link to
+  `/?card=<job_id>`), and it asks `GET /api/vacancies/status` before rendering that state. It sends the page's site slug (`source`), so the board can tell djinni's 848944 from
+  DOU's 848944;
 * `publisher.py` (driven by `scripts/send-test-job.ps1`) publishes a single job from
   the host, which is what a smoke test needs.
 
@@ -131,17 +136,18 @@ The message is acked only after (f) and (g) succeed.
 
 | Step | Code |
 |---|---|
-| scrape the listing page | `extension/` (`div[id^="job-item-"]`, injected function) |
+| scrape the listing page | `extension/` (`div[id^="job-item-"]`, injected function; per-card `Scrape` buttons from `src/inject.js`) |
+| has the board got it already? | `GET /api/vacancies/status` → `findExistingVacancies` (board scope) |
 | authenticate, validate the whole batch | `POST /api/vacancies/batch` → `backoffice/src/lib/vacancies.ts` (pure) |
 | **create the board card** | `resumes` row, `status='submitted'` → `backoffice/src/lib/ingest.ts` |
-| publish one message per vacancy | `backoffice/src/lib/queue.ts` (mirrors `utils/messaging.py`) |
+| *(nothing is queued yet - the card waits in Scraped)* | — |
+| **queue the tailoring** | the operator drags it into Prepare → `POST /api/board/move` → `lib/board.ts::tailoringRequest` → `backoffice/src/lib/queue.ts` (mirrors `utils/messaging.py`) |
 
-The row is committed *before* the message, which is what puts a scraped vacancy in
-Created immediately instead of only after KEDA boots a worker - and the worker's claim
-then **adopts** that same row (`job_id` unchanged), because `submitted` is deliberately
-outside `ACTIVE_STATUSES`. If the publish fails the gateway deletes the rows it created
-(`on conflict do nothing` + a `status='submitted'` guard make both steps safe against a
-concurrent scrape).
+The row *is* the card and it exists long before any message: the worker's claim **adopts**
+it (`job_id` unchanged) when the operator's drag finally queues it, because `submitted` is
+deliberately outside `ACTIVE_STATUSES`. If that publish fails, a card which just left
+Scraped is moved back with the reason recorded in `resume_history`, so "in Prepare" never
+quietly means "no message was sent" (`CONSTITUTION.md` invariant 23).
 
 Results come back the same way: `resumes.pdf_url`/`docx_path` are paths on the
 `cv-artifacts` volume, so the board serves `GET /api/artifacts/<job_id>` (resolved

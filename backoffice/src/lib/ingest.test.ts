@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { INGEST_STATUS, STALE_INGEST_MS, planIngest } from './ingest';
+import { INGEST_STATUS, planIngest } from './ingest';
 import type { ExistingVacancy } from './ingest';
 import type { ScrapedVacancy } from './vacancies';
 
@@ -13,100 +13,58 @@ const vacancy = (externalId: string): ScrapedVacancy => ({
 const existing = (
   externalId: string,
   status: string,
-  updatedAt = new Date().toISOString(),
   archived = false,
 ): [string, ExistingVacancy] => [
   externalId,
-  { jobId: `row-${externalId}`, status, updatedAt, archived },
+  { jobId: `row-${externalId}`, status, updatedAt: new Date().toISOString(), archived },
 ];
 
-const now = new Date('2026-01-02T12:00:00.000Z');
-const options = { makeJobId: () => 'new-job-id', now };
+/** A fresh id generator per test, so the ids a plan mints are predictable. */
+const options = () => {
+  let n = 0;
+  return { makeJobId: () => `new-job-${++n}` };
+};
 
-describe('ingest plan', () => {
-  it('creates the row and publishes for a vacancy the board has never seen', () => {
-    const plan = planIngest([vacancy('100')], new Map(), options);
+describe('ingest plan (create the card; queueing is the operator\'s drag)', () => {
+  it('creates a card for a vacancy the board has never seen', () => {
+    const plan = planIngest([vacancy('100')], new Map(), options());
     expect(plan.insert).toHaveLength(1);
-    expect(plan.insert[0].jobId).toBe('new-job-id');
-    expect(plan.publish).toEqual([
-      { vacancy: expect.objectContaining({ external_id: '100' }), jobId: 'new-job-id', retry: false },
-    ]);
+    expect(plan.insert[0].jobId).toBe('new-job-1');
+    expect(plan.insert[0].vacancy.external_id).toBe('100');
     expect(plan.duplicates).toBe(0);
   });
 
-  it('does not queue a vacancy twice while it is in flight', () => {
-    for (const status of [INGEST_STATUS, 'queued', 'processing', 'rendering']) {
-      const plan = planIngest([vacancy('100')], new Map([existing('100', status)]), options);
-      expect(plan.publish, status).toHaveLength(0);
+  it('never creates a second card for a vacancy the board already has', () => {
+    // Any status counts, `submitted` included: with the Scraped column a card waits for the
+    // operator's decision, and re-scraping the page must not fork it.
+    for (const status of [INGEST_STATUS, 'queued', 'processing', 'completed', 'failed']) {
+      const plan = planIngest([vacancy('100')], new Map([existing('100', status)]), options());
       expect(plan.insert, status).toHaveLength(0);
       expect(plan.duplicates, status).toBe(1);
     }
   });
 
-  it('treats a finished (or skipped) vacancy as already handled', () => {
-    for (const status of ['completed', 'skipped']) {
-      const plan = planIngest([vacancy('100')], new Map([existing('100', status)]), options);
-      expect(plan.publish, status).toHaveLength(0);
-      expect(plan.duplicates, status).toBe(1);
-      expect(plan.retries, status).toBe(0);
-    }
-  });
-
-  it('never re-queues a refused (archived) vacancy, whatever its status says', () => {
-    // A card archived while failed is the interesting case: without the archived flag
-    // the retry rule above would happily send it to Gemini again.
+  it('leaves a refused vacancy refused', () => {
     for (const status of ['failed', 'completed', INGEST_STATUS]) {
       const plan = planIngest(
         [vacancy('100')],
-        new Map([existing('100', status, new Date().toISOString(), true)]),
-        options,
+        new Map([existing('100', status, true)]),
+        options(),
       );
-      expect(plan.publish, status).toHaveLength(0);
       expect(plan.insert, status).toHaveLength(0);
-      expect(plan.retries, status).toBe(0);
       expect(plan.duplicates, status).toBe(1);
     }
-  });
-
-  it('re-queues a failed card under its own job_id - the board card is that row', () => {
-    for (const status of ['failed', 'rate_limited', 'dead_lettered']) {
-      const plan = planIngest([vacancy('100')], new Map([existing('100', status)]), options);
-      expect(plan.publish, status).toHaveLength(1);
-      expect(plan.publish[0].jobId, status).toBe('row-100');
-      expect(plan.publish[0].retry, status).toBe(true);
-      expect(plan.insert, status).toHaveLength(0);
-      expect(plan.retries, status).toBe(1);
-    }
-  });
-
-  it('re-queues an abandoned ingest row after the stale window, and not before', () => {
-    const stale = new Date(now.getTime() - STALE_INGEST_MS - 1).toISOString();
-    const fresh = new Date(now.getTime() - STALE_INGEST_MS + 60_000).toISOString();
-
-    const abandoned = planIngest([vacancy('100')], new Map([existing('100', INGEST_STATUS, stale)]), options);
-    expect(abandoned.publish).toHaveLength(1);
-    expect(abandoned.publish[0].jobId).toBe('row-100');
-    expect(abandoned.retries).toBe(1);
-
-    const inFlight = planIngest([vacancy('100')], new Map([existing('100', INGEST_STATUS, fresh)]), options);
-    expect(inFlight.publish).toHaveLength(0);
-    expect(inFlight.duplicates).toBe(1);
   });
 
   it('keeps one decision per vacancy in a mixed batch', () => {
     const plan = planIngest(
       [vacancy('100'), vacancy('200'), vacancy('300')],
       new Map([existing('100', 'completed'), existing('200', 'failed')]),
-      { makeJobId: (() => {
-        let n = 0;
-        return () => `job-${++n}`;
-      })(), now },
+      options(),
     );
 
-    expect(plan.publish.map((item) => item.vacancy.external_id)).toEqual(['200', '300']);
-    expect(plan.publish.map((item) => item.jobId)).toEqual(['row-200', 'job-1']);
-    expect(plan.insert.map((item) => item.jobId)).toEqual(['job-1']);
-    expect(plan.duplicates).toBe(1);
-    expect(plan.retries).toBe(1);
+    expect(plan.insert.map((item) => item.vacancy.external_id)).toEqual(['300']);
+    expect(plan.insert.map((item) => item.jobId)).toEqual(['new-job-1']);
+    expect(plan.duplicates).toBe(2);
   });
 });

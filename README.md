@@ -50,8 +50,13 @@ can show progress and hand over the files.
 ## Architecture
 
 ```
-extension (Chrome MV3) --batch--> backoffice gateway --+--> RabbitMQ (rabbitmq-0, resumes.generate)
-publisher.py / send-test-job.ps1 ----------------------+        |  KEDA: queue depth -> replicas (0 -> M -> 0)
+extension (Chrome MV3) --batch--> backoffice gateway --> cards in "Scraped"
+                    (validates, creates a card per vacancy, queues nothing)   |
+                                                                             |  the operator drags
+                                                                             |  a card into "Prepare"
+publisher.py / send-test-job.ps1 ----------------------+                     v
+                                                       +--> RabbitMQ (rabbitmq-0, resumes.generate)
+                                                              |  KEDA: queue depth -> replicas (0 -> M -> 0)
                                                               v
                                               ai-agent-worker pod (prefetch = 1, one vacancy per message)
                                               adapt_text -> render -> vision_check -> persist
@@ -172,8 +177,13 @@ Then put your CV on the cluster volume and send a vacancy:
 .\scripts\send-test-job.ps1 -Smoke              # one vacancy; opens its own port-forward
 
 kubectl get pods -w                              # 0 -> 1 -> 0
-.\scripts\storage-files.ps1 -Action download    # tailored PDFs into artifacts\output
+.\scripts\storage-files.ps1 -Action path        # where the board can read the results directly
 ```
+
+`-Action path` prints the `ARTIFACTS_DIR`/`OUTPUT_DIR` lines for `backoffice\.env`: Docker
+Desktop keeps its volumes on the VM disk, which Windows sees through WSL, so the board can read
+the worker's own documents instead of a copy (`-Action download` remains the mirror for any
+other cluster).
 
 `send-test-job.ps1` exists because the manual version is wrong twice over:
 `publisher.py` does not switch the queue backend on its own (the bare default is the
@@ -188,20 +198,24 @@ Teardown: `.\scripts\local-deploy.ps1 -Uninstall` (add
 
 ## Backoffice (POC): the vacancy board and the batch gateway
 
-A kanban UI for the pipeline - the cards *are* the worker's `resumes` rows, moved by
-hand between **Created** (its sub-state follows the worker's status), **Applied**,
-**Negotiating**, **Interviewing** and **Offer**. Every move asks for an actor
+A kanban UI for the pipeline - the cards *are* the worker's `resumes` rows, moved by hand
+between **Scraped** (the intake column: found by the extension or, later, by the scheduled
+scout - nothing runs yet), **Prepare** (its sub-state follows the worker's status; dropping a
+card here is what queues tailoring), **Applied**, **Negotiating**, **Interviewing** and
+**Offer**. Every move asks for an actor
 (Me/Them) and a reason, and both are written to `resume_history` in the same Postgres
 the worker uses (`backoffice/AGENTS.md` documents the contract). The board re-reads the
 database every few seconds (the `● Live` toggle), so worker progress shows up on its
 own.
 
-It is also the gateway the scraper posts to: `extension/` collects every vacancy card
-on a listing page and `POST /api/vacancies/batch` turns the batch into one
-`resumes.generate` message per vacancy, after validating the whole batch. Cards are
-created *before* the message is published, so a scraped vacancy appears in **Created**
-immediately - the worker's claim then adopts that same row (which is why the card turns
-from *Tailoring In Progress* to *Tailored* in place).
+It is also where the scraper posts: `extension/` collects every vacancy card on a listing
+page, and `POST /api/vacancies/batch` validates the batch and creates **one card per
+vacancy**. They land in **Scraped** and nothing is queued yet - scraping costs no Gemini
+request. Dragging a card into **Prepare** is what publishes the `resumes.generate` message
+(`POST /api/board/move`), and the worker's claim then adopts that same row (which is why the
+card turns from *Tailoring In Progress* to *Tailored* in place). The same extension injects a
+`Scrape` button into every listing card, which becomes `Scraped` (a link to that card on the
+board, `/?card=<job_id>`) once the vacancy is there.
 
 There is **no signup**: an administrator creates accounts out of band. An account
 provisioned with `--admin` also gets the **Vocabularies** page (`/admin`): the Action
@@ -220,8 +234,9 @@ npm run dev                                      # http://localhost:4321 -> sign
 ```
 
 Then load `extension/` unpacked (`chrome://extensions` -> Developer mode -> Load
-unpacked), sign in there with the same account and press *Scrape & queue this page*.
-`extension/README.md` has the step-by-step.
+unpacked), sign in there with the same account and press *Scrape & queue this page* -
+or, on any listing page, use the green `Scrape` button the extension has added to each
+card's footer. `extension/README.md` has the step-by-step.
 
 Refusing a vacancy is an **in-place archive**: the card keeps the column where it stopped
 and is only muted (rose accent, struck-through title, `⛔️ Rejected by Company • Salary
@@ -231,6 +246,14 @@ in the card's history with the actor and the reason. Archived cards are hidden u
 turn **Archived vacancies** on in the top bar's **🎛 Filters** panel, which is also where
 the columns and the recorded Actions can be filtered - and the bar always reports
 `showing N of M`, because the date range opens on the last 30 days.
+
+An archived card also offers **🗑 Remove**, which deletes the vacancy for good: the card,
+its column, its whole history and the tailored documents. The board deletes the files it
+can reach and queues the rest, so the one thing left to do is sweep the cluster volume:
+
+```powershell
+.\scripts\storage-files.ps1 -Action purge     # deletes what a removal queued, then clears the queue
+```
 
 ## Your files
 
@@ -245,12 +268,13 @@ the worker scales to zero:
 ```
 
 `scripts/storage-files.ps1` moves them in and out: `-Action seed` (push your CV),
-`-Action list`, `-Action download`, `-Action shell`.
+`-Action list`, `-Action download`, `-Action path`, `-Action shell`.
 
 The board's *Tailored PDF / DOCX* links download through
 `GET /api/artifacts/<job_id>`, which resolves the worker's stored path
 (`/data/output/848944.pdf`) against `ARTIFACTS_DIR`/`OUTPUT_DIR`. A board running
-outside the cluster therefore needs the volume mirrored locally - `-Action download`
+outside the cluster therefore either points those at the volume itself - `-Action path`
+prints the two lines for `backoffice\.env` - or mirrors it locally with `-Action download`.
 writes exactly where the default root points (`artifacts\output\`).
 
 **The hard sync rule:** every line of `cv_data.json` must exist verbatim in

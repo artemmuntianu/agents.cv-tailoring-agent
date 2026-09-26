@@ -15,16 +15,19 @@ One AMQP message == one vacancy == one LangGraph run.
 Backpressure: the worker declares the topology on connect (`utils/messaging.py`),
 so the queues exist even before the definitions Secret is loaded.
 
-## Publishing (Vercel API gateway, or `publisher.py` locally)
+## Publishing (the board's move route, or `publisher.py` / `send-test-job.ps1`)
 
-The Chrome extension scrapes every card (`div[id^="job-item-"]`) and POSTs a
-batch; the gateway publishes **N individual messages**:
+The Chrome extension scrapes every card (`div[id^="job-item-"]`) and POSTs a batch; the board
+creates **one card per vacancy** in its Scraped column and queues nothing at all. The message
+is published when the operator drags that card into **Prepare** (`POST /api/board/move`), or
+by the host-side tools below - one payload per vacancy either way:
 
 ```json
 {
   "job_id": "848944-1789668742",
   "user_id": "3f0f2a7c-...",
   "external_id": "848944",
+  "source": "djinni",
   "title": "Platform Engineering Lead",
   "company": "UPPeople",
   "source_url": "https://djinni.co/jobs/848944/",
@@ -55,7 +58,8 @@ and may be `848944-1789668742`, a UUID, or any token matching
   acked as a duplicate (`outcome=duplicate`) and no LLM call is made;
 * a retry of a *failed* task re-claims the **existing row** (same `job_id`), which
   keeps one row per vacancy and preserves the attempt counter.
-| `external_id` | **yes** | vacancy id; with `user_id` + `cv_version` it forms the idempotency key |
+| `external_id` | **yes** | vacancy id; with `user_id` + `source` + `cv_version` it forms the idempotency key |
+| `source` | no | site slug (`djinni`, `dou`, ...); defaults to `djinni`. Two sites number their vacancies independently, so it is half of the vacancy's identity |
 | `description_raw` | **yes** | plain text (HTML already stripped) |
 | `cv_data` | no | inline CV model; when absent the worker downloads `master/cv_data.json` |
 | `cv_version` | no | bump it when the master CV changes to force re-tailoring |
@@ -93,10 +97,11 @@ volume (`/data/output/...`); pull files out with
 
 ## Idempotency
 
-Key: `coalesce(user_id,'local') : external_id : cv_version`, enforced by
-`resumes_job_key_idx`. A redelivered or duplicated message therefore never pays
-for Gemini twice — the worker detects the completed row, logs
-`already completed - acking duplicate` and acks.
+Key: `coalesce(user_id,'local') : source : external_id : cv_version`, enforced by
+`resumes_job_key_idx`. The site belongs in it: djinni's 848944 and DOU's 848944 are different
+vacancies, and without the slug one would look like a duplicate of the other. A redelivered or
+duplicated message therefore never pays for Gemini twice - the worker detects the completed
+row, logs `already completed - acking duplicate` and acks.
 
 ## Local (directory) backend
 
