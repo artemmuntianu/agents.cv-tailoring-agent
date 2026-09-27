@@ -5,8 +5,8 @@ description: |
   pod rabbitmq-0), KEDA (operator + metrics server) and the AI worker
   deployment, installed with a single `helm upgrade --install`.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"
 kubeVersion: ">=1.27.0-0"
 dependencies:
   # Only KEDA comes from an upstream chart (its repository is healthy).
@@ -29,3 +29,9 @@ dependencies:
     version: "0.1.0"
     repository: "file://../cv-tailoring-scout"
     condition: cv-tailoring-scout.enabled
+  # The scheduled housekeeping (a CronJob): the Applied cards that went quiet are refused in
+  # place, with the same actor/reason/history the Archive dialog records.
+  - name: cv-tailoring-archiver
+    version: "0.1.0"
+    repository: "file://../cv-tailoring-archiver"
+    condition: cv-tailoring-archiver.enabled

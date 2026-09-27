@@ -21,6 +21,7 @@ import sys
 import config
 from scout import dou, feeds, store, telegram
 from utils import db as db_module
+from utils import process_runs
 from utils.logging_setup import get_logger, setup_logging
 
 log = get_logger(__name__)
@@ -102,20 +103,34 @@ def main(argv=None) -> int:
         dry_run=args.dry_run,
     )
 
+    # The run ledger surrounds everything after the argument parsing - preflight included: a
+    # run that failed before it could read a feed is exactly what the board's Processes
+    # window has to show. `enabled=False` for a dry run, which must write nothing at all.
+    with process_runs.record(process_runs.FEED_PARSER, enabled=not args.dry_run) as ledger:
+        return _run(args, ledger)
+
+
+def _run(args, ledger) -> int:
+    """One run: preflight -> feeds -> cards in Scraped -> Telegram, with the ledger."""
     try:
         log.info("preflight ok", **preflight())
     except Exception as exc:  # noqa: BLE001
         log.error("preflight failed - refusing to run", error=str(exc))
+        ledger.fail(f"preflight failed: {exc}")
         return 1
+
+    ledger.note(feeds=len(config.SCOUT_FEEDS), notify=config.SCOUT_NOTIFY)
 
     bodies = feeds.fetch_all()
     if not bodies:
         # "Every feed failed" is not "there is nothing new", and a CronJob has to see the
         # difference - otherwise a broken URL looks like a quiet week.
         log.error("no feed answered - not treating this as an empty result")
+        ledger.fail("no feed answered")
         return 1
 
     vacancies = collect(bodies)
+    ledger.note(feeds_ok=len(bodies), parsed=len(vacancies))
     if config.SCOUT_MAX_PER_RUN > 0 and len(vacancies) > config.SCOUT_MAX_PER_RUN:
         log.warning("capping this run", parsed=len(vacancies), limit=config.SCOUT_MAX_PER_RUN)
         vacancies = vacancies[: config.SCOUT_MAX_PER_RUN]
@@ -124,7 +139,10 @@ def main(argv=None) -> int:
         fresh = store.new_vacancies(vacancies, config.SCOUT_SOURCE, config.CV_VERSION)
     except Exception as exc:  # noqa: BLE001
         log.error("could not read the board", error=str(exc))
+        ledger.fail(f"could not read the board: {exc}")
         return 1
+
+    ledger.note(new_cards=len(fresh))
 
     if args.dry_run:
         log.info("dry run - nothing was written", would_create=len(fresh))
@@ -135,6 +153,7 @@ def main(argv=None) -> int:
             )
         if len(fresh) > DRY_RUN_PREVIEW:
             print(f"  ... and {len(fresh) - DRY_RUN_PREVIEW} more")
+        ledger.note(dry_run=True)
         return 0
 
     if not fresh:
@@ -147,6 +166,7 @@ def main(argv=None) -> int:
         )
     except Exception as exc:  # noqa: BLE001
         log.error("could not create the cards", error=str(exc))
+        ledger.fail(f"could not create the cards: {exc}")
         return 1
 
     notified = 0
@@ -160,6 +180,7 @@ def main(argv=None) -> int:
 
     # Not `created=`: Python's logging reserves that attribute for the record's timestamp, and
     # the structured logger then silently renames the field (seen live as `created_value`).
+    ledger.note(created_cards=len(created), notified=notified)
     log.info("scout finished", created_cards=len(created), notified=notified)
     log.info("next time is incremental", hint="only unseen vacancies are created/announced")
     return 0

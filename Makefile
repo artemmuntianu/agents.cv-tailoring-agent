@@ -96,10 +96,16 @@ worker-secret: ## Create the worker Secret from .env (never from git)
 check-models: ## Verify MODEL_NAME against the models this Gemini key can use
 	python scripts/check_models.py --strict
 
-.PHONY: test-postgres
+.PHONY: scout-dry-run
 scout-dry-run: ## Show what the scheduled intake would add (writes nothing)
-	DB_BACKEND=postgres python -m scout --dry-run
+	# DATABASE_SSLMODE=disable: the dev Postgres serves plain TCP (trap 18 in AGENTS.md)
+	DB_BACKEND=postgres DATABASE_SSLMODE=disable python -m scout --dry-run
 
+.PHONY: archiver-dry-run
+archiver-dry-run: ## Show what the inactivity sweep would refuse (writes nothing)
+	DB_BACKEND=postgres DATABASE_SSLMODE=disable python -m archiver --dry-run
+
+.PHONY: test-postgres
 test-postgres: ## Production-store tests against the cluster Postgres (needs a port-forward)
 	# kubectl port-forward svc/postgres 5432:5432   # in a second terminal
 	TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt \

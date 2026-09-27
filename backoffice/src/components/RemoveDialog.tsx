@@ -10,9 +10,11 @@ interface RemoveDialogProps {
 
 /**
  * The confirmation for the board's only irreversible action, and it spells out what
- * disappears: the card with its history (both cascade from `resumes`), the artifacts the
- * worker stored, and the refusal record. There is no undo and no tombstone - which is the
- * point - so this dialog is the last place a mistake can be caught.
+ * disappears: the card with its history and its interviews (all cascade from `resumes`), the
+ * artifacts the worker stored, and the refusal record. There is no undo and no tombstone -
+ * which is the point - so this dialog is the last place a mistake can be caught.
+ *
+ * It closes on Cancel, on Escape and on a click on the overlay (the panel stops the click).
  */
 export default function RemoveDialog({ card, onConfirm, onCancel }: RemoveDialogProps) {
   useEffect(() => {
@@ -24,8 +26,14 @@ export default function RemoveDialog({ card, onConfirm, onCancel }: RemoveDialog
   }, [onCancel]);
 
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/40 p-6">
-      <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+    <div
+      className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/40 p-6"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
         <h2 className="text-base font-semibold text-rose-700">🗑 Remove this vacancy?</h2>
         <p className="mt-0.5 text-xs text-slate-500">
           {card.title || card.externalId} · {card.company || 'unknown company'} ·{' '}

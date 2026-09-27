@@ -54,6 +54,8 @@ extension (Chrome MV3) --batch--> backoffice gateway --> cards in "Scraped"
                     (validates, creates a card per vacancy, queues nothing)   |
 scout (CronJob, python -m scout) --feeds--> one card per new vacancy --------+
                     (the same intake, on a schedule; Telegram per new card)  |
+archiver (CronJob, python -m archiver) --> refuses the "Applied" cards nobody
+                    touched for 10 days, in place; both jobs log their runs  |
                                                                              |  the operator drags
                                                                              |  a card into "Prepare"
 publisher.py / send-test-job.ps1 ----------------------+                     v
@@ -205,7 +207,7 @@ between **Scraped** (the intake column: found by the extension or, later, by the
 scout - nothing runs yet), **Prepare** (its sub-state follows the worker's status; dropping a
 card here is what queues tailoring), **Applied**, **Negotiating**, **Interviewing** and
 **Offer**. Every move asks for an actor
-(Me/Them) and a reason, and both are written to `resume_history` in the same Postgres
+(Candidate/Company) and a reason, and both are written to `resume_history` in the same Postgres
 the worker uses (`backoffice/AGENTS.md` documents the contract). The board re-reads the
 database every few seconds (the `● Live` toggle), so worker progress shows up on its
 own.
@@ -214,6 +216,27 @@ The card modal also offers a **cover letter**: *Generate* on any card (any colum
 not) publishes to `resumes.cover`, whose own worker writes one letter from the stored job
 description and the master `cv_data.json` - it can only repeat what the CV says - and the modal
 shows it with a *Copy* button. `docs/MESSAGE_CONTRACT.md` documents that payload.
+
+The card is the operator's workspace. An **`➕ Add action`** button records a change
+*without* moving the card - which is also how a card escapes the auto-archiver's ten-day rule.
+A **Details** block holds the operator's own notes on the vacancy - the recruiter, the salary
+offered and the salary desired as free text, plus a multi-select of the communication channels the
+board knows (Email, LinkedIn, WhatsApp, Telegram, Dou, Djinni). Editing them is activity: it dates
+the card, so the auto-archiver leaves it alone, and it stays out of the card's History.
+
+The card's **History** (bottom of the modal) is the audit trail: one line per recorded change,
+and each line has *✏️ Edit* and *✕ Remove*. Correcting the record is deliberately not activity - the
+card keeps its column and its date, the Action list is untouched, and the correction is not itself
+dated - and dropping a line is confirmed first.
+
+A **`⛔️ Archive`** refusal keeps the card in its column and mutes it, and a card that reached
+**Interviewing** gains an **Interviews** section: the Move dialog can schedule the first call,
+and every row has *✏️ Edit* (date & time, type and the free-text result) and *✕ Remove*. Each
+column sorts itself by the card's last change (`↓ Newest` by default, `↑ Oldest` on a click),
+and the navbar's **Processes** window shows the run history of the internal jobs - the RSS
+intake twice an hour, the auto-archiver once a day - one row per run with its counters, duration
+and outcome. Every dialog, the full-screen card included, closes on Escape, on Cancel and on a
+click on the overlay.
 
 It is also where the scraper posts: `extension/` collects every vacancy card on a listing
 page, and `POST /api/vacancies/batch` validates the batch and creates **one card per
@@ -299,6 +322,9 @@ For local CLI runs, copy `.env.example` to `.env`.
 |---|---|---|
 | `GEMINI_API_KEY` | - | the only required external credential |
 | `MODEL_NAME`, `PREFERRED_MODELS` | `gemini-3.5-flash` + ladder | model and comma-separated fallbacks; validated against the model list at start-up |
+| `SCOUT_FEEDS`, `SCOUT_SOURCE`, `SCOUT_USER_ID` | three DOU feeds, `dou`, - | the scheduled intake (`python -m scout`); the user id must be a provisioned `app_users.id` |
+| `AUTO_ARCHIVE_STAGES`, `AUTO_ARCHIVE_AFTER_DAYS`, `AUTO_ARCHIVE_ACTOR`, `AUTO_ARCHIVE_REASON` | `applied`, `10`, `Company`, `No response` | the inactivity sweep (`python -m archiver`): which columns, how quiet, and what the refusal records |
+| `PROCESS_RUN_STALE_HOURS` | `24` | when a `running` run row (a killed pod) is retired as `aborted` |
 | `QUEUE_BACKEND` | `directory` | `amqp` in the cluster, `directory` (JSON files) for offline runs |
 | `RABBITMQ_URL` (or `RABBITMQ_HOST/PORT/USERNAME/PASSWORD/VHOST`) | guest@localhost | broker address; the parts are composed, so the password can come from a Secret |
 | `QUEUE_NAME` | `resumes.generate` | work queue |
@@ -326,8 +352,13 @@ duplicate / owned / re-claim), retry and dead-letter decisions, quota deferral,
 model-availability TTL, queue semantics, and a full worker smoke test (queue ->
 graph -> persist -> database row).
 
+The backoffice has its own gates (`cd backoffice; npm test; npx tsc --noEmit; npm run build`),
+and `tests/test_archiver.py` / `tests/test_process_runs.py` cover the scheduled jobs' policy
+hermetically with an injected store.
+
 `tests/test_postgres_store.py` additionally runs against a **real** Postgres to
-exercise the production schema, the claim SQL and the shared model ledger:
+exercise the production schema, the claim SQL, the board's tables (interviews, the run ledger,
+the inactivity sweep's read + archive) and the shared model ledger:
 
 ```bash
 make test-postgres
@@ -341,7 +372,9 @@ utils/          queue, storage, db, model-state, retry, docx mutator, renderer, 
 worker.py       queue consumer (the pod entry point)
 publisher.py    dev stand-in for the API gateway (host-side publish)
 healthcheck.py  exec probes (liveness / readiness / render / amqp)
-charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker
+scout/          the scheduled intake (`python -m scout`): feeds -> cards + Telegram
+archiver/       the scheduled housekeeping (`python -m archiver`): the inactivity sweep
+charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker + the two CronJobs
 deploy/values/  environment values (dev.yaml = local cluster)
 scripts/        local-deploy.ps1, send-test-job.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
 tests/          hermetic suite (+ Postgres-gated production-store tests)

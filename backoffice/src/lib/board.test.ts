@@ -8,10 +8,12 @@ import {
   groupByStage,
   historyLine,
   isRemovableStatus,
+  parseActionRequest,
   parseArchiveRequest,
   parseMoveRequest,
   parseRemoveRequest,
   parseRestoreRequest,
+  sortCards,
 } from './board';
 import { STAGES, isStageId, tailoringFromStatus } from './stages';
 import { tailoringRequest } from './board';
@@ -44,6 +46,13 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
     coverLetter: null,
     hasDescription: true,
     history: [],
+    details: {
+      recruiter: null,
+      salaryOffered: null,
+      salaryDesired: null,
+      communicationChannels: [],
+    },
+    interviews: [],
     ...overrides,
   };
 }
@@ -271,5 +280,53 @@ describe('entering Prepare is what requests tailoring', () => {
     for (const to of ['scraped', 'applied', 'negotiating', 'interviewing', 'offer']) {
       expect(tailoringRequest('scraped', 'submitted', to), to).toBe('none');
     }
+  });
+});
+
+describe('parseActionRequest (the card\u2019s Add action button)', () => {
+  const valid = { jobId: '374001-1', actor: 'Candidate', action: 'Recruiter called back' };
+
+  it('accepts an actor and a reason, and trims the reason', () => {
+    expect(parseActionRequest({ ...valid, action: '  Recruiter called back  ' })).toEqual({
+      ok: true,
+      value: valid,
+    });
+  });
+
+  it('rejects a missing job id, a bad actor and an empty reason', () => {
+    expect(parseActionRequest({ ...valid, jobId: '   ' }).ok).toBe(false);
+    expect(parseActionRequest({ ...valid, actor: 'Someone' }).ok).toBe(false);
+    expect(parseActionRequest({ ...valid, action: '   ' }).ok).toBe(false);
+    expect(parseActionRequest(null).ok).toBe(false);
+  });
+
+  it('has no column to give away: a stray `to` changes nothing', () => {
+    const parsed = parseActionRequest({ ...valid, to: 'offer' });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value).toEqual(valid);
+  });
+});
+
+describe('sorting a column by date', () => {
+  const older = card({ jobId: 'older', updatedAt: '2026-09-01T10:00:00.000Z' });
+  const newer = card({ jobId: 'newer', updatedAt: '2026-09-20T10:00:00.000Z' });
+
+  it('opens every column newest first', () => {
+    const column = groupByStage([older, newer]).find((item) => item.stage === 'prepare');
+    expect(column?.cards.map((item) => item.jobId)).toEqual(['newer', 'older']);
+  });
+
+  it('flips one column to oldest first', () => {
+    expect(sortCards([older, newer], 'asc').map((item) => item.jobId)).toEqual([
+      'older',
+      'newer',
+    ]);
+    expect(sortCards([older, newer]).map((item) => item.jobId)).toEqual(['newer', 'older']);
+  });
+
+  it('never mutates the list it was given', () => {
+    const cards = [older, newer];
+    sortCards(cards, 'asc');
+    expect(cards.map((item) => item.jobId)).toEqual(['older', 'newer']);
   });
 });

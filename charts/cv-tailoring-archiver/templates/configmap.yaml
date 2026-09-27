@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cv-tailoring-archiver.fullname" . }}
+  labels:
+    {{- include "cv-tailoring-archiver.labels" . | nindent 4 }}
+data:
+  # The sweep's own policy. DATABASE_URL is the Secret's, never here.
+  SERVICE_NAME: cv-tailoring-archiver
+  AUTO_ARCHIVE_STAGES: {{ .Values.config.stages | quote }}
+  AUTO_ARCHIVE_AFTER_DAYS: {{ .Values.config.afterDays | quote }}
+  AUTO_ARCHIVE_ACTOR: {{ .Values.config.actor | quote }}
+  AUTO_ARCHIVE_REASON: {{ .Values.config.reason | quote }}
+  AUTO_ARCHIVE_MAX_PER_RUN: {{ .Values.config.maxPerRun | quote }}
+  DB_BACKEND: {{ .Values.config.dbBackend | quote }}
+  DB_APPLICATION_NAME: cv-tailoring-archiver
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  LOG_FORMAT: {{ .Values.config.logFormat | quote }}

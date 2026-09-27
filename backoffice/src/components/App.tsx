@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import BoardToolbar from './BoardToolbar';
 import KanbanBoard from './KanbanBoard';
 import NavBar from './NavBar';
+import ProcessRunsDialog from './ProcessRunsDialog';
 import ReasonDialog from './ReasonDialog';
 import RemoveDialog from './RemoveDialog';
 import VacancyModal from './VacancyModal';
@@ -9,11 +10,16 @@ import { countArchived, countByStage } from '../lib/board';
 import { DEFAULT_FILTERS, filterCards, type BoardFilters } from '../lib/filters';
 import { stageLabel } from '../lib/stages';
 import type {
+  ActionRequest,
   Actor,
   ArchiveRequest,
   BoardAction,
   BoardCard,
+  DetailsRequest,
+  HistoryEntryRequest,
+  InterviewRequest,
   MoveRequest,
+  ProcessRun,
   StageId,
 } from '../lib/types';
 
@@ -48,6 +54,13 @@ export default function App({ session }: AppProps) {
   const [pendingRemoval, setPendingRemoval] = useState<BoardCard | null>(null);
   /** A one-line explanation of what an action did (e.g. artifacts queued for the sweep). */
   const [note, setNote] = useState<string | null>(null);
+  /** The card waiting for the Add Action dialog: the Move dialog, with no column change. */
+  const [pendingAction, setPendingAction] = useState<BoardCard | null>(null);
+  /** The navbar's Processes window: the internal jobs' run history. */
+  const [processesOpen, setProcessesOpen] = useState(false);
+  const [runs, setRuns] = useState<ProcessRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
 
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoading(true);
@@ -89,10 +102,39 @@ export default function App({ session }: AppProps) {
     }
   }, []);
 
+  /**
+   * The internal processes' run history (the navbar's Processes window).
+   *
+   * Read when the window opens and on demand - never polled: a run log is something the operator
+   * looks at, and the board's 5s cadence would say nothing new for hours.
+   */
+  const loadRuns = useCallback(async () => {
+    setRunsLoading(true);
+    try {
+      const response = await fetch('/api/processes');
+      const payload = (await response.json()) as {
+        ok: boolean;
+        runs?: ProcessRun[];
+        error?: string;
+      };
+      if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      setRuns(payload.runs ?? []);
+      setRunsError(null);
+    } catch (cause) {
+      setRunsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRunsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
     void loadActions();
   }, [refresh, loadActions]);
+
+  useEffect(() => {
+    if (processesOpen) void loadRuns();
+  }, [processesOpen, loadRuns]);
 
   useEffect(() => {
     if (!live) return;
@@ -166,11 +208,89 @@ export default function App({ session }: AppProps) {
     await mutate(`/api/cover/${encodeURIComponent(jobId)}`, {});
   }
 
-  async function confirmMove(actor: Actor, action: string) {
+  /**
+   * The move confirmed. Entering Interviewing can carry a first interview, which the move route
+   * inserts in the same transaction as the column change (so a card can never claim the column
+   * without it) - an empty draft simply sends nothing.
+   */
+  async function confirmMove(actor: Actor, action: string, interview: InterviewRequest | null) {
     if (!pending) return;
     const request: MoveRequest = { jobId: pending.card.jobId, to: pending.to, actor, action };
     setPending(null);
-    await mutate('/api/board/move', request);
+    await mutate('/api/board/move', interview ? { ...request, interview } : request);
+  }
+
+  /**
+   * The Add Action dialog confirmed: the Move dialog's actor + reason, with **no** column change.
+   *
+   * It records a history row and bumps the card's activity date - which is what keeps the
+   * auto-archiver away from a card the operator is still working on. It goes to its own route,
+   * because in Prepare a move into the current column would be a tailoring *retry*.
+   */
+  async function confirmAction(actor: Actor, action: string) {
+    if (!pendingAction) return;
+    const request: ActionRequest = { jobId: pendingAction.jobId, actor, action };
+    setPendingAction(null);
+    await mutate('/api/board/action', request);
+  }
+
+  /**
+   * A card-scoped write (interview or details). Unlike the board-level mutations it reports its
+   * failure to *its caller* - the card's own control stays open with the message - so it does not
+   * go through `mutate`, which speaks through the toolbar's error line. It still re-reads the
+   * board (the database is the display), and neither of these writes a history row: an interview
+   * list is its own history and the detail fields are card attributes (invariant 28).
+   */
+  async function boardWrite(
+    path: string,
+    method: 'POST' | 'PATCH' | 'DELETE',
+    body?: unknown,
+  ) {
+    // The JSON content-type is sent even for a body-less DELETE: Astro's `checkOrigin`
+    // middleware forbids a non-safe request that has *no* content-type and no matching
+    // `Origin` (a browser always sends one, a script or a proxy may not) - see
+    // `backoffice/AGENTS.md`.
+    const response = await fetch(path, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const payload = (await response.json()) as { ok: boolean; error?: string };
+    if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+    await refresh();
+  }
+
+  async function addInterview(jobId: string, interview: InterviewRequest) {
+    await boardWrite('/api/board/interviews', 'POST', { jobId, ...interview });
+  }
+
+  async function editInterview(id: number, interview: InterviewRequest) {
+    await boardWrite(`/api/board/interviews/${id}`, 'PATCH', interview);
+  }
+
+  async function removeInterview(id: number) {
+    await boardWrite(`/api/board/interviews/${id}`, 'DELETE');
+  }
+
+  /**
+   * The History section's two writes: correcting one audit line, and dropping one.
+   *
+   * Both go through `boardWrite` (so a refusal is reported in the dialog that caused it) and both
+   * are deliberately *not* activity: no column change, no `resume_board.updated_at`, no
+   * `board_actions` - fixing the record cannot buy a card another ten days from the sweep
+   * (invariant 29).
+   */
+  async function editHistoryLine(id: number, line: HistoryEntryRequest) {
+    await boardWrite(`/api/board/history/${id}`, 'PATCH', line);
+  }
+
+  async function removeHistoryLine(id: number) {
+    await boardWrite(`/api/board/history/${id}`, 'DELETE');
+  }
+
+  /** The card's own detail fields: one write for the set, no column change, no history row. */
+  async function saveDetails(jobId: string, details: DetailsRequest) {
+    await boardWrite('/api/board/details', 'POST', { ...details, jobId });
   }
 
   /** The refusal dialog confirmed: the card is archived in place, with its reason. */
@@ -211,7 +331,12 @@ export default function App({ session }: AppProps) {
   const openCard = cards.find((card) => card.jobId === openId) ?? null;
 
   async function signOut() {
-    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+    // The JSON content-type is sent even though there is no body: Astro's `checkOrigin`
+    // refuses a non-GET without one (`backoffice/AGENTS.md`).
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    }).catch(() => undefined);
     window.location.assign('/login');
   }
 
@@ -221,11 +346,9 @@ export default function App({ session }: AppProps) {
         counts={counts}
         total={visible.length}
         archived={archivedCount}
-        loading={loading}
-        live={live}
         session={session}
-        onReload={() => void refresh()}
         onSignOut={() => void signOut()}
+        onOpenProcesses={() => setProcessesOpen(true)}
       />
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -318,6 +441,9 @@ export default function App({ session }: AppProps) {
           onRemove={(jobId) =>
             setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null)
           }
+          onAddAction={(jobId) =>
+            setPendingAction(cards.find((card) => card.jobId === jobId) ?? null)
+          }
         />
       </main>
 
@@ -330,7 +456,9 @@ export default function App({ session }: AppProps) {
           actions={actions}
           actionsKind="move"
           confirmLabel="Proceed"
-          // Entering Prepare is what queues tailoring - say so before it happens.
+          // Entering Interviewing also collects the first interview; entering Prepare is what
+          // queues tailoring - say so before it happens.
+          interview={pending.to === 'interviewing'}
           warning={
             pending.to === 'prepare'
               ? 'Moving this card to Prepare queues the tailored CV for it: the worker will run Gemini on this vacancy.'
@@ -338,6 +466,24 @@ export default function App({ session }: AppProps) {
           }
           onProceed={confirmMove}
           onCancel={() => setPending(null)}
+        />
+      )}
+
+      {pendingAction && (
+        <ReasonDialog
+          title="➕ Add action"
+          subtitle={`${pendingAction.title || pendingAction.externalId} · ${pendingAction.company}`}
+          fromLabel={stageLabel(pendingAction.stage)}
+          toLabel={`${stageLabel(pendingAction.stage)} · stays here`}
+          actions={actions}
+          actionsKind="move"
+          confirmLabel="Record action"
+          warning={
+            'The card does not move. The action is recorded in its history and counts as ' +
+            'activity, so the auto-archiver leaves this vacancy alone.'
+          }
+          onProceed={confirmAction}
+          onCancel={() => setPendingAction(null)}
         />
       )}
 
@@ -375,6 +521,22 @@ export default function App({ session }: AppProps) {
             setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
           }}
           onGenerateCover={generateCover}
+          onAddInterview={addInterview}
+          onEditInterview={editInterview}
+          onRemoveInterview={removeInterview}
+          onEditHistory={editHistoryLine}
+          onRemoveHistory={removeHistoryLine}
+          onSaveDetails={saveDetails}
+        />
+      )}
+
+      {processesOpen && (
+        <ProcessRunsDialog
+          runs={runs}
+          loading={runsLoading}
+          error={runsError}
+          onReload={() => void loadRuns()}
+          onClose={() => setProcessesOpen(false)}
         />
       )}
 

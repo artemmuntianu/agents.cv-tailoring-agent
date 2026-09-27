@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ACTORS } from '../lib/board';
+import { EMPTY_INTERVIEW_DRAFT, draftToRequest } from '../lib/interviews';
 import { ACTOR_HINT } from '../lib/stages';
-import type { Actor, BoardAction } from '../lib/types';
+import type { Actor, BoardAction, InterviewDraft, InterviewRequest } from '../lib/types';
 import ActionCombobox from './ActionCombobox';
+import InterviewFields from './InterviewFields';
 
 interface ReasonDialogProps {
   title: string;
@@ -21,7 +23,13 @@ interface ReasonDialogProps {
   /** Something the operator must know *before* confirming (e.g. "this starts tailoring"). */
   warning?: string;
   defaultActor?: Actor;
-  onProceed: (actor: Actor, action: string) => void;
+  /**
+   * True when the target column is **Interviewing**: the dialog then also collects the first
+   * interview (date & time + type), which the move inserts in the same transaction. Left empty,
+   * nothing is inserted - the card's Interviews section is where an unscheduled one lives.
+   */
+  interview?: boolean;
+  onProceed: (actor: Actor, action: string, interview: InterviewRequest | null) => void;
   onCancel: () => void;
 }
 
@@ -31,8 +39,8 @@ interface ReasonDialogProps {
  * field is the Action combobox, so it offers the persisted vocabulary and accepts new
  * wording; typing a new one stores it for next time.
  *
- * Nothing is committed until the confirm button - Cancel/Escape just closes, so the
- * card stays where it was.
+ * Nothing is committed until the confirm button - Cancel, Escape or a **click on the
+ * overlay** just closes, so the card stays where it was.
  */
 export default function ReasonDialog({
   title,
@@ -46,11 +54,16 @@ export default function ReasonDialog({
   tone = 'neutral',
   warning,
   defaultActor = 'Candidate',
+  interview = false,
   onProceed,
   onCancel,
 }: ReasonDialogProps) {
   const [actor, setActor] = useState<Actor>(defaultActor);
   const [action, setAction] = useState('');
+  // The Interview section (a move into Interviewing). An empty draft sends nothing at all.
+  const [draft, setDraft] = useState<InterviewDraft>({ ...EMPTY_INTERVIEW_DRAFT });
+  const interviewRequest = interview ? draftToRequest(draft) : null;
+  const interviewIncomplete = Boolean(interview && draft.scheduledAt.trim() && !interviewRequest);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -60,15 +73,19 @@ export default function ReasonDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
-  const canProceed = action.trim().length > 0;
+  const canProceed = action.trim().length > 0 && !interviewIncomplete;
 
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/40 p-6">
+    <div
+      className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/40 p-6"
+      onClick={onCancel}
+    >
       <form
         className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (canProceed) onProceed(actor, action);
+          if (canProceed) onProceed(actor, action, interviewRequest);
         }}
       >
         <h2 className="text-base font-semibold text-slate-900">{title}</h2>
@@ -109,6 +126,31 @@ export default function ReasonDialog({
           label={actionLabel}
           autoFocus
         />
+
+        {interview && (
+          <section className="mt-4 rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-violet-700">
+              Interview
+            </h3>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-violet-900/80">
+              This card is entering <strong>Interviewing</strong>: schedule the first call now, or
+              leave the date empty and add it later from the card's Interviews section.
+            </p>
+            <InterviewFields
+              scheduledAt={draft.scheduledAt}
+              type={draft.type}
+              onScheduledAt={(scheduledAt) =>
+                setDraft((current) => ({ ...current, scheduledAt }))
+              }
+              onType={(type) => setDraft((current) => ({ ...current, type }))}
+            />
+            {interviewIncomplete && (
+              <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                That date and time cannot be read - pick one from the picker, or clear the field.
+              </p>
+            )}
+          </section>
+        )}
 
         <div className="mt-5 flex justify-end gap-2">
           <button

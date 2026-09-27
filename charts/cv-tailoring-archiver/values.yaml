@@ -1,0 +1,86 @@
+# Default values for cv-tailoring-archiver.
+# IMPORTANT: never put real secrets in this file - DATABASE_URL comes from the worker's
+# Secret (`existingSecret`, created by `scripts/worker-secret.ps1`), exactly like the scout.
+
+enabled: true
+
+# The worker's image: the archiver is `python -m archiver` in the same build, so it carries
+# the same dependencies and needs no second Dockerfile.
+image:
+  repository: cv-tailoring-worker
+  tag: dev
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Once a day, wall-clock (09:00 in Lisbon must stay 09:00 across a DST change).
+schedule: "0 9 * * *"
+timeZone: Europe/Lisbon
+# A missed slot must still run: the cluster being down at 09:00 (or a paused CronJob
+# controller) starts the job as soon as it is back, as long as it is within this deadline.
+# The sweep is idempotent, so a late run is harmless; without it a daily job could skip a
+# whole day silently, which is the failure mode this value exists to prevent.
+startingDeadlineSeconds: 86400
+# One sweep at a time: two runs racing would both read the board before either archives.
+# (`archive_card` is idempotent, so this is about tidy logs rather than correctness.)
+concurrencyPolicy: Forbid
+suspend: false
+# A failed sweep retries once, then waits for the next slot: tomorrow's sweep finds the same
+# cards (they are still quiet), and the ledger row says which ones were left alone.
+backoffLimit: 1
+activeDeadlineSeconds: 600
+successfulJobsHistoryLimit: 1
+failedJobsHistoryLimit: 3
+restartPolicy: OnFailure
+
+# The worker's Secret: DATABASE_URL (the sweep writes the board's own tables).
+existingSecret: cv-tailoring-secrets
+
+config:
+  # Comma-separated board columns to sweep. `applied` is the one where silence means
+  # something: a card in Scraped is *supposed* to wait for the operator, and one in
+  # Negotiating is being worked on.
+  stages: applied
+  # Days without an operator action (a move, an archive, a restore, a recorded action)
+  # before the card is refused.
+  afterDays: 10
+  # Who the refusal is recorded as. `Candidate` | `Company` (the DB CHECK): "Company" is the
+  # honest answer for silence.
+  actor: Company
+  # Why. Must be 1..500 characters; kept in `board_actions` by the same transaction, so the
+  # operator's own filters and comboboxes see it too.
+  reason: No response
+  # Cap, so a first sweep of a board that was never swept cannot refuse a whole column at once.
+  maxPerRun: 50
+  # The board's tables are Postgres tables - the JSON backend has no board at all, and the
+  # preflight refuses to run against it.
+  dbBackend: postgres
+  logLevel: INFO
+  logFormat: json
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false # /tmp is an emptyDir; the image chowns what it writes
+  capabilities:
+    drop:
+      - ALL

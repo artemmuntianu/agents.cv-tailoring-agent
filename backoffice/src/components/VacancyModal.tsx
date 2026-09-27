@@ -3,13 +3,33 @@ import { artifactUrl, storedPathName } from '../lib/artifact-link';
 import { historyLine } from '../lib/board';
 import { coverBlockedReason, coverState, coverStateLabel } from '../lib/cover';
 import {
+  MAX_DETAIL_LENGTH,
+  detailsChanged,
+  draftFromCard,
+  draftFromDetails,
+  draftToRequest,
+} from '../lib/details';
+import { formatInterviewAt, hasReachedInterviewing, sortInterviews } from '../lib/interviews';
+import {
   STAGES,
   refusalLabel,
   tailoringFromStatus,
   tailoringLabel,
   tailoringMeta,
 } from '../lib/stages';
-import type { BoardCard } from '../lib/types';
+import type {
+  BoardCard,
+  DetailsDraft,
+  DetailsRequest,
+  HistoryEntry,
+  HistoryEntryRequest,
+  Interview,
+  InterviewRequest,
+} from '../lib/types';
+import ChannelSelect from './ChannelSelect';
+import HistoryDialog from './HistoryDialog';
+import HistoryRemoveDialog from './HistoryRemoveDialog';
+import InterviewDialog from './InterviewDialog';
 
 interface VacancyModalProps {
   card: BoardCard;
@@ -21,6 +41,26 @@ interface VacancyModalProps {
   onRemove?: (jobId: string) => void;
   /** Ask the `resumes.cover` worker for a letter; the poll brings it back. */
   onGenerateCover?: (jobId: string) => Promise<void>;
+  /**
+   * The Interviews section's three writes. Every one of them re-reads the card, and none of
+   * them writes a history row: the list in the section *is* the interview history
+   * (`CONSTITUTION.md` invariant 26).
+   */
+  onAddInterview?: (jobId: string, interview: InterviewRequest) => Promise<void>;
+  /**
+   * Save the card's own detail fields (recruiter, the two salaries, the channels). One write for
+   * the whole set, and one that counts as operator activity - see invariant 28.
+   */
+  onSaveDetails?: (jobId: string, details: DetailsRequest) => Promise<void>;
+  onEditInterview?: (id: number, interview: InterviewRequest) => Promise<void>;
+  onRemoveInterview?: (id: number) => Promise<void>;
+  /**
+   * The History section's two writes. A line **is** the audit trail, so both are deliberate: an
+   * edit rewrites everything one line says, a removal drops it. Neither touches the card - no
+   * column change, no `resume_board.updated_at`, no `board_actions` (invariant 29).
+   */
+  onEditHistory?: (id: number, line: HistoryEntryRequest) => Promise<void>;
+  onRemoveHistory?: (id: number) => Promise<void>;
 }
 
 function formatDateTime(iso: string): string {
@@ -41,6 +81,10 @@ function Field({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+const DETAIL_INPUT =
+  'mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal normal-case ' +
+  'tracking-normal text-slate-900 placeholder:text-slate-400';
 
 function duration(ms: number | null): string {
   return ms === null || ms === undefined ? '—' : `${(ms / 1000).toFixed(1)}s`;
@@ -68,7 +112,13 @@ const COVER_CHIP: Record<string, string> = {
   absent: 'bg-slate-100 text-slate-500 ring-slate-200',
 };
 
-/** Everything known about one vacancy, with the full change history at the bottom. */
+/**
+ * Everything known about one vacancy: the worker's state, the cover letter, the **interviews**
+ * (for a card that reached Interviewing) and the full change history at the bottom.
+ *
+ * It closes on Escape, on the ✕ and on a **click on the overlay** - the panel stops the click,
+ * so only the backdrop closes it.
+ */
 export default function VacancyModal({
   card,
   onClose,
@@ -76,6 +126,12 @@ export default function VacancyModal({
   onRestore,
   onRemove,
   onGenerateCover,
+  onAddInterview,
+  onEditInterview,
+  onRemoveInterview,
+  onEditHistory,
+  onRemoveHistory,
+  onSaveDetails,
 }: VacancyModalProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -88,6 +144,26 @@ export default function VacancyModal({
   // Local-only state: the copy confirmation and whether a request is in flight.
   const [copied, setCopied] = useState(false);
   const [asking, setAsking] = useState(false);
+  // The interview being added (`interview: null`) or edited, plus the state of that write.
+  const [interviewDraft, setInterviewDraft] = useState<{ interview: Interview | null } | null>(
+    null,
+  );
+  const [interviewBusy, setInterviewBusy] = useState(false);
+  const [interviewError, setInterviewError] = useState<string | null>(null);
+  // The history line being corrected, and the one being dropped. Two dialogs, because one rewrites
+  // a line and the other is the only place the trail can lose one.
+  const [historyEdit, setHistoryEdit] = useState<HistoryEntry | null>(null);
+  const [historyRemoval, setHistoryRemoval] = useState<HistoryEntry | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  // The card's own detail fields: an always-editable block with one Save, so nothing is written
+  // until the operator says so. The draft is seeded once, so the 5s poll cannot overwrite typing;
+  // a save resets it from what was stored (normalised), which makes it clean again.
+  const [detailsDraft, setDetailsDraft] = useState<DetailsDraft>(() => draftFromCard(card));
+  const [detailsBusy, setDetailsBusy] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [detailsSaved, setDetailsSaved] = useState(false);
+  const detailsDirty = detailsChanged(detailsDraft, card.details);
 
   const cover = coverState(card.coverLetter);
   const coverBlocked = coverBlockedReason(card.hasDescription);
@@ -114,12 +190,101 @@ export default function VacancyModal({
     }
   }
 
+  /** One interview write: the dialog stays open with the message when the API refuses. */
+  async function saveInterview(request: InterviewRequest) {
+    setInterviewBusy(true);
+    setInterviewError(null);
+    try {
+      if (interviewDraft?.interview) {
+        await onEditInterview?.(interviewDraft.interview.id, request);
+      } else {
+        await onAddInterview?.(card.jobId, request);
+      }
+      setInterviewDraft(null);
+    } catch (cause) {
+      setInterviewError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setInterviewBusy(false);
+    }
+  }
+
+  async function removeInterview(id: number) {
+    setInterviewBusy(true);
+    setInterviewError(null);
+    try {
+      await onRemoveInterview?.(id);
+    } catch (cause) {
+      setInterviewError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setInterviewBusy(false);
+    }
+  }
+
+  /** One history-line correction: the dialog stays open with the message when the API refuses. */
+  async function saveHistoryLine(request: HistoryEntryRequest) {
+    if (!historyEdit) return;
+    setHistoryBusy(true);
+    setHistoryError(null);
+    try {
+      await onEditHistory?.(historyEdit.id, request);
+      setHistoryEdit(null);
+    } catch (cause) {
+      setHistoryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
+  /** Dropping a line: confirmed first, because this is the trail losing a recorded fact. */
+  async function removeHistoryLine() {
+    if (!historyRemoval) return;
+    const id = historyRemoval.id;
+    setHistoryBusy(true);
+    setHistoryError(null);
+    try {
+      await onRemoveHistory?.(id);
+      setHistoryRemoval(null);
+    } catch (cause) {
+      setHistoryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
+  function editDetails(patch: Partial<DetailsDraft>) {
+    setDetailsSaved(false);
+    setDetailsError(null);
+    setDetailsDraft((current) => ({ ...current, ...patch }));
+  }
+
+  /** One write for the whole set: `''` clears a field, and the row's date moves with it. */
+  async function saveDetails() {
+    setDetailsBusy(true);
+    setDetailsError(null);
+    try {
+      const request = draftToRequest(card.jobId, detailsDraft);
+      await onSaveDetails?.(card.jobId, request);
+      setDetailsDraft(draftFromDetails(request));
+      setDetailsSaved(true);
+    } catch (cause) {
+      setDetailsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDetailsBusy(false);
+    }
+  }
+
   const stage = STAGES.find((item) => item.id === card.stage);
   const tailoring = tailoringFromStatus(card.status);
 
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-8">
-      <div className="w-full max-w-3xl rounded-xl bg-white shadow-xl">
+    <div
+      className="fixed inset-0 z-20 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-8"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl rounded-xl bg-white shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">
@@ -279,6 +444,107 @@ export default function VacancyModal({
           )}
         </div>
 
+        <section className="border-t border-slate-200 px-6 py-4">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Details
+            </h3>
+            <span className="text-[11px] text-slate-400">
+              free text · saved on the card, never in History
+            </span>
+          </div>
+
+          <form
+            className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (detailsDirty && !detailsBusy) void saveDetails();
+            }}
+          >
+            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+              Recruiter
+              <input
+                value={detailsDraft.recruiter}
+                onChange={(event) => editDetails({ recruiter: event.target.value })}
+                maxLength={MAX_DETAIL_LENGTH}
+                placeholder="who you talk to"
+                className={DETAIL_INPUT}
+              />
+            </label>
+
+            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+              Salary offered
+              <input
+                value={detailsDraft.salaryOffered}
+                onChange={(event) => editDetails({ salaryOffered: event.target.value })}
+                maxLength={MAX_DETAIL_LENGTH}
+                placeholder="what they offer"
+                className={DETAIL_INPUT}
+              />
+            </label>
+
+            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+              Salary desired
+              <input
+                value={detailsDraft.salaryDesired}
+                onChange={(event) => editDetails({ salaryDesired: event.target.value })}
+                maxLength={MAX_DETAIL_LENGTH}
+                placeholder="what you ask for"
+                className={DETAIL_INPUT}
+              />
+            </label>
+
+            <div className="block text-xs font-medium uppercase tracking-wide text-slate-500 sm:col-span-3">
+              Communication channel
+              <ChannelSelect
+                value={detailsDraft.communicationChannels}
+                onChange={(channels) => editDetails({ communicationChannels: channels })}
+                disabled={detailsBusy}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 sm:col-span-3">
+              <button
+                type="submit"
+                disabled={!detailsDirty || detailsBusy}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {detailsBusy ? 'Saving…' : 'Save details'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDetailsDraft(draftFromCard(card));
+                  setDetailsError(null);
+                  setDetailsSaved(false);
+                }}
+                disabled={!detailsDirty || detailsBusy}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+              >
+                Revert
+              </button>
+              {detailsDirty && (
+                <span className="text-[11px] font-medium text-amber-700">unsaved changes</span>
+              )}
+              {detailsSaved && !detailsDirty && (
+                <span className="text-[11px] font-medium text-emerald-700">saved</span>
+              )}
+            </div>
+          </form>
+
+          {detailsError && (
+            <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {detailsError}
+            </p>
+          )}
+
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+            The recruiter's name, what the employer offers and what you ask for are free text.
+            Communication channels are the six the board knows; saving any of this counts as
+            activity, so the auto-archiver leaves the card alone.
+          </p>
+        </section>
+
         {/* Cover letter: application material, so it is offered for *any* card - any column,
             archived or not. The row it reads is written by the cover worker, and asking for one
             goes to its own queue (`resumes.cover`), never to the tailoring workers. */}
@@ -343,6 +609,95 @@ export default function VacancyModal({
           )}
         </section>
 
+        {hasReachedInterviewing(card) && (
+          <section className="border-t border-slate-200 px-6 py-4">
+            <div className="flex items-baseline justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Interviews
+              </h3>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-400">
+                  {card.interviews.length}{' '}
+                  {card.interviews.length === 1 ? 'interview' : 'interviews'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setInterviewDraft({ interview: null })}
+                  disabled={interviewBusy}
+                  className="rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:text-slate-400"
+                >
+                  ➕ Add
+                </button>
+              </div>
+            </div>
+
+            {card.interviews.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-500">
+                No interview scheduled yet. This card reached Interviewing, so the call can be
+                scheduled here - or it was scheduled without a date when the card moved in.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {sortInterviews(card.interviews).map((interview) => (
+                  <li
+                    key={interview.id}
+                    className="flex items-start justify-between gap-3 rounded-md border border-slate-200 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="flex flex-wrap items-center gap-2 text-sm text-slate-800">
+                        <span className="font-medium">
+                          {formatInterviewAt(interview.scheduledAt)}
+                        </span>
+                        <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-700 ring-1 ring-violet-200">
+                          {interview.type}
+                        </span>
+                      </p>
+                      <p
+                        className={`mt-1 whitespace-pre-wrap text-[13px] ${
+                          interview.result ? 'text-slate-600' : 'text-slate-400'
+                        }`}
+                      >
+                        {interview.result || 'no result recorded yet'}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setInterviewDraft({ interview })}
+                        disabled={interviewBusy}
+                        aria-label={`Edit the ${interview.type}`}
+                        className="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 hover:bg-slate-50 disabled:text-slate-400"
+                      >
+                        ✏️ Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeInterview(interview.id)}
+                        disabled={interviewBusy}
+                        aria-label={`Remove the ${interview.type}`}
+                        className="rounded border border-rose-300 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-50 disabled:text-slate-400"
+                      >
+                        ✕ Remove
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {interviewError && !interviewDraft && (
+              <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {interviewError}
+              </p>
+            )}
+
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+              Scheduled and recorded calls only. This list <em>is</em> the interview history -
+              editing it never adds a line to the History below.
+            </p>
+          </section>
+        )}
+
         <section className="border-t border-slate-200 px-6 py-4">
           <div className="flex items-baseline justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">History</h3>
@@ -358,29 +713,105 @@ export default function VacancyModal({
           ) : (
             <ol className="mt-3 space-y-3">
               {[...card.history].reverse().map((item) => (
-                <li key={item.id} className="flex gap-3">
-                  <span
-                    className={`mt-0.5 h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ring-1 ${
-                      item.actor === 'Candidate'
-                        ? 'bg-slate-100 text-slate-600 ring-slate-200'
-                        : 'bg-indigo-100 text-indigo-700 ring-indigo-200'
-                    }`}
-                  >
-                    {item.actor}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-sm text-slate-800">{item.action}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      {historyLine(item)}
-                      {' · '}
-                      {formatDateTime(item.at)}
-                    </p>
+                <li key={item.id} className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 gap-3">
+                    <span
+                      className={`mt-0.5 h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ring-1 ${
+                        item.actor === 'Candidate'
+                          ? 'bg-slate-100 text-slate-600 ring-slate-200'
+                          : 'bg-indigo-100 text-indigo-700 ring-indigo-200'
+                      }`}
+                    >
+                      {item.actor}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="break-words text-sm text-slate-800">{item.action}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        {historyLine(item)}
+                        {' · '}
+                        {formatDateTime(item.at)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryEdit(item)}
+                      disabled={historyBusy}
+                      aria-label={`Correct the history line "${item.action}"`}
+                      className="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 hover:bg-slate-50 disabled:text-slate-400"
+                    >
+                      ✏️ Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryRemoval(item)}
+                      disabled={historyBusy}
+                      aria-label={`Remove the history line "${item.action}"`}
+                      className="rounded border border-rose-300 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-50 disabled:text-slate-400"
+                    >
+                      ✕ Remove
+                    </button>
                   </div>
                 </li>
               ))}
             </ol>
           )}
+
+          <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+            One entry per recorded change. ✏️ corrects what a line says - its date, actor, reason,
+            kind and both states; ✕ drops the line. Neither moves the card and neither edits the
+            Action list, and the correction itself is not dated.
+          </p>
         </section>
+
+        {historyError && !historyEdit && !historyRemoval && (
+          <p className="mx-6 mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            {historyError}
+          </p>
+        )}
+
+        {historyEdit && (
+          <HistoryDialog
+            entry={historyEdit}
+            subtitle={`${card.title || card.externalId} · ${card.company || 'unknown company'}`}
+            busy={historyBusy}
+            error={historyError}
+            onSave={(request) => void saveHistoryLine(request)}
+            onCancel={() => {
+              setHistoryEdit(null);
+              setHistoryError(null);
+            }}
+          />
+        )}
+
+        {historyRemoval && (
+          <HistoryRemoveDialog
+            entry={historyRemoval}
+            subtitle={`${card.title || card.externalId} · ${card.company || 'unknown company'}`}
+            remaining={Math.max(0, card.history.length - 1)}
+            onConfirm={() => void removeHistoryLine()}
+            onCancel={() => {
+              setHistoryRemoval(null);
+              setHistoryError(null);
+            }}
+          />
+        )}
+
+        {interviewDraft && (
+          <InterviewDialog
+            interview={interviewDraft.interview}
+            title={interviewDraft.interview ? '✏️ Edit interview' : '➕ Add interview'}
+            subtitle={`${card.title || card.externalId} · ${card.company || 'unknown company'}`}
+            busy={interviewBusy}
+            error={interviewError}
+            onSave={(request) => void saveInterview(request)}
+            onCancel={() => {
+              setInterviewDraft(null);
+              setInterviewError(null);
+            }}
+          />
+        )}
       </div>
     </div>
   );

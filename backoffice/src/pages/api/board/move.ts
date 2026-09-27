@@ -1,7 +1,9 @@
 import type { APIRoute } from 'astro';
 import { parseMoveRequest, tailoringRequest } from '../../../lib/board';
+import type { InterviewRequest } from '../../../lib/types';
 import { fetchCard, moveCard, taskMessageRow } from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
+import { parseInterviewRequest } from '../../../lib/interviews';
 import { publishResumeTasks } from '../../../lib/queue';
 import { toTaskMessage } from '../../../lib/vacancies';
 
@@ -32,6 +34,23 @@ export const POST: APIRoute = async ({ request }) => {
   const parsed = parseMoveRequest(body);
   if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
   const move = parsed.value;
+
+  // The Interview section of the Move dialog: a first interview is part of *entering*
+  // Interviewing, so it is only accepted for that column - anything else would be an interview
+  // for a card that never reached the section. An absent/empty draft simply inserts nothing.
+  const draft = (body as { interview?: unknown }).interview;
+  let interview: InterviewRequest | null = null;
+  if (typeof draft === 'object' && draft !== null) {
+    if (move.to !== 'interviewing') {
+      return json(
+        { ok: false, error: 'an interview can only be added when moving to Interviewing' },
+        400,
+      );
+    }
+    const parsedInterview = parseInterviewRequest(draft);
+    if (!parsedInterview.ok) return json({ ok: false, error: parsedInterview.error }, 400);
+    interview = parsedInterview.value;
+  }
 
   let row;
   try {
@@ -84,7 +103,8 @@ export const POST: APIRoute = async ({ request }) => {
 
   try {
     // A retry does not change the column: answer with the card as it stands.
-    const card = move.to === row.stage ? await fetchCard(move.jobId) : await moveCard(move);
+    const card =
+      move.to === row.stage ? await fetchCard(move.jobId) : await moveCard(move, interview);
     if (!card) {
       return json({ ok: false, error: `no vacancy with job_id ${move.jobId}` }, 404);
     }

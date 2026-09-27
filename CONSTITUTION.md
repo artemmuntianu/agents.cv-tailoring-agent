@@ -47,6 +47,11 @@ the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
                      ai-agent-worker-cover pod (one Gemini call per letter)
                                      |
                   resume_cover_letter (text) + the master cv_data.json
+
+the scout (CronJob, twice an hour)  --> resumes rows (cards in the board's "Scraped")
+the archiver (CronJob, once a day)  --> resume_board + resume_history (the Applied cards
+                                       nobody touched for 10 days are refused *in place*)
+          both write one row per run to process_runs -> the board's "Processes" window
 ```
 
 ## 2. One way to run the pipeline
@@ -83,6 +88,8 @@ documentation      docs/ · README.md
 backoffice         backoffice/  (Astro+React kanban UI + the authenticated batch gateway;
                                  shares the worker's Postgres)
 scraper            extension/   (Chrome MV3 scraper -> backoffice gateway -> queue)
+scheduled jobs     scout/ · archiver/   (CronJobs on the worker's image; each records its run
+                                 in process_runs - `utils/process_runs.py` is the ledger)
 automation         .github/workflows/
 ```
 
@@ -246,6 +253,68 @@ automation         .github/workflows/
     able to tell them apart. The declared queue `vacancies.parse` stays unused - the scout parses
     in-process (D12).
 
+26. **Interviews are their own record, and the Interviews section *is* their history.**
+    `resume_interview` (one row per call: `scheduled_at`, `type` - the four types are code plus
+    a DB CHECK - and the free-text `result`) is deliberately **not** historicised in
+    `resume_history`: adding, editing a date/time/type/result and removing an interview write no
+    audit row, because the list in the section is the history. What *is* audited is the move
+    into **Interviewing** (`kind='move'`), and that is also what makes the section appear
+    (`backoffice/src/lib/interviews.ts::hasReachedInterviewing`: the history has such a move, or
+    the card is in the column now) - so a card that moved on to Offer keeps its interviews and a
+    card that never got there has no section. The first interview can be collected by the Move
+    dialog and is inserted *in the same transaction* as the column change; an empty draft
+    inserts nothing. Rows cascade away with the card (`🗑 Remove`).
+27. **The board's columns have a second, headless writer: the scheduled sweep.** `python -m
+    archiver` (`archiver/`, a daily CronJob) refuses the cards in `AUTO_ARCHIVE_STAGES`
+    (`applied`) whose **`resume_board.updated_at`** - the board's own activity clock, bumped by
+    every move, archive, restore and recorded action - is older than `AUTO_ARCHIVE_AFTER_DAYS`
+    (`10`) days. It keeps the archive invariants exactly (19, 20): the three archive columns
+    together, one `kind='archive'` history row, one `board_actions` upsert, all in one
+    transaction per card; it never moves a card, never writes `resumes.status`, never queues a
+    message, never calls a model and never deletes anything (`resumes.updated_at` is
+    deliberately *not* the clock: the worker's status writes are not operator activity). The
+    workaround for a card that must stay is the card's **`➕ Add action`** button, which records
+    an action without moving it (`POST /api/board/action`: a `move` history row with
+    `from_state = to_state`, no queue message - so it is not the Prepare *retry* a same-column
+    move would be). Both scheduled jobs open one row per run in **`process_runs`**
+    (`utils/process_runs.py`: `feed-parser`, `auto-archiver`), which is what the board's
+    **Processes** window reads - a run that changed nothing is visible, a killed run stays
+    `running` until the next run of that job retires it as `aborted`, and a `--dry-run` writes
+    no row at all. CronJob slots are the only timer; `startingDeadlineSeconds` is what makes a
+    slot missed while the cluster was down run as soon as it is back.
+
+28. **The card's detail fields are board state, and editing one is activity.** The
+    `recruiter`, `salary_offered`, `salary_desired` and `communication_channels` columns on
+    `resume_board` are the operator's own notes on a vacancy: free text with a 200-character cap,
+    and the channels one of six values (`Email`, `LinkedIn`, `WhatsApp`, `Telegram`, `Dou`,
+    `Djinni` - a DB CHECK, i.e. code + constraint like the Actors and the interview types, never
+    an admin-editable catalogue). The card's **Details** form writes all four in one
+    `POST /api/board/details`, an emptied input clears the field (the row stores NULL, never `''`),
+    and the write bumps `resume_board.updated_at` - which is the point: typing a recruiter is
+    operator activity, so the date window surfaces the card and the inactivity sweep (invariant 27)
+    leaves it alone for another ten days. It writes **no** `resume_history` row, exactly like an
+    interview edit (invariant 26): these are card attributes, not funnel transitions, and History
+    is where the moves live.
+
+29. **The audit trail is correctable by hand, and correcting it is not activity.** A
+    `resume_history` line is written by a dialog or a job; the board's **History** section lets the
+    operator rewrite one (`PATCH /api/board/history/<id>`: date, actor, wording, kind and both
+    states) or drop one (`DELETE`), because a mis-recorded line - a wrong actor, a date nobody had
+    to hand, "Other" where the reason mattered - is worse than a corrected one. The vocabulary is
+    still the DB CHECKs (four kinds, `Candidate`/`Company`, a 500-character reason), and the two
+    states are validated **against the kind** in `backoffice/src/lib/history.ts` (a `move` carries
+    column ids, a `tailoring` line the worker's sub-states, `archive`/`restore` the pair
+    `active`/`archived`): that is the one check the table cannot make, so it is made in code before
+    the database is touched. A correction writes `resume_history` and **nothing else** - no column
+    change, no `resume_board.updated_at` bump (so it cannot buy a card out of the inactivity sweep
+    of invariant 27), no `board_actions` upsert (fixing what a line says is not a new action name)
+    and no second history row: `resume_history` has no `updated_at`, so a corrected line is
+    deliberately untraceable as such, which is why the dialog spells out what it does. The one
+    consequence outside History is the **Interviews** section, which is shown on the strength of a
+    `move` into Interviewing (invariant 26): dropping that line hides the section while the card's
+    `resume_interview` rows stay where they are. The `/admin` vocabulary surface still never
+    rewrites history - only the operator's own pencil does.
+
 ## 5. Known discrepancies, dead code and legacy paths
 
 These were verified against the working tree on 2026-09-19. They are **not**
@@ -260,12 +329,13 @@ so that a change which depends on them is a conscious one.
 | D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
 | D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
 | D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
-| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **57 collected, 18 skipped, 39 passed** (`python -m pytest -q`, 2026-09-26); the 18 skips are the `TEST_DATABASE_URL`-gated Postgres tests | **Stale doc** |
+| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **109 collected, 27 skipped, 82 passed** (`python -m pytest -q`, 2026-09-27; the skips are the `TEST_DATABASE_URL`-gated Postgres tests), plus the backoffice's **156 tests in 15 files** (`npm test`) | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
 | D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
 | D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), its `GET /api/vacancies/status?external_ids=...` answers "already on the board?" for the extension's injected per-card buttons (the same lookup, board-scoped), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI. A refused card can also be **removed for good** (invariant 22): the row, its board state, its whole history and its artifacts - with whatever the board cannot reach queued in `artifact_purge` for `scripts/storage-files.ps1 -Action purge` | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
 | D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`, and `scout/` parses in-process rather than through that queue) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box (it scrapes before the gateway; and its loading `content_scripts` entry injects a `Scrape`/`Scraped` button into every listing card, the `Scraped` link deep-linking to `/?card=<job_id>` on the board) |
+| D13 | `scripts/archive_not_applicable.sql`, which `scripts/AGENTS.md` described as the written record of the 2026-09-26 spreadsheet import | **The file does not exist and never did**: `git log --all -- scripts/archive_not_applicable.sql` is empty and the path is not tracked in any revision, so that description was prose-only. The import it documented is real - 828 `resume_history` rows carry the `Imported: ` prefix and 121 cards are refused as `Candidate` / `Not applicable` (`resume_board` archive columns, stage untouched) | **Doc fixed 2026-09-27** - `scripts/AGENTS.md` now says the script is absent; re-add one if that import ever has to be replayed |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -319,15 +389,17 @@ python -m ruff check .       # must stay clean (line-length 100, target py311)
 ```
 
 `tests/test_postgres_store.py` only runs when `TEST_DATABASE_URL` points at a
-throwaway Postgres (`make test-postgres`); otherwise those 6 tests skip. A change
+throwaway Postgres (`make test-postgres`); otherwise its 27 tests skip. A change
 that touches the DB, queue, DOCX mutator or retry logic is not done until the
-suite passes.
+suite passes. The automation's four tables (`resume_interview`, `process_runs` and the
+board's own two) are pinned there, and `tests/test_archiver.py` / `tests/test_process_runs.py`
+assert the *policy* hermetically with an injected store.
 
 The `backoffice/` layer has its own hermetic gates - run them for any change there:
 
 ```sh
 cd backoffice
-npm test             # vitest: auth, board helpers, batch validation, scraper (jsdom)
+npm test             # vitest: auth, board helpers, interviews, details, history lines, run log, batch validation, scraper (jsdom)
 npx tsc --noEmit     # types (no mypy equivalent on this side)
 npm run build        # SSR bundle must build
 ```

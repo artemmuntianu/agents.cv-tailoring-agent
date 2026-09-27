@@ -9,8 +9,10 @@ Runs on every push to `main` and on every pull request.
 
 | Job | Steps | Why |
 |---|---|---|
-| `app` | `pip install -r requirements-dev.txt` (Python 3.12, pip cache) -> `python -m ruff check .` -> `python -m pytest -q` with a **Postgres 16 service container** | The service container is what makes the 9 `TEST_DATABASE_URL`-gated tests in `tests/test_postgres_store.py` really run; the rest of the suite stays offline |
-| `charts` | `helm lint charts/cv-tailoring-worker` -> `helm dependency update charts/cv-tailoring-platform` -> `helm lint charts/cv-tailoring-platform` -> `helm template ... -f deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci` -> `kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0` | `helm lint` cannot catch a null/invalid field value; kubeconform is the step that found `secretKeyRef.key: null` before a deploy did |
+| `app` | `pip install -r requirements-dev.txt` (Python 3.12, pip cache) -> `python -m ruff check .` -> `python -m pytest -q` with a **Postgres 16 service container** | The service container is what makes the 27 `TEST_DATABASE_URL`-gated tests in `tests/test_postgres_store.py` really run; the rest of the suite stays offline |
+| `charts` | `helm lint charts/cv-tailoring-worker` -> `helm lint charts/cv-tailoring-scout` -> `helm lint charts/cv-tailoring-archiver` -> `helm dependency update charts/cv-tailoring-platform` -> `helm lint charts/cv-tailoring-platform` -> `helm template ... -f deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci` -> `kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0` | `helm lint` cannot catch a null/invalid field value; kubeconform is the step that found `secretKeyRef.key: null` before a deploy did. The two scheduled-job charts are linted directly as well, so a broken one names itself instead of failing inside the umbrella |
+
+| `backoffice` | `npm ci` -> `npx tsc --noEmit` -> `npm test` -> `npm run build`, all with `working-directory: backoffice` (Node 22, `cache: npm`) | The POC's own gates are hermetic (vitest + jsdom, no database, no broker), so the job needs no service container - and before it existed nothing in CI ran them at all, while the board is the layer with the most UI code |
 
 Helm is pinned to `v3.16.2` on purpose. Do not bump it casually: the charts must
 also render with a developer's Helm 4 (`index .Values "cv-tailoring-worker"` for
@@ -43,7 +45,13 @@ template renders it - `CONSTITUTION.md` D1.)
 - Keep `helm dependency update` before the umbrella lint/template: without it the
   `file://../cv-tailoring-worker` dependency does not exist on a fresh checkout.
 - Treat a red CI as a real regression - the same suite is green locally
-  (48 collected / 39 passed / 9 skipped, `ruff` clean).
+  (109 collected / 82 passed / 27 skipped, `ruff` clean; the backoffice's `npm test` is
+  156 passed in 15 files).
+- `npm ci` is the lockfile-exact install the `backoffice` job uses. On **Windows** a running
+  `npm run dev` holds `node_modules/lightningcss-*/lightningcss.*.node`, so the same command dies
+  with `EPERM: operation not permitted, unlink ...` *after* it has already wiped `node_modules` -
+  run `npm install` to restore the tree and use `npm test` / `npx tsc --noEmit` as the local gate
+  (measured 2026-09-27).
 
 ## Don't
 

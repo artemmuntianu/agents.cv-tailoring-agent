@@ -18,9 +18,10 @@ Read `CONSTITUTION.md` first (sections 2, 3 and 5).
 | `cv-tailoring-platform/templates/definitions.yaml` | The queue topology (`resumes.generate` and `resumes.cover`, each with its own DLX/DLQ/binding, plus `vacancies.parse` and `applications.submit`) as a definitions Secret - reviewable in git, loaded by `rabbitmq.yaml` |
 | `cv-tailoring-platform/templates/rabbitmq-credentials.yaml` | The one Secret holding username/password/url, shared by the broker, the worker and KEDA |
 | `cv-tailoring-scout/` | The scheduled intake: a `CronJob` (`python -m scout`, the worker's image) that fetches the feeds, creates a card per new vacancy in Scraped and sends one Telegram message each. No KEDA, no broker, no volume - it shares the worker's Secret for `DATABASE_URL` and the bot token |
+| `cv-tailoring-archiver/` | The scheduled housekeeping: a `CronJob` (`python -m archiver`) that refuses the Applied cards nobody touched for `config.afterDays` days, in place, with the board's own archive invariants. `startingDeadlineSeconds: 86400` is what makes a slot missed while the cluster was down run as soon as it is back; same image, same Secret, no KEDA, no broker |
 | `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe - and the second workload (`cover-deployment.yaml` + `cover-scaledobject.yaml`, `python cover.py` on `resumes.cover`), which shares the image, the ConfigMap and the Secret |
 | `cv-tailoring-worker/values.schema.json` | Type/enum guard for the values Helm must accept before anything renders |
-| `deploy/values/dev.yaml` | Local-cluster overrides: `localPostgres` on, dev broker password, `existingSecret: cv-tailoring-secrets`, `/data` mount, 0..3 replicas |
+| `deploy/values/dev.yaml` | Local-cluster overrides: `localPostgres` on, dev broker password, `existingSecret: cv-tailoring-secrets`, `/data` mount, 0..3 replicas, and the two scheduled jobs (scout schedule + user id, archiver schedule + refusal policy) |
 | root `Dockerfile` | The image (LibreOffice + poppler + Carlito/Caladea fonts, non-root uid 10001). There is no compose/no-cluster path: the only runtime is the local cluster |
 
 The umbrella vendors all three local charts (`helm dependency update` after any change inside
@@ -49,6 +50,12 @@ Only KEDA comes from an upstream chart. The broker is ours, on the official
 - **Helm 4 needs `index .Values "cv-tailoring-worker"`** for the dashed key, and
   every value a template reads needs a default in the chart's `values.yaml` or
   `helm lint` dies with a nil pointer.
+- **A scheduled job owns its own values -> env mapping** (`cv-tailoring-scout/` and
+  `cv-tailoring-archiver/` each have a `configmap.yaml`), and every value its template reads needs
+  a default in that chart's `values.yaml` - Helm 4 lints with a nil pointer otherwise.
+- **A missed CronJob slot still runs.** `startingDeadlineSeconds` is the whole mechanism (there is
+  no in-app timer and no "is a run due?" logic): the jobs are idempotent, so a late run is
+  harmless while a silently skipped day would not be.
 - **`cv-tailoring-worker/templates/configmap.yaml` is the single values -> env
   mapping.** Adding a knob means `config.py` (+ `.env.example`), then
   `values.yaml`, `values.schema.json` and `configmap.yaml` - and a removed key
@@ -59,6 +66,8 @@ Only KEDA comes from an upstream chart. The broker is ours, on the official
 ```sh
 helm dependency update charts/cv-tailoring-platform   # first: a stale .tgz shadows file://../cv-tailoring-worker
 helm lint charts/cv-tailoring-worker
+helm lint charts/cv-tailoring-scout
+helm lint charts/cv-tailoring-archiver
 helm lint charts/cv-tailoring-platform
 helm template cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml > rendered.yaml
 kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 rendered.yaml

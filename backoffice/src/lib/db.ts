@@ -3,7 +3,21 @@ import type { PoolClient } from 'pg';
 import type { ActionInput } from './admin';
 import { artifactAvailability } from './artifacts';
 import type { ExistingVacancy, InsertPlan } from './ingest';
-import type { Actor, ArchiveRequest, BoardAction, BoardCard, MoveRequest } from './types';
+import { isCommunicationChannel } from './details';
+import type {
+  ActionRequest,
+  Actor,
+  ArchiveRequest,
+  BoardAction,
+  BoardCard,
+  Interview,
+  InterviewRequest,
+  InterviewType,
+  DetailsRequest,
+  HistoryEntryRequest,
+  MoveRequest,
+  ProcessRun,
+} from './types';
 
 /**
  * Server-only data access. The board reads the worker's `resumes` rows and owns
@@ -50,6 +64,10 @@ interface CardRow {
   archived_at: Date | string | null;
   archived_actor: string | null;
   archived_reason: string | null;
+  recruiter: string | null;
+  salary_offered: string | null;
+  salary_desired: string | null;
+  communication_channels: string[] | null;
   cover_status: string | null;
   cover_text: string | null;
   cover_error: string | null;
@@ -66,6 +84,28 @@ interface HistoryRow {
   kind: string;
   from_state: string;
   to_state: string;
+}
+
+interface InterviewRow {
+  id: number;
+  job_id: string;
+  scheduled_at: Date | string;
+  type: string;
+  result: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+function toInterview(row: InterviewRow): Interview {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    scheduledAt: toIso(row.scheduled_at),
+    type: row.type as InterviewType,
+    result: row.result,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
 }
 
 // One pool per process, surviving Astro/Vite dev reloads.
@@ -118,6 +158,7 @@ const CARD_SELECT = `
          (r.description_raw is not null) as has_description,
          coalesce(b.stage, 'scraped') as stage,
          b.archived_at, b.archived_actor, b.archived_reason,
+         b.recruiter, b.salary_offered, b.salary_desired, b.communication_channels,
          c.status as cover_status, c.text as cover_text, c.error as cover_error,
          c.model as cover_model, c.updated_at as cover_updated_at
     from resumes r
@@ -135,7 +176,29 @@ async function fetchHistory(jobIds: string[]): Promise<HistoryRow[]> {
   return history.rows;
 }
 
-function toCard(row: CardRow, history: HistoryRow[]): BoardCard {
+/**
+ * The interviews of these cards (`resume_interview`), oldest first.
+ *
+ * Read with the history, and for the same reason: the card payload has to be complete, because
+ * the board caches nothing - and these rows are deliberately *not* in `resume_history`
+ * (`CONSTITUTION.md` invariant 26).
+ */
+async function fetchInterviews(jobIds: string[]): Promise<InterviewRow[]> {
+  const interviews = await pool().query<InterviewRow>(
+    `select id, job_id, scheduled_at, type, result, created_at, updated_at
+       from resume_interview
+      where job_id = any($1::text[])
+      order by scheduled_at asc, id asc`,
+    [jobIds],
+  );
+  return interviews.rows;
+}
+
+function toCard(
+  row: CardRow,
+  history: HistoryRow[],
+  interviews: InterviewRow[] = [],
+): BoardCard {
   return {
     jobId: row.job_id,
     externalId: row.external_id,
@@ -158,6 +221,15 @@ function toCard(row: CardRow, history: HistoryRow[]): BoardCard {
     archivedActor: (row.archived_actor as BoardCard['archivedActor']) ?? null,
     archivedReason: row.archived_reason,
     archived: row.archived_at !== null,
+    // The card's own detail fields. Channels arrive as a `text[]`; anything the vocabulary
+    // does not know is dropped here as well as refused on the way in, so a hand-edited row can
+    // never make the form render an unknown option.
+    details: {
+      recruiter: row.recruiter,
+      salaryOffered: row.salary_offered,
+      salaryDesired: row.salary_desired,
+      communicationChannels: (row.communication_channels ?? []).filter(isCommunicationChannel),
+    },
     // The worker stored these paths; whether *this* board can serve them depends on its
     // artifact root (a mirror, in dev) - so the UI never offers a link that would 404.
     artifactAvailability: artifactAvailability(row.pdf_url, row.docx_path),
@@ -183,6 +255,9 @@ function toCard(row: CardRow, history: HistoryRow[]): BoardCard {
         from: entry.from_state,
         to: entry.to_state,
       })),
+    interviews: interviews
+      .filter((entry) => entry.job_id === row.job_id)
+      .map(toInterview),
   };
 }
 
@@ -193,8 +268,12 @@ export async function fetchBoard(): Promise<BoardCard[]> {
   );
   if (cards.rows.length === 0) return [];
 
-  const history = await fetchHistory(cards.rows.map((row) => row.job_id));
-  return cards.rows.map((row) => toCard(row, history));
+  const jobIds = cards.rows.map((row) => row.job_id);
+  const [history, interviews] = await Promise.all([
+    fetchHistory(jobIds),
+    fetchInterviews(jobIds),
+  ]);
+  return cards.rows.map((row) => toCard(row, history, interviews));
 }
 
 /** One card, used to answer a mutation with the row it just wrote. */
@@ -202,7 +281,11 @@ export async function fetchCard(jobId: string): Promise<BoardCard | null> {
   const rows = await pool().query<CardRow>(`${CARD_SELECT} where r.job_id = $1`, [jobId]);
   const row = rows.rows[0];
   if (!row) return null;
-  return toCard(row, await fetchHistory([jobId]));
+  const [history, interviews] = await Promise.all([
+    fetchHistory([jobId]),
+    fetchInterviews([jobId]),
+  ]);
+  return toCard(row, history, interviews);
 }
 
 /**
@@ -210,7 +293,10 @@ export async function fetchCard(jobId: string): Promise<BoardCard | null> {
  * transaction, so a card can never move without a recorded reason.
  * Returns the updated card, or null when the vacancy does not exist.
  */
-export async function moveCard(move: MoveRequest): Promise<BoardCard | null> {
+export async function moveCard(
+  move: MoveRequest,
+  interview?: InterviewRequest | null,
+): Promise<BoardCard | null> {
   const client = await pool().connect();
   try {
     await client.query('begin');
@@ -239,6 +325,12 @@ export async function moveCard(move: MoveRequest): Promise<BoardCard | null> {
     );
     // The vocabulary grows with whatever the operator typed, in the same transaction.
     await recordAction(client, move.action, 'move');
+    // Entering Interviewing can carry the first interview the dialog collected - in the *same*
+    // transaction, so a card can never claim the column without it (or the other way round).
+    // An empty draft inserts nothing: the section's `➕ Add` is where an unscheduled one lives.
+    if (interview && move.to === 'interviewing') {
+      await insertInterviewRow(client, move.jobId, interview);
+    }
     await client.query('commit');
   } catch (error) {
     await client.query('rollback').catch(() => undefined);
@@ -248,6 +340,135 @@ export async function moveCard(move: MoveRequest): Promise<BoardCard | null> {
   }
 
   return fetchCard(move.jobId);
+}
+
+/**
+ * Record an action **without** moving the card - the card's `➕ Add action` button.
+ *
+ * The column is read and written back untouched (a card without a board row is seeded as
+ * `scraped`, exactly like the column default), while `updated_at` moves: that is what makes an
+ * action count as activity for the date window *and* for the inactivity sweep, so recording
+ * "recruiter called back" is how a card escapes the ten-day rule.
+ *
+ * The history row is a `move` whose `from_state = to_state`: the DB's kind CHECK has no
+ * separate kind for "something happened, nothing moved", and inventing one would change the
+ * audit vocabulary for a button.
+ */
+export async function appendAction(request: ActionRequest): Promise<BoardCard | null> {
+  const client = await pool().connect();
+  try {
+    await client.query('begin');
+
+    const known = await client.query('select 1 as ok from resumes where job_id = $1', [
+      request.jobId,
+    ]);
+    if (known.rowCount === 0) {
+      await client.query('rollback');
+      return null;
+    }
+
+    const current = await client.query<{ stage: string | null }>(
+      'select stage from resume_board where job_id = $1',
+      [request.jobId],
+    );
+    const stage = current.rows[0]?.stage ?? 'scraped';
+
+    await client.query(
+      `insert into resume_board (job_id, stage, updated_at) values ($1, $2, now())
+       on conflict (job_id) do update set updated_at = now()`,
+      [request.jobId, stage],
+    );
+    await client.query(
+      `insert into resume_history (job_id, actor, action, kind, from_state, to_state)
+       values ($1, $2, $3, 'move', $4, $4)`,
+      [request.jobId, request.actor, request.action, stage],
+    );
+    await recordAction(client, request.action, 'move');
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return fetchCard(request.jobId);
+}
+
+/**
+ * Save the card's own details - the recruiter, the two salaries and the channels.
+ *
+ * The four fields are replaced as a set (the form sends all of them, so there is no diff to
+ * merge) and `updated_at` moves with them: typing a recruiter **is** operator activity, so the
+ * card surfaces in the date window and the inactivity sweep leaves it alone for another ten
+ * days. No `resume_history` row - like the interviews, these are card attributes rather than a
+ * funnel transition, and a History full of "salary typed" lines would bury the moves.
+ *
+ * A card without a board row is seeded as `scraped`, exactly like the column default.
+ */
+export async function updateDetails(request: DetailsRequest): Promise<BoardCard | null> {
+  const client = await pool().connect();
+  try {
+    await client.query('begin');
+
+    const known = await client.query('select 1 as ok from resumes where job_id = $1', [
+      request.jobId,
+    ]);
+    if (known.rowCount === 0) {
+      await client.query('rollback');
+      return null;
+    }
+
+    await client.query(
+      `insert into resume_board
+          (job_id, stage, recruiter, salary_offered, salary_desired, communication_channels,
+           updated_at)
+       values ($1, 'scraped', $2, $3, $4, $5, now())
+       on conflict (job_id) do update
+          set recruiter = excluded.recruiter,
+              salary_offered = excluded.salary_offered,
+              salary_desired = excluded.salary_desired,
+              communication_channels = excluded.communication_channels,
+              updated_at = now()`,
+      [
+        request.jobId,
+        request.recruiter,
+        request.salaryOffered,
+        request.salaryDesired,
+        request.communicationChannels,
+      ],
+    );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return fetchCard(request.jobId);
+}
+
+/**
+ * The one insert both the move-into-Interviewing path and `POST …/interviews` use, so the two
+ * can never disagree about which columns an interview has.
+ */
+const INTERVIEW_INSERT =
+  'insert into resume_interview (job_id, scheduled_at, type, result)' +
+  ' values ($1, $2, $3, $4) returning id';
+
+async function insertInterviewRow(
+  client: PoolClient,
+  jobId: string,
+  interview: InterviewRequest,
+): Promise<number> {
+  const inserted = await client.query<{ id: number }>(INTERVIEW_INSERT, [
+    jobId,
+    interview.scheduledAt,
+    interview.type,
+    interview.result,
+  ]);
+  return inserted.rows[0].id;
 }
 
 /**
@@ -774,4 +995,162 @@ export async function failCoverRequest(jobId: string, error: string): Promise<vo
         set status = 'failed', error = excluded.error, updated_at = now()`,
     [jobId, error.slice(0, 500)],
   );
+}
+
+// -- interviews (the section's own record, never the history) ------------------- #
+
+/** The answer of an interview write: the card it changed, or why it could not. */
+export type InterviewWrite = { ok: true; card: BoardCard } | { ok: false; reason: 'unknown' };
+
+/**
+ * Add an interview to a card - the section's `➕ Add`, and the same insert the move into
+ * Interviewing makes. The card is re-read afterwards (the database is the display).
+ */
+export async function insertInterview(
+  jobId: string,
+  interview: InterviewRequest,
+): Promise<InterviewWrite> {
+  const client = await pool().connect();
+  try {
+    await client.query('begin');
+    const known = await client.query('select 1 as ok from resumes where job_id = $1', [jobId]);
+    if (known.rowCount === 0) {
+      await client.query('rollback');
+      return { ok: false, reason: 'unknown' };
+    }
+    await insertInterviewRow(client, jobId, interview);
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  const card = await fetchCard(jobId);
+  return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
+}
+
+/**
+ * Edit one interview: its date & time, its type and the `result` the operator wrote down.
+ *
+ * No history row and no `resume_board` touch: the interview list *is* the interview history, so
+ * correcting a date is not an audited change of the application (invariant 26).
+ */
+export async function updateInterview(
+  id: number,
+  interview: InterviewRequest,
+): Promise<InterviewWrite> {
+  const updated = await pool().query<{ job_id: string }>(
+    `update resume_interview
+        set scheduled_at = $2, type = $3, result = $4, updated_at = now()
+      where id = $1
+     returning job_id`,
+    [id, interview.scheduledAt, interview.type, interview.result],
+  );
+  const jobId = updated.rows[0]?.job_id;
+  if (!jobId) return { ok: false, reason: 'unknown' };
+  const card = await fetchCard(jobId);
+  return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
+}
+
+/** Remove one interview. The card, its column and its history are untouched. */
+export async function deleteInterview(id: number): Promise<InterviewWrite> {
+  const deleted = await pool().query<{ job_id: string }>(
+    'delete from resume_interview where id = $1 returning job_id',
+    [id],
+  );
+  const jobId = deleted.rows[0]?.job_id;
+  if (!jobId) return { ok: false, reason: 'unknown' };
+  const card = await fetchCard(jobId);
+  return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
+}
+
+// -- history lines (the audit trail, correctable by hand) ----------------------- #
+
+/** The answer of a history write: the card it changed, or why it could not. */
+export type HistoryWrite = { ok: true; card: BoardCard } | { ok: false; reason: 'unknown' };
+
+/**
+ * Rewrite what one history line says: its date, actor, wording, kind and both states.
+ *
+ * The whole line in one statement, because a half-updated row is a lie: `resume_history` has no
+ * `updated_at`, so this is a record *fix* rather than an audited change, and the card it belongs to
+ * is re-read afterwards (the database is the display). Deliberately untouched: `resume_board` (no
+ * `updated_at` bump, so a correction is not operator activity and cannot dodge the inactivity
+ * sweep), `board_actions` (the wording is corrected in place, the vocabulary is not widened) and
+ * every other row of the card's trail.
+ */
+export async function updateHistoryLine(
+  id: number,
+  line: HistoryEntryRequest,
+): Promise<HistoryWrite> {
+  const updated = await pool().query<{ job_id: string }>(
+    `update resume_history
+        set at = $2, actor = $3, action = $4, kind = $5, from_state = $6, to_state = $7
+      where id = $1
+     returning job_id`,
+    [id, line.at, line.actor, line.action, line.kind, line.from, line.to],
+  );
+  const jobId = updated.rows[0]?.job_id;
+  if (!jobId) return { ok: false, reason: 'unknown' };
+  const card = await fetchCard(jobId);
+  return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
+}
+
+/**
+ * Drop one history line - the operator's own bad record, not a card.
+ *
+ * Removing a line never re-derives anything: the card keeps its column, its archive flags and its
+ * remaining trail. The one visible consequence outside History is the **Interviews** section, which
+ * is shown on the strength of a `move` into Interviewing (`hasReachedInterviewing`): if this is
+ * that line and the card has moved on, the section disappears while the interview rows stay on the
+ * card - which is why the confirm dialog spells it out.
+ */
+export async function deleteHistoryLine(id: number): Promise<HistoryWrite> {
+  const deleted = await pool().query<{ job_id: string }>(
+    'delete from resume_history where id = $1 returning job_id',
+    [id],
+  );
+  const jobId = deleted.rows[0]?.job_id;
+  if (!jobId) return { ok: false, reason: 'unknown' };
+  const card = await fetchCard(jobId);
+  return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
+}
+
+// -- the internal process ledger (the navbar's Processes window) ---------------- #
+
+/**
+ * The recent runs of the internal processes, newest first.
+ *
+ * The rows are the jobs' own (`utils/process_runs.py`): a run that found nothing is a row like
+ * any other, and a job whose pod was killed shows up as `running` until the next run of that
+ * job retires it as `aborted`.
+ */
+export async function fetchProcessRuns(limit = 100): Promise<ProcessRun[]> {
+  const rows = await pool().query<{
+    id: number;
+    process: string;
+    trigger: string;
+    started_at: Date | string;
+    finished_at: Date | string | null;
+    status: string;
+    summary: unknown;
+    error: string | null;
+  }>(
+    `select id, process, trigger, started_at, finished_at, status, summary, error
+       from process_runs
+      order by started_at desc, id desc
+      limit $1`,
+    [Math.max(1, Math.min(500, Math.trunc(limit)))],
+  );
+  return rows.rows.map((row) => ({
+    id: row.id,
+    process: row.process,
+    trigger: row.trigger === 'manual' ? 'manual' : 'schedule',
+    startedAt: toIso(row.started_at),
+    finishedAt: row.finished_at === null ? null : toIso(row.finished_at),
+    status: row.status as ProcessRun['status'],
+    summary: (row.summary as Record<string, unknown> | null) ?? null,
+    error: row.error,
+  }));
 }

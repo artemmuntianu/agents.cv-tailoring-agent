@@ -1,5 +1,13 @@
 import { STAGES, describeHistory, isStageId } from './stages';
-import type { Actor, ArchiveRequest, BoardCard, HistoryEntry, MoveRequest, StageId } from './types';
+import type {
+  ActionRequest,
+  Actor,
+  ArchiveRequest,
+  BoardCard,
+  HistoryEntry,
+  MoveRequest,
+  StageId,
+} from './types';
 
 /** Longest reason the database accepts (`resume_history.action` check). */
 export const MAX_ACTION_LENGTH = 500;
@@ -81,6 +89,31 @@ export function parseMoveRequest(body: unknown): ParseResult<MoveRequest> {
   return { ok: true, value: { jobId: jobId.value, to: raw.to, actor: actor.value, action: action.value } };
 }
 
+/**
+ * Validate a `POST /api/board/action` body - the card's `➕ Add action` button.
+ *
+ * Deliberately the Archive dialog's shape (actor + reason, **no column**): the route records
+ * the action and leaves the card where it is, so there is no `to` to validate and nothing to
+ * queue. The MoveVacancy *dialog* is reused in the UI, not the move route - in Prepare a
+ * `to === stage` move is a tailoring retry, which an action must never be.
+ */
+export function parseActionRequest(body: unknown): ParseResult<ActionRequest> {
+  const object = asObject(body);
+  if (!object.ok) return object;
+  const raw = object.value;
+
+  const jobId = parseJobId(raw);
+  if (!jobId.ok) return jobId;
+
+  const actor = parseActor(raw.actor);
+  if (!actor.ok) return actor;
+
+  const action = parseAction(raw.action);
+  if (!action.ok) return action;
+
+  return { ok: true, value: { jobId: jobId.value, actor: actor.value, action: action.value } };
+}
+
 /** Validate a `POST /api/board/archive` body (the refusal dialog). */
 export function parseArchiveRequest(body: unknown): ParseResult<ArchiveRequest> {
   const object = asObject(body);
@@ -133,13 +166,33 @@ export function isRemovableStatus(status: string): boolean {
   return REMOVABLE_STATUSES.includes((status || '').toLowerCase());
 }
 
-/** Cards per column, in board order, newest change first. */
+/**
+ * Which way a column reads. `desc` (newest first) is the default everywhere - a board opens on
+ * what just changed - and each column header can flip only its own list.
+ */
+export type SortDirection = 'desc' | 'asc';
+
+/**
+ * Order one column's cards by their **last change** (`updatedAt`): the same date the filters
+ * window uses and the same one the inactivity sweep counts, so "newest" means one thing on this
+ * board. Never `createdAt` - a card scraped a month ago but moved today is this week's work.
+ */
+export function sortCards(cards: BoardCard[], direction: SortDirection = 'desc'): BoardCard[] {
+  const sign = direction === 'desc' ? -1 : 1;
+  return [...cards].sort((a, b) => sign * a.updatedAt.localeCompare(b.updatedAt));
+}
+
+/**
+ * Cards per column, in board order, newest change first - the default every column opens with.
+ * A flipped column goes through `sortCards` itself, so the direction lives in one place.
+ */
 export function groupByStage(cards: BoardCard[]): { stage: StageId; cards: BoardCard[] }[] {
   return STAGES.map((stage) => ({
     stage: stage.id,
-    cards: cards
-      .filter((card) => card.stage === stage.id)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    cards: sortCards(
+      cards.filter((card) => card.stage === stage.id),
+      'desc',
+    ),
   }));
 }
 

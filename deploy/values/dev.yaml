@@ -79,6 +79,28 @@ cv-tailoring-scout:
     logLevel: DEBUG
     logFormat: text
 
+# The inactivity sweep: refuses the Applied cards nobody has touched for 10 days. Same image
+# and Secret as the worker; only the policy differs, and the board's Processes window shows
+# every run. It runs daily at 09:00 Lisbon, and a slot missed while the cluster was off is
+# started as soon as the cluster is back (`startingDeadlineSeconds`).
+cv-tailoring-archiver:
+  enabled: true
+  image:
+    repository: cv-tailoring-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  existingSecret: cv-tailoring-secrets
+  schedule: "0 9 * * *"
+  timeZone: Europe/Lisbon
+  config:
+    stages: applied
+    afterDays: 10
+    actor: Company
+    reason: No response
+    maxPerRun: 50
+    logLevel: DEBUG
+    logFormat: text
+
 cv-tailoring-worker:
   enabled: true
   image:

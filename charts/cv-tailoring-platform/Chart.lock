@@ -8,5 +8,8 @@ dependencies:
 - name: cv-tailoring-scout
   repository: file://../cv-tailoring-scout
   version: 0.1.0
-digest: sha256:1609102c3bac94b15f65e575ccf812a63b7c5d9c37b146d8b8968667e0cb17e2
-generated: "2026-09-26T23:53:15.9589006+01:00"
+- name: cv-tailoring-archiver
+  repository: file://../cv-tailoring-archiver
+  version: 0.1.0
+digest: sha256:682907cd3326f3dba283be9cd40b9ede3d0635d66755c83dfc2a2a03dfeaf7a7
+generated: "2026-09-27T11:57:45.9945424+01:00"

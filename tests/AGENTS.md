@@ -20,12 +20,15 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `test_docx_mutator.py` | The document surgery that must never regress: normalisation, bullet/no-op dropping, sync validation, master left untouched |
 | `test_messaging.py` | Directory-queue semantics: ack -> `processed`, retry (attempt bump), dead-letter -> `failed`, a crashing handler requeues |
 | `test_model_state.py` | Model ledger: preference order, unavailability TTL, exhaustion -> `None` |
-| `test_scout.py` | The scheduled intake: the feed fixture (escaped HTML, double-escaped entities, the utm link, the apply tail), the title/id parsing, the board-scoped dedupe, "a run queues nothing", the Telegram message, and that a run without a feed is an *error* |
+| `test_scout.py` | The scheduled intake: the feed fixture (escaped HTML, double-escaped entities, the utm link, the apply tail), the title/id parsing, the board-scoped dedupe, "a run queues nothing", the Telegram message, that a run without a feed is an *error*, and the ledger row a run records |
 | `test_postgres_store.py` | **Real** Postgres: schema bootstrap, the shape CHECK, claim SQL, the shared ledger. Skipped unless `TEST_DATABASE_URL` is set |
+| `test_process_runs.py` | The run ledger: a run is always closed (a `return` inside the block, a crash -> `failed` and the error propagates), `--dry-run` records nothing, a store that refuses to open a row is not fatal, and the next run retires a killed one as `aborted` |
+| `test_archiver.py` | The inactivity sweep, hermetically with an injected `FakeBoard`: which columns/window/actor/reason reach the query, a partial sweep's exit code, `--dry-run` writes nothing, the JSON backend refuses to run, and a typo in the config fails the run loudly |
 | `test_retry.py` | `_is_retryable`, daily-quota detection, headless `RetryLater`, backoff |
 | `test_worker_pipeline.py` | End-to-end `worker.handle_delivery` / `worker.main --once`: happy path, duplicate, DLQ, master-CV drift, quota deferral, attempt ceiling |
 
-Expected result where `TEST_DATABASE_URL` is unset:
+Expected result where `TEST_DATABASE_URL` is unset (2026-09-27): **109 collected, 82 passed,
+27 skipped**, and the backoffice suite is **156 passed / 15 files** (`npm test`).
 **45 collected, 39 passed, 6 skipped** (`python -m pytest -q`, 2026-09-19).
 
 ## Commands
@@ -37,7 +40,7 @@ make test-postgres             # or:
 TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt python -m pytest -q tests/test_postgres_store.py
 ```
 
-The 18 Postgres-gated tests need a database: point them at the cluster's own Postgres
+The 27 Postgres-gated tests need a database: point them at the cluster's own Postgres
 through a port-forward (`kubectl port-forward svc/postgres 5432:5432`), or let CI
 provide one as a service container (`.github/AGENTS.md`). They cover the worker's claim
 semantics (including the ingest row the gateway pre-creates), the board's tables

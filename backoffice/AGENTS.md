@@ -28,7 +28,7 @@ cp .env.example .env      # then edit: DATABASE_URL, BACKOFFICE_JWT_SECRET, RABB
 node scripts/user.mjs add --email me@example.com --password=secret --name=Me --admin
 npm run dev               # http://localhost:4321 -> sign in
 
-npm test           # vitest: auth, board + archive, filters, actions, ingest, artifacts, scraper (jsdom)
+npm test           # vitest: auth, board + archive, filters, actions, interviews, details, history lines, run log, ingest, artifacts, scraper (jsdom)
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -56,7 +56,12 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/403.astro` | Where a non-admin who asks for `/admin` lands |
 | `src/pages/index.astro` | Board shell; passes the session name/email down |
 | `src/pages/api/board.ts` | `GET` the cards |
-| `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card, refuse it, undo a refusal, purge it for good |
+| `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing), refuse it, undo a refusal, purge it for good |
+| `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the card's `➕ Add action`): a `move` history row with `from_state = to_state` |
+| `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, never a history row |
+| `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels) - the whole set in one write, never a history row |
+| `src/pages/api/board/history/[id].ts` | `PATCH` one history line (date, actor, wording, kind, both states) · `DELETE` one - the audit trail's only corrective write, and it touches nothing else (invariant 29) |
+| `src/pages/api/processes.ts` | `GET` the internal jobs' run history (`process_runs`) for the navbar's Processes window |
 | `src/pages/api/board/actions.ts` | `GET` the Action vocabulary (`board_actions`) |
 | `src/pages/api/admin/vocabulary.ts`, `src/pages/api/admin/actions.ts` | Admin-only: read every vocabulary · add / reword / remove an Action |
 | `src/pages/api/vacancies/batch.ts` | `POST` a scraped batch -> the cards + one AMQP message per vacancy |
@@ -70,13 +75,17 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/ingest.ts` | Pure ingest decision: new card / duplicate (+ the `submitted` status) |
 | `src/lib/artifacts.ts` | Server-only artifact resolution (root from `ARTIFACTS_DIR`/`OUTPUT_DIR`, traversal-refused) |
 | `src/lib/artifact-link.ts` | Isomorphic `/api/artifacts/...` link builder for the React islands |
-| `src/lib/db.ts` | Server-only pg pool; board reads, one transaction per move, the ingest rows |
-| `src/lib/board.ts` | Pure helpers: the three request parsers, grouping, active/archived counts, history lines |
+| `src/lib/db.ts` | Server-only pg pool; board reads, one transaction per move, the ingest rows, the interviews, the history corrections, the recorded action and the process-run read |
+| `src/lib/board.ts` | Pure helpers: the four request parsers, grouping, the date sort, active/archived counts, history lines |
 | `src/lib/filters.ts` | The toolbar's state and filtering: search, date window, stages, actions, visibility |
 | `src/lib/actions.ts` | The Action combobox's ranking and normalisation (`board_actions` is the data) |
+| `src/lib/interviews.ts` | The Interviews section: the four types, `hasReachedInterviewing`, the list sort/format and the interview parsers |
+| `src/lib/details.ts` | The card's detail fields: the six communication channels, the draft/dirty helpers and the details parser |
+| `src/lib/history.ts` | The History section: the four kinds, the states each kind may carry, the per-kind fallback transition, the edit parser and the draft helpers |
+| `src/lib/processes.ts` | The Processes window's vocabulary: process labels and hints, run status chips, one-line run summaries, durations |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
-| `src/components/*` | `App` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ActionCombobox` · `LoginForm` |
+| `src/components/*` | `App` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessRunsDialog` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
 ## Vocabulary admin (`/admin`)
@@ -242,6 +251,16 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 
 ## Board contract
 
+- **Every non-`GET` write must carry a `content-type`.** Astro's built-in `checkOrigin`
+  middleware answers 403 ("Cross-site DELETE form submissions are forbidden") to a
+  `POST`/`PATCH`/`DELETE` without a `content-type`, unless its `Origin` equals `Astro.url.origin` -
+  and under the **standalone node adapter** (`npm start`) that origin is *not* the browser's
+  host:port (measured 2026-09-27: only `Origin: http://localhost` was accepted by a server bound to
+  `127.0.0.1:4399`), while `astro dev` derives it from the request's `Host` and therefore tolerates
+  the browser's own origin. So every write in the UI sends `content-type: application/json`,
+  **including the body-less ones** (`signOut` in `App.tsx` and `AdminApp.tsx`, the admin action
+  `DELETE`, `interviewWrite` in `App.tsx`). A new client - a CLI, the extension - must do the same,
+  or it is 403'd on the built server and fine in dev, which is the worst way to find out.
 - **One database, three owners.** The worker owns `resumes`, `model_availability`,
   `app_settings`; the board owns `resume_board` (`job_id -> stage`) and
   `resume_history` (one row per confirmed manual change); the backoffice owns
@@ -265,7 +284,74 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   `Candidate` / `Salary mismatch`. An archive never moves a card: it stays in the
   column where it stopped, rendered muted.
 - **One transaction per move**: `resume_board` upsert + `resume_history` insert, so a
-  card can never move without a recorded reason.
+  card can never move without a recorded reason. Entering **Interviewing** adds the first
+  interview to that same transaction, so a card cannot claim the column without the interview
+  the dialog collected (or the other way round).
+- **An action can be recorded without a move.** The card's `➕ Add action` opens the *same*
+  dialog as a drop but POSTs to `/api/board/action`: `resume_board` keeps its `stage` and gets a
+  fresh `updated_at`, and the history gets a `move` row with `from_state = to_state`. Own route
+  on purpose - in Prepare a same-column move is a tailoring *retry*, so reusing
+  `/api/board/move` would spend Gemini. That `updated_at` is also what keeps the headless
+  inactivity sweep away from a card the operator is still working on (invariant 27).
+- **Each column sorts itself.** Newest change first by default (`sortCards`, by `updated_at` -
+  the same date the filters window and the sweep use); the header's `↓ Newest / ↑ Oldest` flips
+  one column. The order lives in `KanbanBoard` state only: it is a way of reading the board, not
+  board state.
+- **Interviews are their own section, outside the history.** `resume_interview` (invariant 26):
+  the section appears when the history holds a move into Interviewing *or* the card is there now
+  (`hasReachedInterviewing`), so it survives a move on to Offer and is absent for a card that
+  never got there. `➕ Add` / `✏️ Edit` / `✕ Remove` in the section, and the Move dialog's own
+  Interview section, never write a `resume_history` row; every interview write answers with the
+  re-read card, like the other mutations. The five cards that were already standing in
+  Interviewing when the table arrived had their interviews derived from History once, by
+  `scripts/backfill_interviews.sql` (the sheet had dates but no times, so those rows are at
+  midnight - the pencil in the section is the way to fix one).
+- **The card carries its own detail fields.** `resume_board.recruiter`, `salary_offered`,
+  `salary_desired` and `communication_channels` (a `text[]` with a six-value CHECK) are edited in
+  the card's **Details** block and saved as one set: an emptied input clears the field (NULL, never
+  `''`), `updated_at` moves - so typing a recruiter counts as activity for the date window *and*
+  for the inactivity sweep - and **no** `resume_history` row is written (invariant 28). The
+  channels are a code + DB-CHECK vocabulary like the Actors and the interview types, not operator
+  data, so they are not editable from `/admin`.
+- **The History at the bottom of the card is correctable, and correcting it is not activity.**
+  Every line carries *✏️ Edit* and *✕ Remove*. The edit rewrites the **whole** line
+  (`PATCH /api/board/history/<id>`: date, actor, wording, kind and both states), because a
+  half-fixed audit trail is still wrong; the two states are validated *against the kind*
+  (`lib/history.ts`: a `move` carries column ids, a `tailoring` line the worker's sub-states,
+  `archive`/`restore` the pair `active`/`archived` - the one check the table cannot make), and the
+  dialog's state dropdowns follow the kind. Removing one is confirmed in its own dialog
+  (`DELETE /api/board/history/<id>`), which says what goes and, when the line is a move into
+  Interviewing, that the **Interviews** section goes with it while the interview rows stay on the
+  card. Neither write touches anything else: no column change, no `resume_board.updated_at` bump
+  (so a correction cannot buy a card another ten days from the sweep, invariant 27), no
+  `board_actions` upsert (fixing what a line says is not a new action name) and no second history
+  row - the correction is not dated, which is exactly why the dialog spells it out (invariant 29).
+  The id in `HistoryEntry`/`Interview` is typed `number` but arrives as a **string** (node-pg reads
+  `int8` as text): it is only ever put into a URL, so nothing converts it - do not start doing
+  arithmetic on an id.
+- **Every dialog closes on a click on the overlay** (the panel stops the click) as well as on
+  Escape and Cancel - the full-screen card included. A dialog *inside* the card (interview,
+  channel picker) handles Escape in the **capture phase** and stops it, or the card would close
+  underneath it. The Filters panel is the one popover, and it already closed on an outside click.
+- **The columns have a fixed width and the board scrolls sideways.** Five columns are wider than
+  a laptop screen on purpose: `w-80` per column in `KanbanBoard` (one class to change), a
+  horizontally scrolling row inside `main`, and each column's own card list scrolling vertically.
+  Nothing is squeezed into a fifth of the viewport any more.
+- **The nav panel folds to its icons.** The `«` toggle collapses `NavBar` to the four icons
+  (Board, Vocabularies, Processes, Sign out) and hides the words, the pipeline counts and the
+  roadmap placeholders; the choice lives in `localStorage` under `cvt.nav.collapsed` and is read
+  in an `effect`, never during render, so the server-rendered shell and the first client render
+  agree. The panel deliberately has **no** reload button and no help text - the board's own
+  `Reload` and `● Live` controls sit in the `main` header where the board is.
+- **The Processes window is a window, not a route.** The navbar's item opens
+  `ProcessRunsDialog`, which reads `GET /api/processes` (`process_runs`, newest first, written by
+  the scheduled jobs through `utils/process_runs.py`). Read-only and unpolled by design - a run
+  log is something the operator looks at - and an unknown process slug still renders, so a job
+  deployed before its label appears anyway.
+- **The board's columns have a second, headless writer.** The `archiver` CronJob refuses the
+  Applied cards that went quiet (invariant 27); it uses the same transaction shape as
+  `/api/board/archive` and the reason lands in `board_actions`, so the result is
+  indistinguishable from a hand-made refusal - which is the point.
 - **The database is the display**: after every POST the board re-reads `/api/board`,
   so a rejected move simply leaves the previous state on screen.
 - **Live mode polls** `/api/board` every 5s (paused when the tab is hidden) instead of
@@ -274,8 +360,10 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   re-reads on `focus`/`visibilitychange`, so a scrape made in the extension popup shows
   up the moment you look back at the board. Press `● Live` to pause it and fall back to
   manual Reload.
-- The schema enforces what the dialog promises: `actor in ('Me','Them')`, a non-empty
-  action (max 500 chars), `kind in ('move','tailoring')`.
+- The schema enforces what the dialogs promise: `actor in ('Candidate','Company')`, a
+  non-empty action (max 500 chars), `kind in ('move','tailoring','archive','restore')` - and the
+  history edit is the one place the *pair* of states is checked in code, because
+  `resume_history` has no cross-column constraint to lean on.
 - Tailwind class strings stay **literal** in `stages.ts` (Tailwind v4 scans text).
 
 ## Refusal: the in-place soft delete
@@ -367,11 +455,31 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 - **No undo for a removal** and no recycle bin: the confirm dialog is the guard, and
   re-scraping the page is the only way back.
 - No removal of an active card, and no bulk removal: archive first, one card at a time.
+- **No interview reminders, invitations or calendar export**: an interview is a row in the card
+  and the only reminder is the card itself. The inactivity sweep ignores interviews on purpose -
+  `resume_board.updated_at` is the activity clock, and a scheduled call is not an action.
+- **No "run this job now" button** in the Processes window: the CronJob slot is the only timer,
+  and a manual run is `kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-archiver ...`
+  (`charts/cv-tailoring-archiver`).
+- **No interview rows in `resume_history`** - by design, not an oversight: the list in the
+  section *is* the interview history (invariant 26). Do not "fix" it by adding them.
+- **No History rows for the detail fields either** (recruiter, salaries, channels): like the
+  interviews they are card attributes, and a History of "salary typed" lines would bury the moves
+  (invariant 28).
+- **No admin surface for the communication channels**: the six values are a DB CHECK, so adding
+  one is a migration plus a UI change, not a row in a vocabulary table.
+- **No server-side paging or sorting for the run log** (the newest 100 rows, `GET /api/processes`),
+  and no filtering by process or status.
 - Not deployed in-cluster yet (`CONSTITUTION.md` D11) - run it against port-forwards.
 
 ## Don't
 
-- Add a second place to store board state (a file, another table, another service).
+- Add a second place to store board state (a file, another table, another service); the
+  interviews (`resume_interview`) are board state in `SCHEMA_SQL` like the rest.
+- Historicise an interview write, or make the Interviews section depend on an interview row
+  existing: the section's visibility is the *history*, and the list is the interview history.
+- Give the `➕ Add action` dialog a column to choose: an action that moves a card is a move, and
+  the retry/tailoring rules belong to `/api/board/move` alone.
 - Duplicate the DDL here: extend `utils/db.py::SCHEMA_SQL` and its gated test instead.
 - Add a signup route, or a way to set a password from the UI.
 - Write to `resumes.status`, or delete rows the worker owns. The *move* path never
@@ -390,7 +498,12 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 - Date a card by anything other than `updated_at` in the filters without saying so.
 - Let an archived card be dragged, or let the ingest gateway re-queue one.
 - Rewrite `resume_history` (or `archived_reason`) when a vocabulary value is renamed or
-  removed: the audit trail keeps its wording, and the retired value stays filterable.
+  removed: the audit trail keeps its wording, and the retired value stays filterable. (An operator
+  *correcting one line* through the pencil is a different thing and is allowed - invariant 29.)
+- Route a history correction through the move/archive machinery: `PATCH`/`DELETE
+  /api/board/history/<id>` writes `resume_history` and **nothing else** - no `resume_board`
+  touch, no `board_actions` upsert, no column change. A correction is not activity, and it must
+  not become invisible activity either.
 - Add a second home for the Action vocabulary (a JSON file, a code list, a settings table):
   `board_actions` is it, and `/admin` is the only writer.
 - Make Actors, columns or sub-states editable from `/admin`: they are code/DB constraints.

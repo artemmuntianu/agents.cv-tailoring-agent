@@ -234,6 +234,33 @@ SCOUT_TELEGRAM_TOKEN = os.getenv("SCOUT_TELEGRAM_TOKEN", "")
 SCOUT_TELEGRAM_CHAT_ID = os.getenv("SCOUT_TELEGRAM_CHAT_ID", "")
 CV_VERSION = os.getenv("CV_VERSION", "v1")
 
+# --------------------------------------------------------------------------- #
+# The internal process ledger (`utils/process_runs.py`)
+# --------------------------------------------------------------------------- #
+# A killed pod leaves its run row `running`; the next run of the same job retires
+# anything older than this as `aborted`, so the board's Processes window never shows
+# a job that is actually dead. Keep it above the longest run (the jobs'
+# activeDeadlineSeconds is 600).
+PROCESS_RUN_STALE_HOURS = _env_int("PROCESS_RUN_STALE_HOURS", 24)
+
+# --------------------------------------------------------------------------- #
+# The inactivity archive (`python -m archiver`)
+# --------------------------------------------------------------------------- #
+# A card in one of these columns that no *operator action* has touched for
+# `AUTO_ARCHIVE_AFTER_DAYS` days is refused in place automatically. This is the
+# housekeeping half of the intake: it never moves a card, never writes
+# `resumes.status` and never queues a message - it only closes applications nobody is
+# working on any more, with the same actor/reason/history rules a manual refusal keeps.
+AUTO_ARCHIVE_STAGES = _env_csv("AUTO_ARCHIVE_STAGES", ["applied"])
+AUTO_ARCHIVE_AFTER_DAYS = _env_int("AUTO_ARCHIVE_AFTER_DAYS", 10)
+# The actor vocabulary is the DB CHECK (`Candidate` | `Company`); "Company" is the
+# honest answer for silence. The reason must be 1..500 characters.
+AUTO_ARCHIVE_ACTOR = os.getenv("AUTO_ARCHIVE_ACTOR", "Company")
+AUTO_ARCHIVE_REASON = os.getenv("AUTO_ARCHIVE_REASON", "No response")
+# Safety cap: a first sweep of a board that was never swept must not refuse a whole
+# column in one run.
+AUTO_ARCHIVE_MAX_PER_RUN = _env_int("AUTO_ARCHIVE_MAX_PER_RUN", 50)
+
 # Keep per-job temp dirs (PDFs, page PNGs) after a task for debugging.
 KEEP_TEMP_DIRS = _env_bool("KEEP_TEMP_DIRS", False)
 

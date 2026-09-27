@@ -149,6 +149,34 @@ def test_the_dry_run_writes_nothing(monkeypatch):
 
             assert db_module.get_db().list_jobs() == [], "a dry run must not create cards"
             assert get_queue().depth() == 0
+            # "Writes nothing" includes the process ledger: a dry run is not a run.
+            assert db_module.get_db().list_process_runs() == []
+
+
+def test_a_run_records_itself_in_the_process_ledger(monkeypatch):
+    """The board's Processes window shows the intake's *runs*, not only its cards."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            monkeypatch.setattr(feeds, "fetch_all", lambda urls=None: [("fixture", FEED)])
+            monkeypatch.setattr(run.config, "SCOUT_USER_ID", "scout-user")
+            monkeypatch.setattr(run.config, "SCOUT_NOTIFY", "none")
+
+            assert run.main([]) == 0
+
+            (row,) = db_module.get_db().list_process_runs()
+            assert row["process"] == "feed-parser"
+            assert row["trigger"] == "schedule"
+            assert row["status"] == "ok"
+            assert row["finished_at"] is not None
+            assert row["summary"] == {
+                "feeds": 3,
+                "notify": "none",
+                "feeds_ok": 1,
+                "parsed": 2,
+                "new_cards": 2,
+                "created_cards": 2,
+                "notified": 0,
+            }
 
 
 def test_a_run_without_a_feed_is_an_error_not_an_empty_week(monkeypatch):
@@ -158,6 +186,11 @@ def test_a_run_without_a_feed_is_an_error_not_an_empty_week(monkeypatch):
             monkeypatch.setattr(feeds, "fetch_all", lambda urls=None: [])
             monkeypatch.setattr(run.config, "SCOUT_USER_ID", "scout-user")
             assert run.main([]) == 1
+
+            # ... and the ledger says the same thing, so the window can too.
+            (row,) = db_module.get_db().list_process_runs()
+            assert row["status"] == "failed"
+            assert row["error"] == "no feed answered"
 
 
 def test_the_intake_refuses_to_write_as_an_unknown_account(monkeypatch):

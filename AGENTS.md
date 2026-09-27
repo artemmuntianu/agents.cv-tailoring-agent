@@ -23,6 +23,7 @@ live, so no agent has to re-derive them.
 - **`backoffice/AGENTS.md`** - the operator UI *and* the API gateway (Astro + React POC): run commands, auth contract, the batch-ingest contract, board contract, what is deliberately missing.
 - **`extension/AGENTS.md`** - the Chrome MV3 scraper that feeds the gateway (DOM contract, injection rules, where its tests live).
 - **`scout/AGENTS.md`** - the scheduled RSS intake (`python -m scout`): the feed contract, the board-scoped dedupe, the Telegram message, and what it deliberately never does (no Gemini, no queue message).
+- **`archiver/AGENTS.md`** - the scheduled housekeeping (`python -m archiver`): the inactivity sweep that refuses the Applied cards nobody touched for 10 days, the staleness clock it uses, and the run ledger both jobs write.
 - **`tests/AGENTS.md`** - the hermetic verification layer.
 - **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what.
 - **`.github/AGENTS.md`** - CI workflows.
@@ -73,9 +74,10 @@ python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the j
 
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
 python -m scout --dry-run                # what the scheduled intake would add (writes nothing)
+python -m archiver --dry-run             # what the inactivity sweep would refuse (writes nothing)
 ```
 
-The 18 Postgres integration tests only run when pointed at a throwaway database:
+The 27 Postgres integration tests only run when pointed at a throwaway database:
 
 ```sh
 make test-postgres
@@ -119,6 +121,8 @@ Charts (offline validation, no cluster needed):
 
 ```sh
 helm lint charts/cv-tailoring-worker
+helm lint charts/cv-tailoring-scout
+helm lint charts/cv-tailoring-archiver
 helm dependency update charts/cv-tailoring-platform     # required before linting
 helm lint charts/cv-tailoring-platform
 helm template cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml > rendered.yaml
@@ -229,6 +233,12 @@ Do not add a dependency just to answer a reference/dead-code question.
     Fix (verified 2026-09-26, 91/91 afterwards):
     `Remove-Item -Recurse -Force backoffice/node_modules/.vite`. Do not go hunting for a
     deleted file, a bad import, or a `server.fs.allow` misconfiguration.
+18. **A host-side run against the cluster's Postgres needs `DATABASE_SSLMODE=disable`.** The
+    default is `require` (`config.py`), the dev Postgres serves plain TCP, and
+    `$env:DATABASE_SSLMODE=''` does **not** help: PowerShell 5.1 *deletes* a variable set to the
+    empty string, so the default comes straight back and the connection dies with "server does not
+    support SSL, but SSL was required". That is what a `python -m archiver --dry-run` /
+    `python -m scout --dry-run` / the gated Postgres tests do, so set the value explicitly.
 
 ## Shell / commands (Windows PowerShell 5.1)
 

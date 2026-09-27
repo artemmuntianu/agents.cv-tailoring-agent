@@ -1,0 +1,18 @@
+apiVersion: v2
+name: cv-tailoring-archiver
+description: |
+  The scheduled inactivity sweep: refuses the board cards in the configured columns that no
+  operator action has touched for N days (`python -m archiver`). It moves nothing, writes no
+  `resumes.status`, queues no message and deletes nothing - a refusal is the board's in-place
+  soft delete, with the same actor, reason and history row a human refusal records
+  (`CONSTITUTION.md` invariants 19, 20 and 27).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - cronjob
+  - housekeeping
+  - board
+maintainers:
+  - name: artemmuntianu

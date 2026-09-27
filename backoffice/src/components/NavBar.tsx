@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { STAGES } from '../lib/stages';
 import type { StageId } from '../lib/types';
 
@@ -6,121 +7,205 @@ interface NavBarProps {
   total: number;
   /** Refused vacancies among the currently visible cards. */
   archived: number;
-  loading: boolean;
-  live: boolean;
   session: { email: string; name: string | null; admin: boolean };
-  onReload: () => void;
+  /** Open the internal-process run history (the window this panel's own item opens). */
+  onOpenProcesses: () => void;
   onSignOut: () => void;
 }
 
-const FUTURE: { label: string; note: string }[] = [
-  { label: 'Vacancies', note: 'list + filters' },
-];
+/** Where the collapsed preference is remembered - a view preference, never board state. */
+const COLLAPSED_KEY = 'cvt.nav.collapsed';
 
-/** Left nav panel. Only "Board" is implemented in the POC. */
+const FUTURE: { label: string; note: string }[] = [{ label: 'Vacancies', note: 'list + filters' }];
+
+/** One nav item's shape, in both widths (icons stay, the words go). */
+function itemClass(collapsed: boolean, active = false): string {
+  return [
+    'flex w-full items-center rounded-md text-sm',
+    collapsed ? 'justify-center px-2 py-2' : 'justify-between px-3 py-2',
+    active ? 'bg-slate-900 font-medium text-white' : 'text-slate-700 hover:bg-slate-100',
+  ].join(' ');
+}
+
+const ACTIVE_LINK = 'flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white';
+
+/**
+ * Left nav panel: the board, the administrator's vocabulary screen and the **Processes** window.
+ *
+ * The `«` toggle collapses the panel to its icons, so a narrow screen gives the board almost all
+ * of its width back; the choice is remembered in `localStorage` and read in an `effect` (never
+ * during render), because the server-rendered shell and the first client render have to agree.
+ */
 export default function NavBar({
   counts,
   total,
   archived,
-  loading,
-  live,
   session,
-  onReload,
+  onOpenProcesses,
   onSignOut,
 }: NavBarProps) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      setCollapsed(window.localStorage.getItem(COLLAPSED_KEY) === 'true');
+    } catch {
+      // A blocked localStorage (private mode, a locked profile) is not worth a broken panel.
+    }
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(COLLAPSED_KEY, String(next));
+      } catch {
+        // Same: the preference is a convenience, not a requirement.
+      }
+      return next;
+    });
+  }
+
   return (
-    <nav className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-5 py-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Backoffice</p>
-        <h1 className="mt-1 text-lg font-semibold text-slate-900">Job search board</h1>
-        <p className="mt-1 text-[11px] text-slate-400">
-          {session.name ? `${session.name} · ` : ''}
-          {session.email}
-        </p>
+    <nav
+      className={`flex shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-150 ${
+        collapsed ? 'w-16' : 'w-64'
+      }`}
+    >
+      <div
+        className={`flex items-center border-b border-slate-200 ${
+          collapsed ? 'flex-col gap-2 px-2 py-3' : 'justify-between gap-2 px-5 py-4'
+        }`}
+      >
+        {collapsed ? (
+          <span className="text-lg text-slate-900" title="CV tailoring backoffice" aria-hidden>
+            ▦
+          </span>
+        ) : (
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Backoffice
+            </p>
+            <h1 className="mt-1 text-lg font-semibold text-slate-900">Job search board</h1>
+            <p className="mt-1 truncate text-[11px] text-slate-400">
+              {session.name ? `${session.name} · ` : ''}
+              {session.email}
+            </p>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Expand the navigation panel' : 'Collapse the navigation panel'}
+          title={collapsed ? 'Expand the navigation panel' : 'Collapse the navigation panel'}
+          className="rounded-md border border-slate-300 px-1.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-50"
+        >
+          {collapsed ? '»' : '«'}
+        </button>
       </div>
 
-      <div className="px-3 py-4">
-        <a
-          href="/"
-          className="flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white"
-        >
-          <span aria-hidden>▦</span> Board
+      <div className={collapsed ? 'px-2 py-3' : 'px-3 py-4'}>
+        <a href="/" className={collapsed ? itemClass(true, true) : ACTIVE_LINK} title="Board">
+          <span aria-hidden>▦</span>
+          {!collapsed && <span>Board</span>}
         </a>
-        <ul className="mt-1 space-y-1">
+
+        <ul className={collapsed ? 'mt-2 space-y-2' : 'mt-1 space-y-1'}>
           {session.admin && (
             <li>
               <a
                 href="/admin"
-                className="flex items-center justify-between rounded-md px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                className={itemClass(collapsed)}
+                title={collapsed ? 'Vocabularies (admin)' : undefined}
               >
                 <span className="flex items-center gap-2">
-                  <span aria-hidden>⚙</span> Vocabularies
+                  <span aria-hidden>⚙</span>
+                  {!collapsed && <span>Vocabularies</span>}
                 </span>
-                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
-                  admin
-                </span>
+                {!collapsed && (
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                    admin
+                  </span>
+                )}
               </a>
             </li>
           )}
-          {FUTURE.map((item) => (
-            <li key={item.label}>
-              <span className="flex cursor-not-allowed items-center justify-between rounded-md px-3 py-2 text-sm text-slate-400">
-                {item.label}
-                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
-                  {item.note}
-                </span>
+
+          <li>
+            <button
+              type="button"
+              onClick={onOpenProcesses}
+              className={itemClass(collapsed)}
+              title={collapsed ? 'Processes · run log' : undefined}
+            >
+              <span className="flex items-center gap-2">
+                <span aria-hidden>▤</span>
+                {!collapsed && <span>Processes</span>}
               </span>
-            </li>
-          ))}
+              {!collapsed && (
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                  run log
+                </span>
+              )}
+            </button>
+          </li>
+
+          {/* Roadmap placeholders: they are words, not icons, so a collapsed panel drops them. */}
+          {!collapsed &&
+            FUTURE.map((item) => (
+              <li key={item.label}>
+                <span className="flex cursor-not-allowed items-center justify-between rounded-md px-3 py-2 text-sm text-slate-400">
+                  {item.label}
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                    {item.note}
+                  </span>
+                </span>
+              </li>
+            ))}
         </ul>
       </div>
 
-      <div className="px-5 py-3">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Pipeline ({total})
-        </p>
-        <ul className="mt-2 space-y-1 text-sm">
-          {STAGES.map((stage) => (
-            <li key={stage.id} className="flex items-center justify-between text-slate-600">
-              <span>{stage.label}</span>
-              <span className="font-medium text-slate-900">{counts[stage.id]}</span>
-            </li>
-          ))}
-        </ul>
-        {archived > 0 && (
-          <p className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-sm text-rose-600">
-            <span>⛔️ Refused</span>
-            <span className="font-medium">{archived}</span>
+      {!collapsed && (
+        <div className="px-5 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Pipeline ({total})
           </p>
-        )}
-      </div>
+          <ul className="mt-2 space-y-1 text-sm">
+            {STAGES.map((stage) => (
+              <li key={stage.id} className="flex items-center justify-between text-slate-600">
+                <span>{stage.label}</span>
+                <span className="font-medium text-slate-900">{counts[stage.id]}</span>
+              </li>
+            ))}
+          </ul>
+          {archived > 0 && (
+            <p className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-sm text-rose-600">
+              <span>
+                <span aria-hidden>⛔️</span> Refused
+              </span>
+              <span className="font-medium">{archived}</span>
+            </p>
+          )}
+        </div>
+      )}
 
-      <div className="mt-auto border-t border-slate-200 p-4">
-        <button
-          type="button"
-          onClick={onReload}
-          disabled={loading}
-          className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:text-slate-400"
-        >
-          {loading ? 'Loading…' : 'Reload from database'}
-        </button>
+      <div className={`mt-auto border-t border-slate-200 ${collapsed ? 'p-2' : 'p-4'}`}>
         <button
           type="button"
           onClick={onSignOut}
-          className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          title="Sign out"
+          className={
+            collapsed
+              ? 'flex w-full items-center justify-center rounded-md px-2 py-2 text-sm text-slate-700 hover:bg-slate-100'
+              : 'w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50'
+          }
         >
-          Sign out
+          <span aria-hidden>⎋</span>
+          {!collapsed && <span className="ml-2">Sign out</span>}
         </button>
-        <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
-          Cards move only by hand. Every change asks for the actor and a reason, and both are stored
-          in the card's history in the same Postgres the worker writes to. Refusing a vacancy
-          archives it <em>in place</em>: it stays in its column, muted, until you restore it.
-          {live
-            ? ' Live mode re-reads the board every few seconds; worker status changes appear on their own.'
-            : ' Live mode is paused: press Reload to see worker progress.'}
-        </p>
       </div>
     </nav>
   );
 }
-

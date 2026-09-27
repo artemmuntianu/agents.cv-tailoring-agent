@@ -1,0 +1,75 @@
+{{- if .Values.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cv-tailoring-archiver.fullname" . }}
+  labels:
+    {{- include "cv-tailoring-archiver.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  # Wall-clock, not UTC: "09:00" has to mean 09:00 in the operator's day, DST included.
+  timeZone: {{ .Values.timeZone | quote }}
+  # The missed-slot rule: a cluster that was down at the scheduled time still runs the sweep
+  # as soon as it is back, as long as it is within this deadline. The sweep is idempotent, so
+  # a late run is harmless - a silently skipped day would not be.
+  startingDeadlineSeconds: {{ .Values.startingDeadlineSeconds }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy | quote }}
+  suspend: {{ .Values.suspend }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.backoffLimit }}
+      # A hung database must not hold the slot forever.
+      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "cv-tailoring-archiver.selectorLabels" . | nindent 12 }}
+          annotations:
+            # Roll the job template when the configuration changes.
+            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        spec:
+          restartPolicy: {{ .Values.restartPolicy | quote }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: archiver
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # The package's entry point: there is no root `archiver.py` on purpose (a
+              # same-named package would shadow it).
+              command: ["python", "-m", "archiver"]
+              envFrom:
+                - configMapRef:
+                    name: {{ include "cv-tailoring-archiver.fullname" . }}
+                - secretRef:
+                    name: {{ include "cv-tailoring-archiver.secretName" . }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                # `config.TEMP_ROOT` defaults under /tmp; the heartbeat file lives there too.
+                - name: work
+                  mountPath: /tmp/cvt
+          volumes:
+            - name: work
+              emptyDir: {}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

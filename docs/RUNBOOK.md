@@ -54,6 +54,7 @@ Symptoms of having neither: cards show `PDF · sync` / `DOCX · sync` chips, and
 kubectl get pods,scaledobject
 kubectl exec -it rabbitmq-0 -- rabbitmqctl list_queues name messages messages_ready messages_unacknowledged
 psql "$DATABASE_URL" -c "select status, count(*) from resumes group by status order by 2 desc;"
+psql "$DATABASE_URL" -c "select process, status, started_at, finished_at, summary from process_runs order by started_at desc limit 10;"
 ```
 
 Healthy signs: worker replicas `0` when idle (scale-to-zero works), `Ready`
@@ -83,8 +84,37 @@ kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
   (`scripts/worker-secret.ps1` reads `SCOUT_TELEGRAM_TOKEN`/`_CHAT_ID` from `.env`);
   `SCOUT_NOTIFY=none` turns them off deliberately, and the cards still appear.
 - **Too many cards at once**: `SCOUT_MAX_PER_RUN` caps a run (0 = everything, the default).
-- **A dry run** (writes nothing): `python -m scout --dry-run` on the host with `SCOUT_USER_ID` and
-  `DATABASE_URL` pointed at a port-forward - see `scout/AGENTS.md`.
+- **A dry run** (writes nothing): `python -m scout --dry-run` on the host with `SCOUT_USER_ID`,
+  `DATABASE_URL` pointed at a port-forward and `DATABASE_SSLMODE=disable` (the dev Postgres has no
+  TLS; trap 18 in the root `AGENTS.md`) - see `scout/AGENTS.md`.
+
+## Scheduled housekeeping (the auto-archiver)
+
+`CronJob cv-tailoring-cv-tailoring-archiver` refuses the board's **Applied** cards that no
+operator action (a move, an archive, a restore, a recorded action) has touched for
+`AUTO_ARCHIVE_AFTER_DAYS` days (10) - the same in-place archive the card's `⛔️ Archive` button
+makes, recorded as `Company` / `No response`. It never moves a card, never writes
+`resumes.status`, never queues a message and deletes nothing; the card's `🔄 Restore` is the undo.
+It runs once a day at 09:00 Lisbon, and a slot missed while the cluster was down starts as soon as
+the cluster is back (`startingDeadlineSeconds: 86400`) - the sweep is idempotent, so a late run is
+harmless while a silently skipped day would not be.
+
+```sh
+kubectl get cronjob cv-tailoring-cv-tailoring-archiver     # schedule, suspend state, last run
+kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-archiver archiver-manual
+kubectl logs job/archiver-manual                           # ends with "refused=N failed=0"
+```
+
+- **What did it refuse?** `select * from process_runs order by started_at desc limit 5;` - the
+  board's **Processes** window shows the same rows - and each refusal is a normal
+  `resume_history` row (`archive`, `active -> archived`), so the card's own history says why.
+- **Turn it down**: `--set cv-tailoring-archiver.config.afterDays=30`, or
+  `--set cv-tailoring-archiver.suspend=true` to stop it entirely.
+- **Keep one card**: record an action on it (`➕ Add action`) - that bumps the card's activity
+  date, which is exactly the clock the sweep reads.
+- **A dry run** (lists the candidates, writes nothing): `python -m archiver --dry-run` on the host
+  with `DATABASE_URL` pointed at a port-forward and `DATABASE_SSLMODE=disable` (the dev Postgres
+  has no TLS; trap 18 in the root `AGENTS.md`) - see `archiver/AGENTS.md`.
 
 ## Queue is backing up (messages_ready grows, workers stay at 0)
 

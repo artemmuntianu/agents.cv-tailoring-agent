@@ -16,7 +16,7 @@ import json
 import os
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import config
 from utils.logging_setup import get_logger
@@ -64,6 +64,15 @@ def job_key(user_id, external_id, cv_version="v1", source="djinni"):
 
 def new_job_id():
     return str(uuid.uuid4())
+
+
+# The board's columns (`resume_board`, `resume_history`, `board_actions`) are Postgres
+# tables and the JSON backend has no board at all, so the automation says so instead of
+# pretending a run changed something (`archiver/run.py` preflights this as well).
+BOARD_BACKEND_REQUIRED = (
+    "the board's state lives in Postgres - run this with DB_BACKEND=postgres "
+    "(the JSON backend stores jobs only)"
+)
 
 
 class LocalDb:
@@ -264,6 +273,81 @@ class LocalDb:
         jobs = list(self._load()["jobs"].values())
         return sorted(jobs, key=lambda j: j.get("created_at") or "", reverse=True)[:limit]
 
+    # -- the internal process ledger (see PostgresDb) ----------------------- #
+    def start_process_run(self, process, trigger="schedule"):
+        """Open one run record for a scheduled job; returns its id.
+
+        Kept in the same JSON file (``data["process_runs"]``) so the ledger is testable
+        without a database - the scout's and the archiver's hermetic tests assert on it.
+        """
+        data = self._load()
+        runs = data.setdefault("process_runs", [])
+        run_id = max((int(row.get("id") or 0) for row in runs), default=0) + 1
+        runs.append(
+            {
+                "id": run_id,
+                "process": process,
+                "trigger": trigger,
+                "started_at": now_iso(),
+                "finished_at": None,
+                "status": "running",
+                "summary": None,
+                "error": None,
+            }
+        )
+        self._save(data)
+        return run_id
+
+    def finish_process_run(self, run_id, status="ok", summary=None, error=None):
+        """Close a run with its outcome and counters; an unknown id is ignored."""
+        data = self._load()
+        for row in data.get("process_runs", []):
+            if int(row.get("id") or 0) == int(run_id):
+                row["finished_at"] = now_iso()
+                row["status"] = status
+                row["summary"] = summary
+                row["error"] = error
+                self._save(data)
+                return row
+        return None
+
+    def list_process_runs(self, limit=100):
+        """Newest run first, whatever its status (the board's Processes window)."""
+        runs = sorted(
+            self._load().get("process_runs", []),
+            key=lambda row: int(row.get("id") or 0),
+            reverse=True,
+        )
+        return runs[: max(1, int(limit))]
+
+    def retire_stale_process_runs(self, process, older_than_seconds=86400):
+        """Mark the ``running`` rows a killed pod left behind as ``aborted``."""
+        cutoff = datetime.now(UTC).timestamp() - float(older_than_seconds)
+        data = self._load()
+        retired = 0
+        for row in data.get("process_runs", []):
+            if row.get("process") != process or row.get("status") != "running":
+                continue
+            started = row.get("started_at")
+            try:
+                at = datetime.fromisoformat(started).timestamp()
+            except (TypeError, ValueError):
+                at = 0
+            if at < cutoff:
+                row["status"] = "aborted"
+                row["finished_at"] = started
+                retired += 1
+        if retired:
+            self._save(data)
+        return retired
+
+    # -- the inactivity archive (see PostgresDb) ---------------------------- #
+    def list_inactive_cards(self, stages, older_than_days, limit=100):
+        raise RuntimeError(BOARD_BACKEND_REQUIRED)
+
+    def archive_card(self, job_id, actor, reason):
+        raise RuntimeError(BOARD_BACKEND_REQUIRED)
+
 
 # Statuses that mean "this vacancy is already being (or has been) handled".
 # Anything else (failed / rate_limited / dead_lettered / skipped) may be
@@ -350,6 +434,14 @@ create table if not exists resume_board (
     archived_at     timestamptz,
     archived_actor  text,
     archived_reason text,
+    -- Operator-maintained vacancy details, editable on the card itself: who the recruiter
+    -- is, what the employer offers, what the operator asks for, and where the conversation
+    -- happens. Free text except the channels (a fixed vocabulary, enforced below); empty
+    -- values are NULL, never ''.
+    recruiter              text,
+    salary_offered         text,
+    salary_desired         text,
+    communication_channels text[],
     updated_at      timestamptz not null default now()
 );
 
@@ -357,6 +449,12 @@ create table if not exists resume_board (
 alter table resume_board add column if not exists archived_at timestamptz;
 alter table resume_board add column if not exists archived_actor text;
 alter table resume_board add column if not exists archived_reason text;
+
+-- ... and the ones created before the card's own detail fields (2026-09-27).
+alter table resume_board add column if not exists recruiter text;
+alter table resume_board add column if not exists salary_offered text;
+alter table resume_board add column if not exists salary_desired text;
+alter table resume_board add column if not exists communication_channels text[];
 
 -- The source + Scraped rework (2026-09-26): `source` joins the business key, the job
 -- description becomes durable, and the board's intake column is `scraped` while the former
@@ -448,6 +546,29 @@ insert into board_actions (action, kind) values
 on conflict (action) do nothing;
 
 
+-- Interviews of one vacancy. The Interviews section of the card is its **own** record and
+-- is deliberately *not* historicised in `resume_history`: the list in the section is the
+-- history, so editing a date, a type or a result never grows the audit trail
+-- (`CONSTITUTION.md` invariant 26). A card's first interview is inserted in the same
+-- transaction as the move into `interviewing`; the section's visibility is derived from the
+-- history (`hasReachedInterviewing`), so a vacancy that later moves on to `offer` keeps the
+-- interviews it had. The four types are code + this CHECK, exactly like the Actors.
+create table if not exists resume_interview (
+    id           bigserial primary key,
+    job_id       text not null references resumes (job_id) on delete cascade,
+    scheduled_at timestamptz not null,
+    type         text not null check (type in ('Initial Interview', 'Technical Interview',
+                                               'Management Interview', 'Final Interview')),
+    -- Free text the operator fills in after the interview; the section shows it as the
+    -- interview's outcome. Length-capped the way `resume_history.action` is.
+    result       text check (result is null or char_length(result) <= 2000),
+    created_at   timestamptz not null default now(),
+    updated_at   timestamptz not null default now()
+);
+
+create index if not exists resume_interview_job_id_at_idx on resume_interview (job_id, scheduled_at);
+
+
 -- Artifacts queued for deletion from the worker's volume.
 --
 -- A board that runs outside the cluster (the dev setup) cannot reach `/data/output`, so
@@ -474,6 +595,30 @@ create table if not exists app_users (
     created_at    timestamptz not null default now(),
     last_login_at timestamptz
 );
+
+-- The internal process run ledger: one row per run of a scheduled job (the RSS intake,
+-- the inactivity archiver), written by the job itself and read by the board's Processes
+-- window. It is the only place a run's history exists - the worker's `resumes` rows say
+-- nothing about a run that found nothing. A row still `running` without `finished_at` means
+-- the pod died mid-run; a later run marks those `aborted` (`utils/process_runs.py`).
+create table if not exists process_runs (
+    id          bigserial primary key,
+    -- The job's slug (`feed-parser`, `auto-archiver`) - the same shape rule as
+    -- `resumes.source`, because it is both queried and shown.
+    process     text not null check (process ~ '^[a-z0-9][a-z0-9-]{1,31}$'),
+    -- A CronJob slot, or a human `--force` run.
+    trigger     text not null default 'schedule' check (trigger in ('schedule', 'manual')),
+    started_at  timestamptz not null default now(),
+    finished_at timestamptz,
+    status      text not null default 'running'
+                check (status in ('running', 'ok', 'failed', 'skipped', 'aborted')),
+    -- The counters a run wants to show (`{"new_cards": 3, "notified": 3}`). jsonb, so a new
+    -- job needs no migration - and a run that reports nothing is still a run.
+    summary     jsonb,
+    error       text
+);
+
+create index if not exists process_runs_process_started_idx on process_runs (process, started_at desc);
 
 -- Shape guard for the opaque job_id (characters that are safe in logs, storage
 -- keys and URLs). Added idempotently so existing tables get it too.
@@ -511,6 +656,27 @@ begin
     if definition is null then
         create unique index resumes_job_key_idx
             on resumes (coalesce(user_id, 'local'), source, external_id, cv_version);
+    end if;
+end $ddl$;
+
+-- The card's detail fields are free text with the same length cap the dialogs enforce, and
+-- the channels are a vocabulary (the six the multi-select offers: two of them are the job sites
+-- the intake scrapes). A NULL *element* is rejected too: `arr <@ known` is NULL for such an
+-- array, and a CHECK is satisfied by NULL, so the containment is wrapped in `coalesce(..., false)`.
+do $ddl$
+begin
+    if not exists (select 1 from pg_constraint where conname = 'resume_board_details_shape') then
+        alter table resume_board
+            add constraint resume_board_details_shape
+            check (
+                (recruiter is null or char_length(recruiter) between 1 and 200)
+                and (salary_offered is null or char_length(salary_offered) between 1 and 200)
+                and (salary_desired is null or char_length(salary_desired) between 1 and 200)
+                and (communication_channels is null
+                     or coalesce(communication_channels <@ array['Email', 'LinkedIn', 'WhatsApp',
+                                                                  'Telegram', 'Dou', 'Djinni'],
+                                 false))
+            );
     end if;
 end $ddl$;
 
@@ -944,6 +1110,158 @@ class PostgresDb:
                 )
                 rows = cur.fetchall()
         return [dict(row) for row in rows]
+
+    # -- the internal process ledger ---------------------------------------- #
+    def start_process_run(self, process, trigger="schedule"):
+        """Open one run record for a scheduled job; returns its row id.
+
+        The board's Processes window reads these rows, so a run that changed nothing is
+        still visible. A row left ``running`` (the pod was killed) is retired by the next
+        run of the same job (`retire_stale_process_runs`).
+        """
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "insert into process_runs (process, trigger) values (%s, %s) returning id",
+                    (process, trigger),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return int(row["id"])
+
+    def finish_process_run(self, run_id, status="ok", summary=None, error=None):
+        """Close a run with its outcome and the counters the window shows."""
+        self.ensure_schema()
+        payload = None if summary is None else json.dumps(summary, ensure_ascii=False)
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update process_runs
+                       set finished_at = now(), status = %s, summary = %s::jsonb, error = %s
+                     where id = %s
+                    """,
+                    (status, payload, error, int(run_id)),
+                )
+            conn.commit()
+
+    def list_process_runs(self, limit=100):
+        """Newest run first, whatever its status."""
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select id, process, trigger, started_at, finished_at, status,
+                              summary, error
+                         from process_runs
+                        order by started_at desc, id desc
+                        limit %s""",
+                    (max(1, int(limit)),),
+                )
+                rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def retire_stale_process_runs(self, process, older_than_seconds=86400):
+        """Mark the ``running`` rows a killed pod left behind as ``aborted``.
+
+        Without this a crashed run would look in-flight forever and the window would show
+        a job that never finishes. The age bound is what keeps a *live* run safe.
+        """
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update process_runs
+                       set status = 'aborted', finished_at = started_at
+                     where process = %s
+                       and status = 'running'
+                       and started_at < now() - %s
+                    """,
+                    (process, timedelta(seconds=float(older_than_seconds))),
+                )
+                retired = cur.rowcount or 0
+            conn.commit()
+        return int(retired)
+
+    # -- the inactivity archive (the `archiver` job) ------------------------- #
+    def list_inactive_cards(self, stages, older_than_days, limit=100):
+        """Cards in `stages` that no *operator action* has touched for N days.
+
+        The clock is `resume_board.updated_at` - the field the board dates a card by and
+        bumps on every move, archive, restore and recorded action. `resumes.updated_at` is
+        deliberately not used: the worker writes status changes there, so a tailoring run
+        would look like operator activity. Archived cards are never candidates.
+        """
+        self.ensure_schema()
+        if not stages:
+            return []
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select r.job_id, r.external_id, r.source, r.title, r.company,
+                           b.stage, b.updated_at
+                      from resumes r
+                      join resume_board b on b.job_id = r.job_id
+                     where b.archived_at is null
+                       and b.stage = any(%s)
+                       and b.updated_at < now() - %s
+                     order by b.updated_at asc
+                     limit %s
+                    """,
+                    (list(stages), timedelta(days=int(older_than_days)), max(1, int(limit))),
+                )
+                rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def archive_card(self, job_id, actor, reason):
+        """Refuse one card the way the board does, but with no human behind it.
+
+        One transaction per card: the three archive columns together, the `kind='archive'`
+        history row (`active` -> `archived`) and the Action-catalogue upsert - exactly the
+        invariants the board's own archive route keeps (19, 20). `stage` is never touched
+        (the card stays where it stopped, muted) and neither is `resumes.status`, which
+        belongs to the worker alone.
+
+        A card that is already archived is left alone, so re-running a sweep is safe.
+        Returns True only when *this* call archived the card.
+        """
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update resume_board
+                       set archived_at = now(), archived_actor = %s, archived_reason = %s,
+                           updated_at = now()
+                     where job_id = %s and archived_at is null
+                    returning job_id
+                    """,
+                    (actor, reason, job_id),
+                )
+                if cur.fetchone() is None:
+                    conn.rollback()
+                    return False
+                cur.execute(
+                    """
+                    insert into resume_history
+                        (job_id, actor, action, kind, from_state, to_state)
+                    values (%s, %s, %s, 'archive', 'active', 'archived')
+                    """,
+                    (job_id, actor, reason),
+                )
+                cur.execute(
+                    """
+                    insert into board_actions (action, kind, uses) values (%s, 'archive', 1)
+                    on conflict (action) do update
+                        set uses = board_actions.uses + 1, last_used_at = now()
+                    """,
+                    (reason,),
+                )
+            conn.commit()
+        return True
 
 
 _DB_CACHE = {}

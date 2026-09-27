@@ -11,6 +11,7 @@ slipped through the first time.
 
 import os
 import uuid
+from datetime import timedelta
 
 import pytest
 
@@ -29,9 +30,9 @@ def store():
     with db.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_cover_letter, resume_history, "
-                "resume_board, resumes, board_actions, artifact_purge, "
-                "model_availability, app_settings"
+                "drop table if exists resume_interview, process_runs, "
+                "resume_cover_letter, resume_history, resume_board, resumes, "
+                "board_actions, artifact_purge, model_availability, app_settings"
             )
         conn.commit()
     db._schema_ready = False
@@ -40,9 +41,9 @@ def store():
     with db.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_cover_letter, resume_history, "
-                "resume_board, resumes, board_actions, artifact_purge, "
-                "model_availability, app_settings"
+                "drop table if exists resume_interview, process_runs, "
+                "resume_cover_letter, resume_history, resume_board, resumes, "
+                "board_actions, artifact_purge, model_availability, app_settings"
             )
         conn.commit()
 
@@ -631,9 +632,9 @@ def test_a_legacy_database_is_migrated_to_the_source_and_scraped_vocabulary(stor
     with store.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_cover_letter, resume_history, "
-                "resume_board, resumes, board_actions, artifact_purge, "
-                "model_availability, app_settings"
+                "drop table if exists resume_interview, process_runs, "
+                "resume_cover_letter, resume_history, resume_board, resumes, "
+                "board_actions, artifact_purge, model_availability, app_settings"
             )
             cur.execute(
                 """
@@ -748,3 +749,317 @@ def test_cover_letters_are_one_row_per_vacancy(store):
             cur.execute("delete from resumes where job_id = %s", (job_id,))
         conn.commit()
     assert store.get_cover_letter(job_id) is None
+
+
+# -- the automation's tables: interviews, the run ledger, the inactivity sweep --------- #
+
+
+def _seed_card(store, job_id, stage="applied", quiet_days=30, status="completed"):
+    """A card plus the board row the sweep reads, quiet for `quiet_days`.
+
+    The board's `updated_at` is written explicitly: it is the *activity* clock the sweep
+    dates a card by, and `resumes.updated_at` (which `upsert_job` sets to now) must not be
+    able to hide a card that has been sitting untouched for a month.
+    """
+    store.upsert_job(_row(job_id, external_id=job_id, status=status))
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into resume_board (job_id, stage, updated_at)
+                values (%s, %s, now() - %s)
+                on conflict (job_id) do update
+                    set stage = excluded.stage, updated_at = excluded.updated_at
+                """,
+                (job_id, stage, timedelta(days=quiet_days)),
+            )
+        conn.commit()
+    return job_id
+
+
+def test_the_interview_types_are_the_four_the_section_offers(store):
+    """The section's four types are code + this CHECK (exactly like the Actors); the result
+    is free text with a cap, because it is what the operator wrote after the call."""
+    import psycopg
+
+    job_id = _seed_card(store, "interview-types-1")
+
+    accepted = [
+        "Initial Interview",
+        "Technical Interview",
+        "Management Interview",
+        "Final Interview",
+    ]
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            for interview_type in accepted:
+                cur.execute(
+                    "insert into resume_interview (job_id, scheduled_at, type, result)"
+                    " values (%s, now() + interval '1 day', %s, 'went well')",
+                    (job_id, interview_type),
+                )
+            cur.execute("select count(*) as n from resume_interview where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == len(accepted)
+        conn.commit()
+
+    rejected = [
+        ("Screening", None),  # not one of the four types
+        ("Final Interview", "x" * 2001),  # the result cap
+    ]
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            for interview_type, result in rejected:
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    cur.execute(
+                        "insert into resume_interview (job_id, scheduled_at, type, result)"
+                        " values (%s, now(), %s, %s)",
+                        (job_id, interview_type, result),
+                    )
+                conn.rollback()
+            # A scheduled interview without a date is not a scheduled interview.
+            with pytest.raises(psycopg.errors.NotNullViolation):
+                cur.execute(
+                    "insert into resume_interview (job_id, type) values (%s, 'Initial Interview')",
+                    (job_id,),
+                )
+            conn.rollback()
+        conn.commit()
+
+    # Removing the card for good takes its interviews with it (the row cascades).
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("delete from resumes where job_id = %s", (job_id,))
+            cur.execute("select count(*) as n from resume_interview where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 0
+        conn.commit()
+
+
+def test_an_interview_never_writes_a_history_row(store):
+    """The Interviews section *is* the interview history (`CONSTITUTION.md` invariant 26).
+
+    Adding, editing and removing an interview must leave `resume_history` alone; only the
+    *move* into Interviewing is an audited change, and that is what makes the section appear.
+    """
+    job_id = _seed_card(store, "interview-history-1", stage="interviewing")
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into resume_interview (job_id, scheduled_at, type)"
+                " values (%s, now(), 'Initial Interview') returning id",
+                (job_id,),
+            )
+            interview_id = cur.fetchone()["id"]
+            cur.execute(
+                "update resume_interview set type = 'Technical Interview', result = %s,"
+                " updated_at = now() where id = %s",
+                ("Next round scheduled", interview_id),
+            )
+            cur.execute("delete from resume_interview where id = %s", (interview_id,))
+            cur.execute("select count(*) as n from resume_history where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 0
+        conn.commit()
+
+
+def test_the_cards_own_detail_fields_are_bounded_and_vocabulary_checked(store):
+    """`recruiter` / `salary_offered` / `salary_desired` / `communication_channels`: free text
+    with a length cap, and a channel list that may only hold the six values the card offers."""
+    import psycopg
+
+    job_id = _seed_card(store, "details-1")
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update resume_board set recruiter = %s, salary_offered = %s,"
+                " salary_desired = %s, communication_channels = %s where job_id = %s",
+                ("Mariia Melenchuk", "$5,000", "6000 EUR", ["Email", "Dou", "Djinni"], job_id),
+            )
+            cur.execute(
+                "select recruiter, salary_offered, salary_desired, communication_channels"
+                " from resume_board where job_id = %s",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            assert row["recruiter"] == "Mariia Melenchuk"
+            assert row["communication_channels"] == ["Email", "Dou", "Djinni"]
+            # Every field is optional: NULL clears it, and an empty list is a real value.
+            cur.execute(
+                "update resume_board set recruiter = null, salary_offered = null,"
+                " salary_desired = null, communication_channels = '{}' where job_id = %s",
+                (job_id,),
+            )
+            cur.execute(
+                "select recruiter, communication_channels from resume_board where job_id = %s",
+                (job_id,),
+            )
+            cleared = cur.fetchone()
+            assert cleared["recruiter"] is None
+            assert cleared["communication_channels"] == []
+        conn.commit()
+
+    rejected = [
+        # an unknown channel
+        ("update resume_board set communication_channels = array['Carrier pigeon']"
+         " where job_id = %s", (job_id,)),
+        # a NULL inside the array: `arr <@ known` is NULL for that, so the guard wraps it
+        ("update resume_board set communication_channels = array['Email', null]"
+         " where job_id = %s", (job_id,)),
+        # an empty string is not a value (the UI sends NULL)
+        ("update resume_board set recruiter = '' where job_id = %s", (job_id,)),
+        # the 200-character cap, on every text field
+        ("update resume_board set recruiter = repeat('x', 201) where job_id = %s", (job_id,)),
+        ("update resume_board set salary_offered = repeat('x', 201) where job_id = %s", (job_id,)),
+        ("update resume_board set salary_desired = repeat('x', 201) where job_id = %s", (job_id,)),
+    ]
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            for statement, params in rejected:
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    cur.execute(statement, params)
+                conn.rollback()
+        conn.commit()
+
+
+def test_the_process_ledger_round_trips_with_its_counters(store):
+    """What the board's Processes window reads: the run, its trigger, its outcome and the
+    counters each job reports."""
+    import psycopg
+
+    first = store.start_process_run("feed-parser")
+    store.finish_process_run(first, status="ok", summary={"new_cards": 3, "notified": 3})
+    second = store.start_process_run("auto-archiver", trigger="manual")
+    store.finish_process_run(second, status="failed", summary={"refused": 1}, error="boom")
+
+    assert [run["id"] for run in store.list_process_runs()] == [second, first], "newest first"
+
+    runs = {run["id"]: run for run in store.list_process_runs()}
+    assert runs[first]["process"] == "feed-parser"
+    assert runs[first]["trigger"] == "schedule"
+    assert runs[first]["status"] == "ok"
+    assert runs[first]["summary"] == {"new_cards": 3, "notified": 3}
+    assert runs[first]["finished_at"] is not None
+    assert runs[first]["error"] is None
+    assert runs[second]["trigger"] == "manual"
+    assert runs[second]["summary"] == {"refused": 1}
+    assert runs[second]["error"] == "boom"
+
+    # The slug shape and the five statuses are the window's vocabulary, not free text.
+    rejected = [
+        "insert into process_runs (process) values ('Feed Parser')",
+        "insert into process_runs (process, status) values ('feed-parser', 'lost')",
+        "insert into process_runs (process, trigger) values ('feed-parser', 'cron')",
+    ]
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            for statement in rejected:
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    cur.execute(statement)
+                conn.rollback()
+        conn.commit()
+
+
+def test_a_killed_run_is_retired_by_the_next_one(store):
+    """A row left `running` by a dead pod would look in-flight forever - and only an old
+    one may be touched, or a live run would be retired under its own job."""
+    stale = store.start_process_run("auto-archiver")
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update process_runs set started_at = now() - %s where id = %s",
+                (timedelta(hours=48), stale),
+            )
+        conn.commit()
+
+    assert store.retire_stale_process_runs("auto-archiver", older_than_seconds=86400) == 1
+    assert store.retire_stale_process_runs("auto-archiver", older_than_seconds=86400) == 0
+
+    fresh = store.start_process_run("auto-archiver")
+    assert store.retire_stale_process_runs("auto-archiver", older_than_seconds=3600) == 0
+
+    runs = {run["id"]: run for run in store.list_process_runs()}
+    assert runs[stale]["status"] == "aborted"
+    assert runs[stale]["finished_at"] is not None
+    assert runs[fresh]["status"] == "running"
+
+
+def test_the_sweep_is_dated_by_the_boards_own_activity_clock(store):
+    """`resume_board.updated_at` decides staleness - not `resumes.updated_at`, which the
+    worker bumps on every status change (that is not operator activity)."""
+    quiet = _seed_card(store, "sweep-quiet-1", quiet_days=30)
+    _seed_card(store, "sweep-fresh-1", quiet_days=1)
+    _seed_card(store, "sweep-prepare-1", stage="prepare", quiet_days=30)
+    refused = _seed_card(store, "sweep-archived-1", quiet_days=30)
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update resume_board set archived_at = now(), archived_actor = 'Candidate',"
+                " archived_reason = 'Not applicable' where job_id = %s",
+                (refused,),
+            )
+        conn.commit()
+
+    assert [row["job_id"] for row in store.list_inactive_cards(("applied",), 10)] == [quiet]
+
+    # The *resumes* clock says `now` for that very card: it must not matter at all.
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("select updated_at from resumes where job_id = %s", (quiet,))
+            resumes_updated = cur.fetchone()["updated_at"]
+            cur.execute("select updated_at from resume_board where job_id = %s", (quiet,))
+            board_updated = cur.fetchone()["updated_at"]
+    assert resumes_updated > board_updated
+
+
+def test_the_sweep_refuses_a_card_exactly_like_the_board_does(store):
+    """Invariants 19 and 20 with no human behind them: the three archive columns together,
+    one `kind='archive'` history row, the reason upserted into the vocabulary - and `stage`
+    and `resumes.status` untouched. Re-running the sweep changes nothing."""
+    job_id = _seed_card(store, "sweep-refuse-1", quiet_days=30)
+
+    assert store.archive_card(job_id, "Company", "Radio silence") is True
+
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select stage, archived_actor, archived_reason,"
+                " archived_at is not null as archived from resume_board where job_id = %s",
+                (job_id,),
+            )
+            board = cur.fetchone()
+            assert board["stage"] == "applied", "a refusal never moves the card"
+            assert board["archived"] is True
+            assert board["archived_actor"] == "Company"
+            assert board["archived_reason"] == "Radio silence"
+
+            cur.execute(
+                "select kind, actor, action, from_state, to_state from resume_history"
+                " where job_id = %s",
+                (job_id,),
+            )
+            assert cur.fetchall() == [
+                {
+                    "kind": "archive",
+                    "actor": "Company",
+                    "action": "Radio silence",
+                    "from_state": "active",
+                    "to_state": "archived",
+                }
+            ]
+
+            cur.execute("select kind, uses from board_actions where action = 'Radio silence'")
+            assert cur.fetchone() == {"kind": "archive", "uses": 1}
+
+            cur.execute("select status from resumes where job_id = %s", (job_id,))
+            assert cur.fetchone()["status"] == "completed", "the worker's column is not ours"
+        conn.commit()
+
+    # Idempotent: an archived card is left alone and grows no second trail.
+    assert store.archive_card(job_id, "Company", "Radio silence") is False
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("select count(*) as n from resume_history where job_id = %s", (job_id,))
+            assert cur.fetchone()["n"] == 1
+            cur.execute("select uses from board_actions where action = 'Radio silence'")
+            assert cur.fetchone()["uses"] == 1
+        conn.commit()

@@ -89,9 +89,10 @@ export default function AdminApp({ session }: AdminAppProps) {
     try {
       const response = await fetch(`/api/admin/actions${query ?? ''}`, {
         method,
-        ...(body === undefined
-          ? {}
-          : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+        // Also on a body-less DELETE: Astro's `checkOrigin` refuses a non-GET without a
+        // content-type (`backoffice/AGENTS.md`).
+        headers: { 'content-type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const payload = (await response.json()) as { ok: boolean; error?: string };
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
@@ -109,7 +110,11 @@ export default function AdminApp({ session }: AdminAppProps) {
 
   /** Sign out for real (the board island does the same): clear the cookie, then land. */
   async function signOut() {
-    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+    // Body-less, but it still needs the JSON content-type (Astro's `checkOrigin`).
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    }).catch(() => undefined);
     window.location.assign('/login');
   }
 
