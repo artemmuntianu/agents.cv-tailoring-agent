@@ -326,7 +326,7 @@ For local CLI runs, copy `.env.example` to `.env`.
 |---|---|---|
 | `GEMINI_API_KEY` | - | the only required external credential |
 | `MODEL_NAME`, `PREFERRED_MODELS` | `gemini-3.5-flash` + ladder | model and comma-separated fallbacks; validated against the model list at start-up |
-| `SCOUT_FEEDS`, `SCOUT_SOURCE`, `SCOUT_USER_ID` | three DOU feeds, `dou`, - | the scheduled intake (`python -m scout`); the user id must be a provisioned `app_users.id` |
+| `SCOUT_FEEDS`, `SCOUT_USER_ID`, `SCOUT_MAX_AGE_DAYS` | three DOU feeds + one Djinni search, -, `7` | the scheduled intake (`python -m scout`); each feed's site - and its card's `source` - comes from the URL's host, so a new site is a new feed URL; a vacancy the feed itself dated older than `SCOUT_MAX_AGE_DAYS` days is not scraped; the user id must be a provisioned `app_users.id` |
 | `AUTO_ARCHIVE_STAGES`, `AUTO_ARCHIVE_AFTER_DAYS`, `AUTO_ARCHIVE_ACTOR`, `AUTO_ARCHIVE_REASON` | `applied`, `10`, `Company`, `No response` | the inactivity sweep (`python -m archiver`): which columns, how quiet, and what the refusal records |
 | `PROCESS_RUN_STALE_HOURS` | `24` | when a `running` run row (a killed pod) is retired as `aborted` |
 | `QUEUE_BACKEND` | `directory` | `amqp` in the cluster, `directory` (JSON files) for offline runs |

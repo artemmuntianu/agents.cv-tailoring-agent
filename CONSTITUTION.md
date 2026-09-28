@@ -257,6 +257,25 @@ automation         .github/workflows/
     able to tell them apart. The declared queue `vacancies.parse` stays unused - the scout parses
     in-process (D12).
 
+    **A card's site is a property of its feed, not of the run.** There is no `SCOUT_SOURCE`: one
+    module per site in `scout/parsers/` exports a `FeedSource` (slug, hosts, pure parser), the
+    registry (`scout/sources.py`) routes every fetched URL by **host**, and the slug it decides is
+    what completes the business key (`resumes_job_key_idx`) - deliberately the same slug the
+    browser scrape derives from its page URL (`extension/src/background.js::sourceForUrl`,
+    invariant 16), so a vacancy the intake found and the same vacancy scraped by hand are one card.
+    A feed no parser claims fails preflight (`collect` skips it) instead of being guessed at, and
+    the suite requires a fixture for every discovered source and a parser for every configured feed
+    URL - so adding a site is a parser module plus a URL in `SCOUT_FEEDS`, not an edit to the flow.
+    DOU and Djinni are the two that exist today: a DOU title carries role/company/location plus a
+    salary tail, a Djinni title carries the role alone (its feed has no company, salary or
+    location, so those card fields stay empty rather than being guessed).
+
+    The intake also **refuses what a feed dated too long ago**: a `<pubDate>` older than
+    `SCOUT_MAX_AGE_DAYS` (7 days, `0` disables the rule) means no card, no dedupe check and no
+    Telegram message, because a feed is a window and not a stream. A vacancy whose feed states no
+    usable date is kept - the rule judges what a feed said, never what it omitted, so a feed that
+    stops publishing dates cannot become a silent no-op (`scout/policy.py`).
+
 26. **Interviews are their own record, and the Interviews section *is* their history.**
     `resume_interview` (one row per call: `scheduled_at`, `type` - the four types are code plus
     a DB CHECK - and the free-text `result`) is deliberately **not** historicised in

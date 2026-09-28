@@ -63,10 +63,11 @@ replicas, and the DLQ stays at 0.
 
 ## Scheduled intake (the scout)
 
-`CronJob cv-tailoring-cv-tailoring-scout` fetches the DOU feeds every 30 minutes between 07:00 and
-23:30 Lisbon time, creates one card per new vacancy in the board's **Scraped** column, and sends
-one Telegram message for each. It never queues tailoring - that is the operator's drag - so a run
-costs no Gemini request whatever it finds.
+`CronJob cv-tailoring-cv-tailoring-scout` fetches the DOU and Djinni feeds every 30 minutes between
+07:00 and 23:30 Lisbon time, creates one card per new vacancy in the board's **Scraped** column, and
+sends one Telegram message for each. Each feed is parsed by its own site's module (`scout/parsers/`,
+picked by the URL's host), and the card carries that site's slug (`dou`, `djinni`). It never queues
+tailoring - that is the operator's drag - so a run costs no Gemini request whatever it finds.
 
 ```sh
 kubectl get cronjob cv-tailoring-cv-tailoring-scout      # schedule, suspend state, last run
@@ -91,6 +92,10 @@ kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
   (`scripts/worker-secret.ps1` reads `SCOUT_TELEGRAM_TOKEN`/`_CHAT_ID` from `.env`);
   `SCOUT_NOTIFY=none` turns them off deliberately, and the cards still appear.
 - **Too many cards at once**: `SCOUT_MAX_PER_RUN` caps a run (0 = everything, the default).
+- **Old postings are never scraped**: a vacancy the feed itself dated more than `SCOUT_MAX_AGE_DAYS`
+  days ago (7 by default; `0` disables the rule) is refused before a card exists. The run's row on
+  the Processes page says `max age days` and `stale dropped`, so a quiet intake is tellable from a
+  feed whose window has simply moved on.
 - **A dry run** (writes nothing): `python -m scout --dry-run` on the host with `SCOUT_USER_ID`,
   `DATABASE_URL` pointed at a port-forward and `DATABASE_SSLMODE=disable` (the dev Postgres has no
   TLS; trap 18 in the root `AGENTS.md`) - see `scout/AGENTS.md`.

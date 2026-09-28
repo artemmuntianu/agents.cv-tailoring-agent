@@ -203,22 +203,34 @@ HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", os.path.join(TEMP_ROOT, "heartbeat"
 HEARTBEAT_MAX_AGE_SECONDS = _env_int("HEARTBEAT_MAX_AGE_SECONDS", 300)
 
 # --------------------------------------------------------------------------- #
-# Scheduled vacancy intake (`scout.py`)
+# Scheduled vacancy intake (`scout/`)
 # --------------------------------------------------------------------------- #
 # The board queues tailoring only when the operator drags a card into Prepare, so an intake
 # that just creates cards is free: no Gemini call, no broker round trip. The scout is that
 # intake for feeds nobody browses by hand.
+#
+# A feed URL is the only thing a site needs here: `scout.sources` routes it to the parser of
+# the host it belongs to (`scout/parsers/<site>.py`), which is also what decides the card's
+# `resumes.source` slug. Adding a site is a parser module plus a URL in this list.
 SCOUT_FEEDS = _env_csv(
     "SCOUT_FEEDS",
     [
         "https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus",
         "https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager",
         "https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect",
+        # Djinni's RSS is its listing URL with `/jobs/rss/` instead of `/jobs/`. One feed carries
+        # the whole keyword set (dotnet, lead, python, javascript, node, cto, engineering manager,
+        # architect) at $5000+, 5+ years, remote, English pre-intermediate and up.
+        "https://djinni.co/jobs/rss/?search_type=basic-search&primary_keyword=.NET"
+        "&primary_keyword=Lead&primary_keyword=Python&primary_keyword=JavaScript"
+        "&primary_keyword=Node.js&primary_keyword=CTO&primary_keyword=Engineering%20Manager"
+        "&primary_keyword=Architect&salary=5000&exp_level=5y&employment=remote"
+        "&english_level=pre&english_level=intermediate&english_level=upper",
     ],
 )
-# The site slug every scouted card carries (`resumes.source`): it is what makes the same
-# vacancy scraped in the browser later the *same* card instead of a second one.
-SCOUT_SOURCE = os.getenv("SCOUT_SOURCE", "dou")
+# There is deliberately no `SCOUT_SOURCE`: a card's site slug is a property of its *feed*, not of
+# the run, so `scout.sources` derives it from the feed's host - the same rule the browser scrape
+# applies to the page's URL, which is what keeps the two writers on one card.
 # Whose rows the scout creates - a provisioned `app_users.id`. It matters: the worker's claim
 # looks the vacancy up by `(user_id, source, external_id, cv_version)`, and the board publishes
 # a drag with the row's own owner, so a different owner here would fork a second row.
@@ -226,6 +238,11 @@ SCOUT_USER_ID = os.getenv("SCOUT_USER_ID", "")
 # 0 = every new vacancy of the run (a feed can be long, and a new card costs nothing until the
 # operator drags it). Kept as a knob only so a runaway feed can be capped without a code change.
 SCOUT_MAX_PER_RUN = _env_int("SCOUT_MAX_PER_RUN", 0)
+# A feed is a window, not a stream: it keeps returning what it published weeks ago, and an old
+# posting is a dead one. A vacancy the feed itself dated further back than this is not scraped at
+# all (0 disables the rule). A vacancy whose feed carries no usable date is kept - the rule judges
+# what a feed *said*, never what it omitted (`scout/policy.py`).
+SCOUT_MAX_AGE_DAYS = _env_int("SCOUT_MAX_AGE_DAYS", 7)
 SCOUT_TIMEOUT_SECONDS = _env_int("SCOUT_TIMEOUT_SECONDS", 20)
 # `telegram` sends one message per new vacancy (scheduled sources only - a browser scrape never
 # notifies); `none` keeps the intake silent while still creating the cards.

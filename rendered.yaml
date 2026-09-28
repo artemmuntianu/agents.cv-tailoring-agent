@@ -121,6 +121,33 @@ stringData:
   rabbitmq-management-url: "http://cvt:dev-only-change-me@rabbitmq.default.svc.cluster.local:15672/%2F"
 
 ---
+# Source: cv-tailoring-platform/charts/cv-tailoring-archiver/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cv-tailoring-cv-tailoring-archiver
+  labels:
+    helm.sh/chart: cv-tailoring-archiver-0.1.0
+    app.kubernetes.io/name: cv-tailoring-archiver
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: archiver
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+data:
+  # The sweep's own policy. DATABASE_URL is the Secret's, never here.
+  SERVICE_NAME: cv-tailoring-archiver
+  AUTO_ARCHIVE_STAGES: "applied"
+  AUTO_ARCHIVE_AFTER_DAYS: "10"
+  AUTO_ARCHIVE_ACTOR: "Company"
+  AUTO_ARCHIVE_REASON: "No response"
+  AUTO_ARCHIVE_MAX_PER_RUN: "50"
+  DB_BACKEND: "postgres"
+  DB_APPLICATION_NAME: cv-tailoring-archiver
+  LOG_LEVEL: "DEBUG"
+  LOG_FORMAT: "text"
+
+---
 # Source: cv-tailoring-platform/charts/cv-tailoring-scout/templates/configmap.yaml
 apiVersion: v1
 kind: ConfigMap
@@ -138,10 +165,10 @@ data:
   # The intake's own knobs. Everything secret (the bot token, the chat id, DATABASE_URL)
   # comes from the Secret, never from here.
   SERVICE_NAME: cv-tailoring-scout
-  SCOUT_FEEDS: "https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus, https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager, https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect"
-  SCOUT_SOURCE: "dou"
-  SCOUT_USER_ID: ""
+  SCOUT_FEEDS: "https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus, https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager, https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect, https://djinni.co/jobs/rss/?search_type=basic-search&primary_keyword=.NET&primary_keyword=Lead&primary_keyword=Python&primary_keyword=JavaScript&primary_keyword=Node.js&primary_keyword=CTO&primary_keyword=Engineering%20Manager&primary_keyword=Architect&salary=5000&exp_level=5y&employment=remote&english_level=pre&english_level=intermediate&english_level=upper"
+  SCOUT_USER_ID: "u-53f18341fb2495b8"
   SCOUT_MAX_PER_RUN: "0"
+  SCOUT_MAX_AGE_DAYS: "7"
   SCOUT_TIMEOUT_SECONDS: "20"
   SCOUT_NOTIFY: "telegram"
   DB_BACKEND: "postgres"
@@ -11377,6 +11404,88 @@ spec:
             storage: 1Gi
 
 ---
+# Source: cv-tailoring-platform/charts/cv-tailoring-archiver/templates/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cv-tailoring-cv-tailoring-archiver
+  labels:
+    helm.sh/chart: cv-tailoring-archiver-0.1.0
+    app.kubernetes.io/name: cv-tailoring-archiver
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: archiver
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+spec:
+  schedule: "0 9 * * *"
+  # Wall-clock, not UTC: "09:00" has to mean 09:00 in the operator's day, DST included.
+  timeZone: "Europe/Lisbon"
+  # The missed-slot rule: a cluster that was down at the scheduled time still runs the sweep
+  # as soon as it is back, as long as it is within this deadline. The sweep is idempotent, so
+  # a late run is harmless - a silently skipped day would not be.
+  startingDeadlineSeconds: 86400
+  concurrencyPolicy: "Forbid"
+  suspend: false
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # A hung database must not hold the slot forever.
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cv-tailoring-archiver
+            app.kubernetes.io/instance: cv-tailoring
+            app.kubernetes.io/component: archiver
+          annotations:
+            # Roll the job template when the configuration changes.
+            checksum/config: c90beaa9ee72120ab7e900735850367f52a3cc76f307febdf95496e728be622f
+        spec:
+          restartPolicy: "OnFailure"
+          securityContext:
+            fsGroup: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: archiver
+              image: "cv-tailoring-worker:dev"
+              imagePullPolicy: IfNotPresent
+              # The package's entry point: there is no root `archiver.py` on purpose (a
+              # same-named package would shadow it).
+              command: ["python", "-m", "archiver"]
+              envFrom:
+                - configMapRef:
+                    name: cv-tailoring-cv-tailoring-archiver
+                - secretRef:
+                    name: cv-tailoring-secrets
+              resources:
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                readOnlyRootFilesystem: false
+              volumeMounts:
+                # `config.TEMP_ROOT` defaults under /tmp; the heartbeat file lives there too.
+                - name: work
+                  mountPath: /tmp/cvt
+          volumes:
+            - name: work
+              emptyDir: {}
+
+---
 # Source: cv-tailoring-platform/charts/cv-tailoring-scout/templates/cronjob.yaml
 apiVersion: batch/v1
 kind: CronJob
@@ -11411,7 +11520,7 @@ spec:
             app.kubernetes.io/component: scout
           annotations:
             # Roll the job template when the configuration changes.
-            checksum/config: 5876fc09efaca74acc61d4e7d70446739df8ab2bda79a93097997f18f6babcae
+            checksum/config: f799c5c3a893303315bd5e90bbd207e9fcffab757b58e35f3791a03170558076
         spec:
           restartPolicy: "OnFailure"
           securityContext:
@@ -11427,7 +11536,7 @@ spec:
               imagePullPolicy: IfNotPresent
               # The package's entry point: there is no root `scout.py` on purpose (a same-named
               # package would shadow it).
-              command: ["python", "-m", "scout"]
+              command: ["python","-m","scout"]
               envFrom:
                 - configMapRef:
                     name: cv-tailoring-cv-tailoring-scout
@@ -11743,4 +11852,81 @@ spec:
           drop:
           - ALL
         readOnlyRootFilesystem: false
+
+---
+# Source: cv-tailoring-platform/charts/cv-tailoring-scout/templates/startup-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cv-tailoring-cv-tailoring-scout-startup
+  labels:
+    helm.sh/chart: cv-tailoring-scout-0.1.0
+    app.kubernetes.io/name: cv-tailoring-scout
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: scout
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+  annotations:
+    # This annotation is what makes the Job a trigger rather than a release object.
+    "helm.sh/hook": "post-install,post-upgrade"
+    # Every install/upgrade runs it again: the previous Job has to go first (`before-hook-creation`
+    # is Helm's own default, spelled out because a leftover Job makes the next upgrade fail with
+    # "already exists"), and a successful one is deleted - the ledger row is the record. A
+    # *failed* Job is kept on purpose, so its pod log can still be read.
+    "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+spec:
+  backoffLimit: 2
+  # A hung fetch must not hold the deploy forever (`--timeout` is the outer bound).
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cv-tailoring-scout
+        app.kubernetes.io/instance: cv-tailoring
+        app.kubernetes.io/component: scout
+      annotations:
+        # Roll the job template when the configuration changes.
+        checksum/config: f799c5c3a893303315bd5e90bbd207e9fcffab757b58e35f3791a03170558076
+    spec:
+      restartPolicy: "OnFailure"
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scout
+          image: "cv-tailoring-worker:dev"
+          imagePullPolicy: IfNotPresent
+          # The package's entry point: there is no root `scout.py` on purpose (a same-named
+          # package would shadow it).
+          command: ["python","-m","scout","--trigger","startup"]
+          envFrom:
+            - configMapRef:
+                name: cv-tailoring-cv-tailoring-scout
+            - secretRef:
+                name: cv-tailoring-secrets
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            # `config.TEMP_ROOT` defaults under /tmp; the heartbeat file lives there too.
+            - name: work
+              mountPath: /tmp/cvt
+      volumes:
+        - name: work
+          emptyDir: {}
 

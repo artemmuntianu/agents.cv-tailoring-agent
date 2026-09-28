@@ -5,6 +5,27 @@ each new one. It is the machine half of the intake: the operator's browser scrap
 
 Read `CONSTITUTION.md` first (invariants 16, 17, 23, 25); this file is the layer-specific detail.
 
+## Adding a feed
+
+Everything here is built around one contract (`contracts.py`): **a source is a site, a feed is one
+URL of it**, and the URL's *host* is what selects the parser and the card's `resumes.source` slug.
+No module outside `parsers/` names a site, so adding one is local:
+
+1. `scout/parsers/<site>.py` - copy the closest module and export
+   `SOURCE = FeedSource(name="<slug>", hosts=("<host>",), parse_feed=parse_feed, label="<Label>")`.
+   The slug has to be the one the browser scrape of that site sends
+   (`extension/src/background.js::sourceForUrl`), or the two writers fork one vacancy into two
+   cards (`resumes_job_key_idx`).
+2. One URL in `SCOUT_FEEDS` (`config.py`, and the scout chart's `config.feeds`) - the host is
+   enough; nothing maps URLs to parsers by hand.
+3. A fixture plus the site's assertions in `tests/test_scout.py`, and its entry in that file's
+   `FIXTURES` map.
+
+The suite is the safety net: every discovered source must have a fixture, every configured feed URL
+must be routable, and a duplicated slug or host fails at load. A half-added feed is therefore a red
+build instead of a card filed under the wrong site - which is the one mistake nobody would ever
+find again.
+
 ## Run it
 
 ```sh
@@ -29,17 +50,22 @@ is never reported as an empty result.
 
 | File | Owns |
 |---|---|
-| `dou.py` | DOU feed parsing - **pure**: title -> role/company/location/salary, the vacancy id from the link, description HTML -> text, `parse_feed` |
+| `contracts.py` | The interface a feed source must satisfy: `FeedSource(name, hosts, parse_feed)` and the `Vacancy`/`ScopedVacancy` card shapes - the file that makes a new site a local change |
+| `sources.py` | The registry: discovers `scout/parsers/*`, routes a feed URL to its site (`source_for_url`), refuses a duplicated slug or host (`validate`) |
+| `parsers/` | One **pure** module per site, each exporting `SOURCE` (`dou.py`, `djinni.py`): the site's own id rule, title shape and text quirks |
+| `html_text.py` | The escaped-HTML -> plain-text pass the parsers share - the double unescape and the `&nbsp;` normalisation live here once |
 | `feeds.py` | The only network code: fetch each configured URL, tolerate a broken one |
-| `store.py` | The board writes: board-scoped dedupe (`find_existing_ids`), then one `resumes` row per new vacancy with `status = 'submitted'` |
+| `policy.py` | What deserves a card at all: the feed's own date, the age cutoff (`SCOUT_MAX_AGE_DAYS`) and the counts of what it refused (`select`) - the operator's "no old vacancies" rule, in one place |
+| `store.py` | The board writes: per-site, board-scoped dedupe (`find_existing_ids`), then one `resumes` row per new vacancy with `status = 'submitted'` |
 | `telegram.py` | One plain-text message per new vacancy (`build_message` is pure, `send` is the call) |
-| `run.py` | Preflight, `collect`, `main` - the orchestration |
+| `run.py` | Preflight, `collect` (host routing + the site stamp), `main` - the orchestration |
 | `__main__.py` | `python -m scout` |
 
 ## Run ledger
 
 Every run opens one row in `process_runs` (`utils/process_runs.py`) and closes it with its
-counters - `feeds`, `feeds_ok`, `parsed`, `new_cards`, `created_cards`, `notified` - which is what
+counters - `feeds`, `feeds_ok`, `parsed`, `sources`, `feeds_skipped`, `max_age_days`,
+`stale_dropped`, `new_cards`, `created_cards`, `notified` - which is what
 the board's **Processes** window shows. A dry run writes **no** row at all; a preflight failure or
 "no feed answered" is recorded as `failed` like any other outcome; and a run whose pod died is
 retired as `aborted` by the next run (`PROCESS_RUN_STALE_HOURS`). The ledger never decides whether
@@ -61,6 +87,9 @@ the CLI accepts, never a free-text value.
   and does not need a hop through the broker (`CONSTITUTION.md` D12).
 - **No notification for a browser scrape.** The extension answers in the page; only scheduled
   sources reach a phone.
+- **No site-specific code outside `scout/parsers/`.** Routing, the cards, the ledger, the messages
+  and the tests are site-blind: a new board is a parser module plus a feed URL (see *Adding a
+  feed*), never an edit to the flow.
 
 ## Feed contract (DOU)
 
@@ -81,14 +110,58 @@ the CLI accepts, never a free-text value.
 - A title that does not match `… в <company>, <tail>` keeps its whole text as the role rather than
   dropping the vacancy; a location that states a salary has the salary split out.
 
+## Feed contract (Djinni)
+
+```
+<rss><channel><item>
+  <title>Lead Platform Engineer</title>
+  <link>https://djinni.co/jobs/850592-lead-platform-engineer/</link>
+  <description>… escaped HTML …</description>
+  <pubDate>Tue, 15 Sep 2026 13:07:09 +0300</pubDate>
+  <guid>https://djinni.co/jobs/850592-lead-platform-engineer/</guid>
+  <category>.NET</category>
+```
+
+- The endpoint is the operator's **listing URL with `/jobs/rss/` instead of `/jobs/`**, so the
+  search itself (keywords, salary, experience, employment, English level) is the feed. `search_type`
+  and the repeated `primary_keyword`/`english_level` parameters are simply passed through;
+  `english_level=pre` is not a Djinni value and is ignored rather than an error.
+- The **id** is the number in the link path (`/jobs/850592-slug/`) - the same id space the
+  extension's `job-item-<id>` cards use, so a scouted Djinni vacancy and the same vacancy scraped
+  in the browser are one card, with `source` = `djinni` completing the identity.
+- The title is the **role alone**: Djinni's company, salary and location live on the listing card,
+  not in the feed, so those three fields stay empty instead of being guessed from the prose - and
+  a title like `Team Lead (.NET + Angular)` is left whole for the same reason.
+- The description is escaped HTML with entities double-escaped (`&amp;nbsp;`, `&amp;amp;`) and
+  `<br>` tags, exactly like DOU's, so the shared `html_text.to_text` handles it; unlike DOU, the
+  feed appends no "apply" chrome to cut.
+- `link` and `guid` are the same job URL, and the guid is the fallback identity when a feed ever
+  ships without a link.
+
+## The age rule (what is not scraped)
+
+A feed is a window, not a stream: it keeps returning what it published weeks ago. A vacancy whose
+`<pubDate>` is older than `SCOUT_MAX_AGE_DAYS` (7) is **not scraped at all** - no card, no dedupe
+check, no Telegram message (`scout/policy.py`). Live evidence, 2026-09-28: of the 122 items the four
+configured feeds returned, **86 were older than 7 days**.
+
+- The age comes from the feed's own RFC-822 date, **offset honoured**, so a site's timezone cannot
+  move a vacancy across the cutoff.
+- A vacancy with **no usable date is kept** and counted (`undated`): the rule judges what a feed
+  said, never what it omitted - a feed that stops publishing dates must not become a silent no-op.
+- `0` disables the rule. The cutoff is `age > limit`, so a limit can never refuse everything a
+  feed sends.
+- Only the intake is affected: the browser scrape carries no publication date to judge, and the
+  operator is looking at the page anyway.
+
 ## Configuration
 
 | Variable | Default | Notes |
 |---|---|---|
-`SCOUT_FEEDS` | three DOU feeds (`.NET 5+`, `Engineering Manager`, `Architect`) | comma-separated |
-`SCOUT_SOURCE` | `dou` | the slug every card gets; also what the browser scrape of the same site must send |
+`SCOUT_FEEDS` | three DOU feeds (`.NET 5+`, `Engineering Manager`, `Architect`) + the Djinni search | comma-separated; each URL's **host** picks the parser and the card's slug (`scout/sources.py`), so a new site is a new URL and nothing else |
 `SCOUT_USER_ID` | – | **required**: a provisioned `app_users.id` (`npm run user -- add`), or the drag's message would fork a second row |
 `SCOUT_MAX_PER_RUN` | `0` (everything) | cap for a runaway feed |
+`SCOUT_MAX_AGE_DAYS` | `7` | a vacancy the feed itself dated older than this is not scraped (`0` disables the rule; a vacancy with no usable date is kept) |
 `SCOUT_NOTIFY` | `telegram` | `none` keeps the cards but sends nothing |
 `SCOUT_TELEGRAM_TOKEN` / `_CHAT_ID` | – | from the Secret, never from git |
 `SCOUT_TIMEOUT_SECONDS` | `20` | per feed |
@@ -96,20 +169,33 @@ the CLI accepts, never a free-text value.
 
 ## Testing this layer
 
-`tests/test_scout.py` is hermetic: the feed is a fixture copied from the live one (escaped HTML,
-double-escaped entities, the utm link, the apply tail), the store is the file backend, and
-Telegram is never called. It pins the three things that would break silently:
+`tests/test_scout.py` is hermetic: the feeds are fixtures copied from the live ones (escaped HTML,
+double-escaped entities, the utm link, the apply tail, Djinni's role-only title), the store is the
+file backend, and Telegram is never called. It pins what would break silently:
 
-1. parsing (id from the link, title split, plain-text description);
-2. dedupe (`new_vacancies` returns nothing for a board that already has the vacancy, whatever its
-   status);
-3. **the scout queues nothing** - both queues stay empty after a run;
-4. the run's ledger row (one per run, with the counters the Processes window shows, and none at
+1. per-site parsing (the id from the link, DOU's title split, the plain-text description with both
+   entity layers gone - for both sites);
+2. the **registry contract**, which is what makes "add a feed" safe: every discovered source has a
+   fixture, every default `SCOUT_FEEDS` URL is routable, each slug is one the DB accepts
+   (`resumes_source_shape`), and a duplicated slug or host is refused - a half-added site fails the
+   suite instead of the cluster;
+3. the age rule (`policy.py`): the cutoff is `>` (exactly the limit is kept), `0` disables it, a
+   vacancy with no usable date is kept **and counted**, and the offset in a feed's date is honoured -
+   the fixtures date themselves relative to *now*, because a hardcoded date would rot under this rule;
+4. routing (`collect` stamps the parser's slug; the same number from two sites stays two cards; a
+   feed no parser owns is skipped);
+5. dedupe (`new_vacancies` returns nothing for a board that already has the vacancy, whatever its
+   status - and another site's board never hides this one's card);
+6. **the scout queues nothing** - both queues stay empty after a run;
+7. the run's ledger row (one per run, with the counters the Processes window shows, and none at
    all for a `--dry-run`).
 
 ## Don't
 
 - Call Gemini, the broker, or `worker.py`/`cover.py` from here.
+- Add a site anywhere but `scout/parsers/`: the registry is the only place a URL is recognised
+  (`scout/sources.py::source_for_url`), and preflight refuses a feed it cannot route - a `if "dou"
+  in url` branch in the flow is exactly the coupling the registry exists to remove.
 - Write a card directly with SQL: `store.create_cards` goes through `upsert_job` so the business
   key and the "someone else got there first" answer are the store's, not ours.
 - Log the bot token: `telegram._redact` exists because urllib errors quote the URL.

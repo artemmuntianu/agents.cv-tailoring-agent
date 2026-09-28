@@ -70,9 +70,9 @@ cv-tailoring-scout:
   schedule: "0,30 7-23 * * *"
   timeZone: Europe/Lisbon
   config:
-    source: dou
     # scout@local: the intake's own account, so a scouted card is visibly not yours and the
-    # drag still publishes the row's own owner (CONSTITUTION.md invariant 25).
+    # drag still publishes the row's own owner (CONSTITUTION.md invariant 25). There is no
+    # `source` value any more: a card's site slug comes from its feed's host (`scout/sources.py`).
     userId: u-53f18341fb2495b8
     notify: telegram
     maxPerRun: 0

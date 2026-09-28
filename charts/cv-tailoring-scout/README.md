@@ -4,17 +4,22 @@ The scheduled vacancy intake: `python -m scout` in the worker's image, as a **Cr
 
 What one run does (and nothing else):
 
-1. fetches every feed in `config.feeds` (the three DOU ones by default);
+1. fetches every feed in `config.feeds` (three DOU ones and one Djinni one by default) and routes
+   each URL to the parser of its **host** (`scout/sources.py`), which is also what decides the
+   card's `resumes.source` slug - so adding a site is adding a feed URL;
 2. parses each item - role/company/location/salary, the vacancy id from the link, the
-   description as plain text;
-3. de-duplicates against the **board** (any owner, any status, refused cards included);
-4. creates one `resumes` row per new vacancy with `status = 'submitted'` - a card in the
+   description as plain text (Djinni's feed carries no company/salary/location: those stay empty);
+3. refuses what the feed itself dated older than `config.maxAgeDays` (7 days; `0` disables the rule):
+   a feed keeps returning what it published weeks ago (`scout/policy.py`);
+4. de-duplicates against the **board** (any owner, any status, refused cards included);
+5. creates one `resumes` row per new vacancy with `status = 'submitted'` - a card in the
    board's **Scraped** column;
-5. sends one Telegram message per new card (`config.notify: telegram`).
+6. sends one Telegram message per new card (`config.notify: telegram`).
 
 It calls **no model** and publishes **no message**: the operator's drag into Prepare queues the
 tailoring (`CONSTITUTION.md` invariants 23 and 25). That is why a run is free no matter how many
-vacancies it finds, and why `config.maxPerRun` defaults to `0` (everything).
+vacancies it finds, and why `config.maxPerRun` defaults to `0` (everything) while `config.maxAgeDays`
+is what keeps an old feed from filling the board.
 
 ## Install / run
 

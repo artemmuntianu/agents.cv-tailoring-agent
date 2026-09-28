@@ -9,9 +9,9 @@ data:
   # comes from the Secret, never from here.
   SERVICE_NAME: cv-tailoring-scout
   SCOUT_FEEDS: {{ .Values.config.feeds | quote }}
-  SCOUT_SOURCE: {{ .Values.config.source | quote }}
   SCOUT_USER_ID: {{ .Values.config.userId | quote }}
   SCOUT_MAX_PER_RUN: {{ .Values.config.maxPerRun | quote }}
+  SCOUT_MAX_AGE_DAYS: {{ .Values.config.maxAgeDays | quote }}
   SCOUT_TIMEOUT_SECONDS: {{ .Values.config.timeoutSeconds | quote }}
   SCOUT_NOTIFY: {{ .Values.config.notify | quote }}
   DB_BACKEND: {{ .Values.config.dbBackend | quote }}

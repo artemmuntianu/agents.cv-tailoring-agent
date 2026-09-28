@@ -1,28 +1,29 @@
 """DOU feed parsing - pure functions, so the feed contract is unit tested.
 
-The feed is RSS 2.0 (`<rss><channel><item>`) whose `<description>` is **escaped HTML**: the XML
-parser unescapes one level by itself, so the entities *inside* that HTML need a second pass
-before the text is clean (`AT&amp;amp;T` is a real example from the live feed).
+The feed is RSS 2.0 (`<rss><channel><item>`) whose `<description>` is **escaped HTML**. The XML
+layer unescapes once by itself; the second pass over the inner entities is `scout.html_text.to_text`
+(`AT&amp;amp;T` is a real example from the live feed), shared with every other parser.
 
 The vacancy id is the number in the link path
-(`/companies/<slug>/vacancies/374708/?utm_source=jobsrss`). That matters more than it looks: it
-is the same id space the listing page uses, so a scouted vacancy and the same vacancy scraped
-in the browser are one card, not two (`resumes.source` finishes the job).
+(`/companies/<slug>/vacancies/374708/?utm_source=jobsrss`). That matters more than it looks: it is
+the same id space the listing page uses, so a scouted vacancy and the same vacancy scraped in the
+browser are one card, not two (`resumes.source` finishes the job).
 
-Titles read `Senior Full Stack .NET Engineer в Talmatic, $5000–6000, віддалено`: role, company
-and a tail that mixes the location with the salary when the posting states one. Nothing here
-fails hard: a title that does not match the pattern keeps the raw title as the role and leaves
-the other fields empty, because a card with a rough title is still better than a silent gap.
+Titles read `Senior Full Stack .NET Engineer в Talmatic, $5000–6000, віддалено`: role, company and
+a tail that mixes the location with the salary when the posting states one. Nothing here fails
+hard: a title that does not match the pattern keeps the raw title as the role and leaves the other
+fields empty, because a card with a rough title is still better than a silent gap.
 """
 
-import html
 import re
 import xml.etree.ElementTree as ET
+
+from scout import html_text
+from scout.contracts import FeedSource, Vacancy
 
 TITLE_RE = re.compile(r"^(?P<role>.+?)\s+в\s+(?P<company>[^,]+),\s*(?P<location>.+)$")
 VACANCY_ID_RE = re.compile(r"/vacancies/(?P<id>\d+)")
 SALARY_RE = re.compile(r"\$[\d\s\u2013\u2014-]+(?:\$[\d\s\u2013\u2014-]+)?")
-TAG_RE = re.compile(r"<[^>]+>")
 # The feed ends every description with the site's own "apply" link.
 APPLY_TAIL = "Відгукнутись на вакансію"
 
@@ -56,27 +57,11 @@ def parse_title(title: str | None) -> dict:
 
 
 def html_to_text(raw: str | None) -> str:
-    """The description as plain text with paragraph breaks (the board shows it verbatim)."""
-    text = str(raw or "")
-    if APPLY_TAIL in text:
-        # Everything from the site's own apply link on is chrome, not the vacancy.
-        text = text[: text.index(APPLY_TAIL)]
-
-    text = text.replace("</li>", "\n").replace("</p>", "\n\n").replace("<li>", "• ")
-    text = re.sub(r"<br\s*/?>", "\n", text)
-    text = TAG_RE.sub("", text)
-    # Twice: the XML layer and the HTML layer each escaped their entities.
-    text = html.unescape(html.unescape(text))
-    lines = [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
-    collapsed: list[str] = []
-    for line in lines:
-        if not line and collapsed and not collapsed[-1]:
-            continue  # at most one blank line in a row
-        collapsed.append(line)
-    return "\n".join(collapsed).strip()
+    """The description as plain text, minus the site's own apply link (see `scout.html_text`)."""
+    return html_text.to_text(raw, cut_at=APPLY_TAIL)
 
 
-def parse_item(item: ET.Element) -> dict | None:
+def parse_item(item: ET.Element) -> Vacancy | None:
     """One `<item>` -> the fields a card needs, or None when it is not a usable vacancy."""
     def text(tag: str) -> str:
         node = item.find(tag)
@@ -102,7 +87,7 @@ def parse_item(item: ET.Element) -> dict | None:
     }
 
 
-def parse_feed(xml_text: str) -> list[dict]:
+def parse_feed(xml_text: str) -> list[Vacancy]:
     """Every usable vacancy of one feed, in feed order. A malformed feed yields nothing."""
     if not (xml_text or "").strip():
         return []
@@ -111,9 +96,12 @@ def parse_feed(xml_text: str) -> list[dict]:
     except ET.ParseError:
         return []
 
-    items: list[dict] = []
+    items: list[Vacancy] = []
     for item in root.iter("item"):
         parsed = parse_item(item)
         if parsed is not None:
             items.append(parsed)
     return items
+
+
+SOURCE = FeedSource(name="dou", hosts=("dou.ua",), parse_feed=parse_feed, label="DOU")

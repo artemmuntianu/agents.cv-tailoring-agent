@@ -7,6 +7,8 @@ it finds. Two rules come from the store, and both are load-bearing:
 * the dedupe is **board-scoped** (`find_existing_ids`): any owner, any status, refused cards
   included - because the board renders every row, so a card the operator can see must not be
   created twice (invariant 17);
+* the dedupe is also **per site**: the source slug comes from the feed's parser, and it is half of
+  the business key, so DOU's and Djinni's rows never see each other's ids;
 * the row is created with `status = 'submitted'`, which is deliberately outside
   `ACTIVE_STATUSES`, so the worker's claim later *adopts* this row instead of acking the drag's
   message as a duplicate.
@@ -20,27 +22,44 @@ from utils.logging_setup import get_logger
 log = get_logger(__name__)
 
 
-def new_vacancies(vacancies, source, cv_version, store=None) -> list[dict]:
-    """The subset of `vacancies` the board does not have yet, in feed order."""
+def new_vacancies(vacancies, cv_version, store=None) -> list[dict]:
+    """The subset of `vacancies` the board does not have yet, in feed order.
+
+    The dedupe is per **site** (`find_existing_ids`), because the source is half of the business key
+    (`resumes_job_key_idx`): a board that already has Djinni's 374708 has nothing to say about DOU's
+    374708. That is why the ids are grouped and asked about one source at a time - and why the
+    answer is filtered against the original list instead of concatenated, so the run keeps feed
+    order.
+    """
     store = store or db_module.get_db()
     if not vacancies:
         return []
-    known = store.find_existing_ids(
-        source, [vacancy["external_id"] for vacancy in vacancies], cv_version
-    )
-    fresh = [vacancy for vacancy in vacancies if vacancy["external_id"] not in known]
+    ids_by_source: dict[str, list[str]] = {}
+    for vacancy in vacancies:
+        ids_by_source.setdefault(vacancy["source"], []).append(vacancy["external_id"])
+    known = {
+        source: store.find_existing_ids(source, ids, cv_version)
+        for source, ids in ids_by_source.items()
+    }
+    fresh = [
+        vacancy for vacancy in vacancies if vacancy["external_id"] not in known[vacancy["source"]]
+    ]
     log.info(
         "dedupe against the board",
-        source=source,
         found=len(vacancies),
         already_known=len(vacancies) - len(fresh),
         new=len(fresh),
+        sources=",".join(f"{source}:{len(ids)}" for source, ids in sorted(ids_by_source.items())),
     )
     return fresh
 
 
-def create_cards(vacancies, source, user_id, cv_version, store=None) -> list[dict]:
+def create_cards(vacancies, user_id, cv_version, store=None) -> list[dict]:
     """Insert one card per vacancy; returns `{job_id, vacancy}` for the rows it really made.
+
+    Each card is written with the site slug its own feed declared - the store's business key is
+    `(user_id, source, external_id, cv_version)`, so a card that lost its slug here would collide
+    with another site's vacancy that happens to share the number.
 
     `upsert_job` is the store's claim API, and it is used here for its *insert* half: it is the
     only method that writes a `resumes` row, it enforces the business key, and it reports
@@ -56,7 +75,7 @@ def create_cards(vacancies, source, user_id, cv_version, store=None) -> list[dic
                 "job_id": job_id,
                 "user_id": user_id or None,
                 "external_id": vacancy["external_id"],
-                "source": source,
+                "source": vacancy["source"],
                 "title": vacancy.get("title") or "",
                 "company": vacancy.get("company") or "",
                 "source_url": vacancy.get("source_url"),

@@ -45,19 +45,22 @@ startup:
 existingSecret: cv-tailoring-secrets
 
 config:
-  # Comma-separated feeds - the three DOU ones the operator's n8n workflow used.
+  # Comma-separated feeds. Which parser reads a URL, and which `resumes.source` slug its cards
+  # carry, is decided by the URL's **host** (`scout/sources.py`) - so adding a site here is adding
+  # its feed and nothing else.
   feeds: >-
     https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus,
     https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager,
-    https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect
-  # The site slug every scouted card carries (`resumes.source`): it is what makes a vacancy
-  # scraped in the browser later the same card.
-  source: dou
+    https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect,
+    https://djinni.co/jobs/rss/?search_type=basic-search&primary_keyword=.NET&primary_keyword=Lead&primary_keyword=Python&primary_keyword=JavaScript&primary_keyword=Node.js&primary_keyword=CTO&primary_keyword=Engineering%20Manager&primary_keyword=Architect&salary=5000&exp_level=5y&employment=remote&english_level=pre&english_level=intermediate&english_level=upper
   # A provisioned `app_users.id` (in backoffice/: `npm run user -- add ...`). Required - the
   # drag publishes the row's own owner, so a different one would fork a second row.
   userId: ""
   # 0 = every new vacancy of the run; a new card costs nothing until the operator drags it.
   maxPerRun: 0
+  # A vacancy the feed itself dated older than this is not scraped at all (0 disables the rule):
+  # a feed is a window, not a stream, and an old posting is a dead one (`scout/policy.py`).
+  maxAgeDays: 7
   timeoutSeconds: 20
   # telegram = one message per new card; none = create the cards silently.
   notify: telegram
