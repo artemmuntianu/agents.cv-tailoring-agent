@@ -2,17 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Queue vacancies</title>
+    <title>Queue vacancies &amp; fill forms</title>
     <style>
       :root { color-scheme: light; }
       body {
-        width: 320px;
+        width: 360px;
         margin: 0;
         padding: 14px;
         font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
         color: #0f172a;
       }
       h1 { font-size: 14px; margin: 0 0 2px; }
+      h2 { font-size: 12px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; color: #475569; }
       p.hint { margin: 0 0 10px; color: #64748b; font-size: 12px; }
       label { display: block; margin-bottom: 8px; font-size: 11px; color: #475569; text-transform: uppercase; letter-spacing: 0.03em; }
       input {
@@ -29,15 +30,24 @@
       #status { margin-top: 10px; font-size: 12px; color: #475569; white-space: pre-wrap; }
       #status.error { color: #be123c; }
       #status.ok { color: #15803d; }
-      #session { margin-bottom: 10px; font-size: 12px; color: #475569; }
+      #session { margin-bottom: 10px; font-size: 12px; color: #475569; white-space: pre-wrap; }
       #scrape { margin-top: 10px; }
+      #populate { margin-top: 10px; }
+      #report { margin-top: 8px; font-size: 12px; color: #334155; white-space: pre-wrap; max-height: 180px; overflow: auto; }
+      #report.error { color: #be123c; }
+      #recipe { margin: 0 0 8px; font-size: 12px; color: #475569; }
+      details { margin-top: 12px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+      summary { cursor: pointer; font-size: 12px; color: #475569; }
       a { color: #1d4ed8; }
       .hidden { display: none; }
     </style>
   </head>
   <body>
-    <h1>Queue vacancies</h1>
-    <p class="hint">Scrapes every <code>job-item</code> card on this page and posts the batch to the tailoring gateway.</p>
+    <h1>Queue vacancies &amp; fill forms</h1>
+    <p class="hint">
+      Scrapes every <code>job-item</code> card on a listing page, and fills the application form of
+      a vacancy with what the board already knows.
+    </p>
 
     <div id="session">Checking session…</div>
 
@@ -51,6 +61,43 @@
     <div id="queue" class="hidden">
       <button id="scrape">Scrape &amp; queue this page</button>
       <div class="row"><button id="signout" class="secondary">Sign out</button></div>
+    </div>
+
+    <div id="form" class="hidden">
+      <h2>Application form</h2>
+      <div id="recipe">No form picked on this site yet.</div>
+      <div class="row">
+        <button id="pick">Pick the form</button>
+        <button id="pickCover" class="secondary">Pin the letter field</button>
+      </div>
+      <div class="row">
+        <button id="pickResume" class="secondary">Pin the resume field</button>
+        <button id="forget" class="secondary">Forget this site</button>
+      </div>
+      <button id="populate">Populate</button>
+      <div id="report"></div>
+
+      <details id="profileBox">
+        <summary>Candidate facts (used by the model, never invented)</summary>
+        <p class="hint">
+          Stored on the board (<code>candidate_profile.json</code>) so the worker can read them while
+          it drafts. Contacts are not in <code>cv_data.json</code>, which is why they live here.
+        </p>
+        <label>Full name<input id="p_full_name" /></label>
+        <label>Email<input id="p_email" /></label>
+        <label>Phone<input id="p_phone" /></label>
+        <label>Location<input id="p_location" /></label>
+        <label>LinkedIn<input id="p_linkedin" /></label>
+        <label>GitHub<input id="p_github" /></label>
+        <label>English level<input id="p_english_level" placeholder="Upper-Intermediate (B2+)" /></label>
+        <label>Salary expectation<input id="p_salary_expectation" placeholder="$5000 / month" /></label>
+        <label>Availability<input id="p_availability" placeholder="30 days notice" /></label>
+        <label>Work rights<input id="p_work_rights" placeholder="Ukraine, no sponsorship needed" /></label>
+        <div class="row">
+          <button id="saveProfile">Save facts</button>
+          <button id="loadProfile" class="secondary">Reload</button>
+        </div>
+      </details>
     </div>
 
     <div id="status"></div>

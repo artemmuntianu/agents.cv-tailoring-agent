@@ -10,8 +10,17 @@
  * of the DOM contract.
  */
 import { extractVacancies } from './extract.js';
+import { createFormWorker } from './form/worker.js';
 
 const DEFAULT_GATEWAY = 'http://localhost:4321';
+
+/**
+ * The form-filler flow lives in `form/worker.js`; it borrows this worker's two helpers, so both
+ * halves of the extension agree on the session and on how a page matches a board card.
+ */
+const formWorker = createFormWorker({ settings, cardStatus });
+const POLL_INTERVAL_MS = 2500;
+const POLL_DEADLINE_MS = 120000;
 
 /**
  * The site slug the gateway stores as `resumes.source` (part of the worker's business key:
@@ -184,6 +193,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const result = await publish(message.payload, tabUrl);
         if (result && result.ok && result.created > 0) await notifyTabs();
         sendResponse(result);
+      } else if (message && message.type === 'storeFormPick') {
+        // The page's form filler picked something: remember it per host.
+        sendResponse(await formWorker.storeFormPick(message.kind, message.picked, tabUrl));
+      } else if (message && message.type === 'formRecipe') {
+        const all = await formWorker.recipes();
+        sendResponse({ ok: true, recipe: all[formWorker.hostOf(tabUrl)] || null });
+      } else if (message && message.type === 'clearFormRecipe') {
+        sendResponse(await formWorker.clearRecipe(tabUrl));
+      } else if (message && message.type === 'pickForm') {
+        const tab = await activeTab();
+        sendResponse(
+          await formWorker.formMessage(tab && tab.id, {
+            action: 'pick',
+            kind: message.kind || 'root',
+          }),
+        );
+      } else if (message && message.type === 'populate') {
+        const tab = await activeTab();
+        sendResponse(await formWorker.populate(tab && tab.id));
+      } else if (message && message.type === 'profileGet') {
+        sendResponse(await formWorker.profileGet());
+      } else if (message && message.type === 'profilePut') {
+        sendResponse(await formWorker.profilePut(message.profile));
       } else if (message && message.type === 'cardStatus') {
         sendResponse(await cardStatus(message, tabUrl));
       } else if (message && message.type === 'scrapeCard') {

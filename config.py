@@ -190,6 +190,14 @@ QUEUE_RETRY_TTL_MS = _env_int("QUEUE_RETRY_TTL_MS", 300000)
 COVER_QUEUE_NAME = os.getenv("COVER_QUEUE_NAME", "resumes.cover")
 COVER_QUEUE_DLX = os.getenv("COVER_QUEUE_DLX", f"{COVER_QUEUE_NAME}.dlx")
 COVER_QUEUE_DLQ = os.getenv("COVER_QUEUE_DLQ", f"{COVER_QUEUE_NAME}.dlq")
+# The third queue: the extension's application-form filler (`apply.py`). One message per
+# *rendered* form (`job_id`, `schema_hash`, the annotated form), answered with a plan the
+# extension applies to that DOM. Its own ScaledObject and its own four declarers for the same
+# reason as the cover queue - and it deliberately carries no generated documents: the cover
+# letter and the tailored PDF are inserted locally, from the board.
+APPLICATION_QUEUE_NAME = os.getenv("APPLICATION_QUEUE_NAME", "applications.draft")
+APPLICATION_QUEUE_DLX = os.getenv("APPLICATION_QUEUE_DLX", f"{APPLICATION_QUEUE_NAME}.dlx")
+APPLICATION_QUEUE_DLQ = os.getenv("APPLICATION_QUEUE_DLQ", f"{APPLICATION_QUEUE_NAME}.dlq")
 PREFETCH_COUNT = _env_int("PREFETCH_COUNT", 1)
 CONSUMER_POLL_INTERVAL = _env_float("CONSUMER_POLL_INTERVAL", 2.0)
 # AMQP heartbeat (seconds), 0 disables it. It MUST exceed the longest task: the

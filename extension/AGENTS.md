@@ -16,6 +16,36 @@ It has two entry points, and both end in the same gateway call:
 Read `CONSTITUTION.md` first. The batch contract it must satisfy is documented in
 `backoffice/AGENTS.md`; the worker that consumes the result is `agent/AGENTS.md`.
 
+## The form filler (`Populate`)
+
+The second half of the extension: on a vacancy page it fills the application form from what the
+board already knows. The click sequence is `Populate` in the popup -> snapshot -> board -> plan ->
+write into the page. Three rules shape it, and all three are about not guessing:
+
+1. **The form is picked, never guessed.** `Pick the form` puts the page into a crosshair mode: the
+   operator clicks the form (Djinni's dialog, DOU's area below Apply) and the selector is stored per
+   host in `chrome.storage.local.formRecipes`. The two fields that must be exactly right can be
+   pinned the same way (`Pin the letter field`, `Pin the resume field`), which takes them out of the
+   model's hands entirely.
+2. **The model never sees a selector - and never sees a document.** The page annotates every
+   fillable control with a deterministic `data-cvt-id` (f1, f2, ... in DOM order) and the worker
+   sends that snapshot to the board, which queues it on `applications.draft` (`apply.py`). The plan
+   comes back keyed by those ids; the generated **cover letter and tailored PDF are inserted
+   locally** by `formfill.js` from `GET /api/cover/<job_id>` and `GET /api/artifacts/<job_id>`, so
+   the plan only ever says *which element* each belongs in (`cover_letter` / `resume_file`, always
+   with an empty value).
+3. **A missing fact is skipped, never invented.** The prompt may use the vacancy, the candidate
+   facts (`application_profile`, edited in the popup) and the CV digest; anything else is
+   `skip` + a reason, and the review panel lists it. Nothing is submitted by the extension - not the
+   form, not a consent checkbox, not the site's own template controls.
+
+Constraints worth knowing: the site's submit button is never clicked; `input[type=hidden]`,
+`password` and disabled fields are not annotated at all; a radio/checkbox group is one field with N
+options (the site's own labels, e.g. `Так`/`Ні`); controls without a `name` are skipped (which is how
+TomSelect's synthetic search box stays out); the snapshot is hashed by the board, so re-Populating
+the same rendered form costs no Gemini call while a changed form (or newly saved candidate facts)
+re-drafts.
+
 ## Load it (unpacked, no build step)
 
 There is deliberately no bundler and no `package.json`: three small files Chrome can
@@ -48,7 +78,10 @@ for `fetch` from a service worker without it).
 | `manifest.json` | MV3 declaration: `activeTab` + `scripting` + `storage`, gateway host permission, popup, service worker, the `content_scripts` entry for the listing page |
 | `src/extract.js` | `extractVacancies(root)` - the DOM contract (`div[id^="job-item-"]`) |
 | `src/inject.js` | The listing-page content script: the per-card `Scrape`/`Scraped` buttons. **Classic script** (no imports/exports) |
-| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the authenticated batch POST |
+| `src/formfill.js` | The form filler (a second `content_scripts` entry, also classic): the HITL picker, the deterministic annotator, the snapshot, the applier and the per-site adapters |
+| `src/form/plan.js` | Pure plan plumbing: the pins overriding the model, which documents a plan needs, and the popup's report |
+| `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply |
+| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `profileGet`, `profilePut`) |
 | `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome |
 | `README.md` | The same load-and-use steps as above, for an operator |
 
@@ -125,6 +158,13 @@ way the browser does, with `window.eval`).
 
 ## Tests
 
+The form filler's DOM work is verified **by hand** (`extension/README.md` has the checklist) - a
+deliberate choice, not an oversight: jsdom has no `DataTransfer`, so `input.files = ...` cannot be
+asserted in CI, and no `elementFromPoint`, which is why the picker reads `event.target` and the file
+assignment sits behind `assignFile()`. What *is* checked automatically: the import graph
+(`npx esbuild ../extension/src/*.js ../extension/src/form/*.js --bundle`), the syntax of the two
+classic scripts (`node --check`), and the pure helpers (`form/plan.js`).
+
 The scraper and the injected buttons run where the JS tests already live - the backoffice's
 vitest, with jsdom:
 
@@ -162,6 +202,8 @@ cd backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browser --f
 - A button never re-runs a vacancy the board already has; a new `CV_VERSION` is the way to
   tailor one again.
 - No chrome.storage sync/encryption for the token (it is an 8h session token).
+- **A custom upload widget needs an adapter.** Djinni has no `input[type=file]` in its form: the resume is a TomSelect `select` fed by an htmx swap, so `src/formfill.js` drives the site's own "+ Додати резюме" control, fills the file input it renders and submits that fragment (`adapterFor`). DOU's plain file input needs none.
+- **One picked root per host.** A site with a second, differently-marked-up apply page means picking again - not a code change.
 - Not published to the Web Store.
 
 ## Don't

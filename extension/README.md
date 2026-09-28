@@ -79,6 +79,34 @@ listing page (the buttons are injected at page load).
 `Authorization: Bearer <token>`. The response echoes `source`, `created`, `duplicates`
 and the generated `jobIds`.
 
+## Filling an application form (`Populate`)
+
+Sign in, open the vacancy, click the site's own **Apply** so the form is on the page, then:
+
+1. **Pick the form** (once per site): the page turns into crosshair mode - click the form itself.
+   Djinni: the dialog Apply opens (`form#apply_form`). DOU: the area that appears below Apply.
+   Escape cancels. Optional but recommended: **Pin the letter field** and **Pin the resume field**,
+   the two places the generated documents must land, chosen by you rather than by the model.
+2. Fill in **Candidate facts** (once): name, contacts, salary expectation, availability, work
+   rights, English level. They live in the board's `application_profile` row for your account, which
+   is what the worker reads, so they survive a browser reset.
+3. **Populate.** The extension snapshots the form, asks the board to draft it (one Gemini call, on
+   the `applications.draft` queue) and writes the answers into the page: the recruiter's questions,
+   the cover letter into the message field, the tailored PDF into the resume field. What it could
+   not answer is listed for you.
+4. **Read the report, then submit the site's own form.** The extension never submits anything.
+
+It says no, on purpose, when: the vacancy is not on the board yet (scrape and tailor it first), no
+cover letter has been generated (the report says so - generate one on the card), the tailored PDF is
+not on the board's machine (`storage-files.ps1 -Action download`, or point `OUTPUT_DIR` at the
+cluster volume), or the form was re-rendered since the snapshot (run Populate again: the new form
+gets a new hash and a fresh draft).
+
+Manual checklist after a change to `formfill.js` or `form/`: pick on both sites; populate a Djinni
+form (answers + letter + PDF + report); populate a DOU form (letter + file); press Escape mid-pick;
+run Populate twice on the same page (the second run reuses the draft, no second Gemini call); reload
+the page mid-draft (the old snapshot is refused as stale rather than filled).
+
 ## Notes
 
 - `host_permissions` covers **both sides**: the gateway origin (`localhost:4321` /

@@ -100,6 +100,31 @@ kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
   `DATABASE_URL` pointed at a port-forward and `DATABASE_SSLMODE=disable` (the dev Postgres has no
   TLS; trap 18 in the root `AGENTS.md`) - see `scout/AGENTS.md`.
 
+## Filling an application form (the extension + `apply.py`)
+
+The extension's *Populate* button queues one `applications.draft` message per rendered form; the
+`ai-agent-worker-apply` Deployment (KEDA, queue depth) drafts it with one Gemini call and writes
+`resume_application`. Nothing here touches `resumes.status`, and nothing is ever submitted.
+
+```sh
+kubectl get deploy ai-agent-worker-apply          # scales 0 -> 1 -> 0 around one click
+kubectl logs -l cv-tailoring.io/workload=apply --tail=30
+kubectl exec postgres-0 -- psql -U cvt -d cvt -c "select job_id, status, schema_hash, model, left(error,60) from resume_application order by updated_at desc limit 5"
+kubectl exec rabbitmq-0 -- rabbitmqctl list_queues name messages | grep applications.draft
+```
+
+- **"not on the board yet"**: the vacancy must be scraped *and* tailored first - *Populate* only
+  reads what the board already holds.
+- **"no cover letter on the board yet"**: generate the letter on the card (a separate request), then
+  *Populate* again. The draft itself is cached, so the second click costs no Gemini call.
+- **A changed form re-drafts**: the snapshot hash changed. Intended - and it is also why editing the
+  candidate facts invalidates the previous plan.
+- **`failed` and a dead letter**: the model broke the contract, or the card lost its description.
+  The row says why; the payload is in `applications.draft.dlq`.
+- **A new site needs no deployment**: the picker stores a recipe per host in
+  `chrome.storage.local`. A site whose upload widget is not a plain `input[type=file]` needs an
+  adapter in `extension/src/formfill.js` (`adapterFor`).
+
 ## Scheduled housekeeping (the auto-archiver)
 
 `CronJob cv-tailoring-cv-tailoring-archiver` refuses the board's **Applied** cards that no

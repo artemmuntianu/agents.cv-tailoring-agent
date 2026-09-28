@@ -985,6 +985,169 @@ export async function failCoverRequest(jobId: string, error: string): Promise<vo
   );
 }
 
+/** One card's cover letter row, as `GET /api/cover/<job_id>` serves it. */
+export interface CoverLetterRow {
+  status: string;
+  text: string | null;
+  model: string | null;
+  error: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * Read one card's cover letter.
+ *
+ * The board itself reads the letter through its card payload; the extension needs just the one
+ * card's text (it pastes it into an application form), so this is the narrow read that keeps a
+ * form fill from fetching the whole board.
+ */
+export async function coverLetter(jobId: string): Promise<CoverLetterRow | null> {
+  const result = await pool().query<{
+    status: string;
+    text: string | null;
+    model: string | null;
+    error: string | null;
+    updated_at: Date | string | null;
+  }>(
+    `select status, text, model, error, updated_at
+       from resume_cover_letter
+      where job_id = $1`,
+    [jobId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    status: row.status,
+    text: row.text,
+    model: row.model,
+    error: row.error,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+// -- application drafts (the extension's Populate button) --------------------- #
+
+/** One card's application-draft row (`resume_application`), as the extension polls it. */
+export interface ApplicationRow {
+  status: string;
+  schemaHash: string | null;
+  plan: unknown;
+  model: string | null;
+  error: string | null;
+  updatedAt: string | null;
+}
+
+export async function applicationFor(jobId: string): Promise<ApplicationRow | null> {
+  const result = await pool().query<{
+    status: string;
+    schema_hash: string | null;
+    plan: unknown;
+    model: string | null;
+    error: string | null;
+    updated_at: Date | string | null;
+  }>(
+    `select status, schema_hash, plan, model, error, updated_at
+       from resume_application
+      where job_id = $1`,
+    [jobId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    status: row.status,
+    schemaHash: row.schema_hash,
+    plan: row.plan,
+    model: row.model,
+    error: row.error,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+/**
+ * Record that the extension asked for a draft of *this* form snapshot.
+ *
+ * Returns false when a draft is being produced right now (`running`) - two clicks must not queue
+ * two generations, exactly like the cover letter. A different `schemaHash` means the form (or the
+ * candidate file) changed, so the stored plan answers a different question set and is cleared:
+ * the poll must never serve a plan that does not address the form on screen.
+ */
+export async function markApplicationRequested(
+  jobId: string,
+  schemaHash: string,
+): Promise<boolean> {
+  const result = await pool().query(
+    `insert into resume_application (job_id, status, schema_hash)
+     values ($1, 'queued', $2)
+     on conflict (job_id) do update
+        set status = 'queued',
+            error = null,
+            plan = case
+                when resume_application.schema_hash is distinct from excluded.schema_hash
+                then null else resume_application.plan
+            end,
+            model = case
+                when resume_application.schema_hash is distinct from excluded.schema_hash
+                then null else resume_application.model
+            end,
+            schema_hash = excluded.schema_hash,
+            updated_at = now()
+      where resume_application.status <> 'running'`,
+    [jobId, schemaHash],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** The publish failed, so nothing is on its way: the row must not keep claiming `queued`. */
+export async function failApplicationRequest(jobId: string, error: string): Promise<void> {
+  await pool().query(
+    `insert into resume_application (job_id, status, error) values ($1, 'failed', $2)
+     on conflict (job_id) do update
+        set status = 'failed', error = excluded.error, updated_at = now()`,
+    [jobId, error.slice(0, 500)],
+  );
+}
+
+// -- the candidate facts (one jsonb document per operator) -------------------- #
+
+/**
+ * One operator's candidate profile.
+ *
+ * A database row rather than a file on the artifact volume, and that is deliberate: the board runs
+ * on the host and the `apply` worker runs in the cluster, so a file written here would never be the
+ * file read there. This is the one place both can see.
+ */
+export interface ApplicationProfileRow {
+  facts: unknown;
+  updatedAt: string | null;
+}
+
+export async function applicationProfile(userId: string): Promise<ApplicationProfileRow | null> {
+  if (!userId) return null;
+  const result = await pool().query<{ facts: unknown; updated_at: Date | string | null }>(
+    `select facts, updated_at from application_profile where user_id = $1`,
+    [userId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    facts: row.facts,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+export async function saveApplicationProfile(
+  userId: string,
+  facts: Record<string, unknown>,
+): Promise<void> {
+  if (!userId) return;
+  await pool().query(
+    `insert into application_profile (user_id, facts) values ($1, $2::jsonb)
+     on conflict (user_id) do update
+        set facts = excluded.facts, updated_at = now()`,
+    [userId, JSON.stringify(facts ?? {})],
+  );
+}
+
 // -- interviews (the section's own record, never the history) ------------------- #
 
 /** The answer of an interview write: the card it changed, or why it could not. */

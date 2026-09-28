@@ -150,6 +150,79 @@ class CoverLetterMessage(BaseModel):
     enqueued_at: str | None = None
 
 
+class ApplicationField(BaseModel):
+    """One fillable control the extension annotated in the rendered page.
+
+    The `id` is **minted by the extension** (`data-cvt-id="f1"`, ...), never by the model: the
+    plan refers to that id, so a hallucinated element path cannot happen - the extension resolves
+    the id back to the element it annotated. `options` is set for a select/radio group and carries
+    the visible labels the answer has to choose between.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(
+        min_length=1,
+        max_length=24,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description="The extension's own annotation id (`data-cvt-id`).",
+    )
+    kind: str = Field(default="text", max_length=32)
+    label: str = Field(default="", max_length=500)
+    name: str = Field(default="", max_length=200)
+    placeholder: str = Field(default="", max_length=300)
+    required: bool = False
+    hidden: bool = Field(
+        default=False,
+        description="Rendered but not visible (a value the site pre-fills behind a toggle).",
+    )
+    options: list[str] = Field(default_factory=list, max_length=40)
+
+
+class ApplicationFormSnapshot(BaseModel):
+    """The rendered application form as the extension saw it.
+
+    `html` is the annotated, trimmed subtree (scripts/styles/hidden inputs removed, every
+    fillable control carrying its `data-cvt-id`), so the model can read the questions and the
+    section headings but cannot see anything else on the page.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    root: str = Field(default="", max_length=500)
+    html: str = Field(min_length=1, max_length=200_000)
+    fields: list[ApplicationField] = Field(default_factory=list, max_length=80)
+
+
+class ApplicationDraftMessage(BaseModel):
+    """One application-draft request, published when the operator hits *Populate*.
+
+    Deliberately carries **no documents**: the cover letter and the tailored PDF are inserted
+    locally by the extension, from the board, and this message only asks which elements they
+    belong in. The vacancy is read from the database (`resumes.description_raw`) and the candidate
+    facts from `candidate_profile.json`, so a stale copy can never reach the prompt.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str = Field(
+        min_length=4,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+        description="Row id of the vacancy the form belongs to (`resumes.job_id`).",
+    )
+    schema_hash: str = Field(
+        default="",
+        max_length=80,
+        description="Hash of the rendered form (+ the candidate file), i.e. the cache key.",
+    )
+    url: str = Field(default="", max_length=1000)
+    host: str = Field(default="", max_length=200)
+    form: ApplicationFormSnapshot
+    attempt: int = 0
+    enqueued_at: str | None = None
+
+
 class TaskResult(BaseModel):
     """Outcome of one task, as persisted and pushed to the dashboard."""
 

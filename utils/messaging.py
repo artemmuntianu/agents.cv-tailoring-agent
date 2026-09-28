@@ -5,9 +5,10 @@ Two interchangeable backends implement the same tiny contract:
 * ``directory`` - JSON messages as files under `artifacts/queue/`. Lets the whole
   worker loop run (and be tested) with no broker at all.
 * ``amqp``      - RabbitMQ via pika, matching the architecture doc: durable
-  queues (`resumes.generate` for tailoring, `resumes.cover` for cover letters),
-  `prefetch_count = 1`, manual ack, a dead-letter exchange for poison messages and
-  TTL retry queues for delayed re-delivery (used when the Gemini quota is exhausted).
+  queues (`resumes.generate` for tailoring, `resumes.cover` for cover letters,
+  `applications.draft` for application forms), `prefetch_count = 1`, manual ack, a
+  dead-letter exchange for poison messages and TTL retry queues for delayed
+  re-delivery (used when the Gemini quota is exhausted).
 
 A handler returns a `HandlerResult` and the backend translates it into broker
 semantics, so the pipeline never touches AMQP details.
@@ -61,6 +62,16 @@ def cover_queue_spec() -> QueueSpec:
         dlx=config.COVER_QUEUE_DLX,
         dlq=config.COVER_QUEUE_DLQ,
         directory=os.path.join(config.QUEUE_DIR, "cover"),
+    )
+
+
+def application_queue_spec() -> QueueSpec:
+    """`applications.draft` - one message per application form the extension must fill."""
+    return QueueSpec(
+        name=config.APPLICATION_QUEUE_NAME,
+        dlx=config.APPLICATION_QUEUE_DLX,
+        dlq=config.APPLICATION_QUEUE_DLQ,
+        directory=os.path.join(config.QUEUE_DIR, "apply"),
     )
 
 try:  # pika is optional outside of AMQP mode

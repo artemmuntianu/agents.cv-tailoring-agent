@@ -1,9 +1,16 @@
 import type { APIRoute } from 'astro';
-import { failCoverRequest, markCoverRequested, taskMessageRow } from '../../../lib/db';
+import {
+  coverLetter,
+  failCoverRequest,
+  markCoverRequested,
+  taskMessageRow,
+} from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
 import { coverQueueName, publishCoverRequests } from '../../../lib/queue';
 
 export const prerender = false;
+
+const JOB_ID = /^[A-Za-z0-9_.:-]{4,80}$/;
 
 /**
  * POST /api/cover/<job_id> - "write a cover letter for this card".
@@ -23,7 +30,7 @@ export const POST: APIRoute = async ({ params, locals }) => {
   if (!session) return json({ ok: false, error: 'authentication required' }, 401);
 
   const jobId = String(params.jobId ?? '').trim();
-  if (!/^[A-Za-z0-9_.:-]{4,80}$/.test(jobId)) {
+  if (!JOB_ID.test(jobId)) {
     return json({ ok: false, error: 'invalid job_id' }, 400);
   }
 
@@ -69,4 +76,28 @@ export const POST: APIRoute = async ({ params, locals }) => {
     await failCoverRequest(jobId, errorMessage(error)).catch(() => undefined);
     return json({ ok: false, error: errorMessage(error) }, 502);
   }
+};
+
+/**
+ * GET /api/cover/<job_id> - the letter itself, for the extension's form filler.
+ *
+ * The board reads the letter through its card payload; a browser extension that has to paste the
+ * text into an application form needs just this one card, so this is the narrow read that keeps a
+ * form fill from fetching the whole board. The letter is never sent to a model: the extension
+ * inserts it verbatim, and `agent/application.py` only ever says *where* it goes.
+ */
+export const GET: APIRoute = async ({ params, locals }) => {
+  if (!locals.session) return json({ ok: false, error: 'authentication required' }, 401);
+
+  const jobId = String(params.jobId ?? '').trim();
+  if (!JOB_ID.test(jobId)) return json({ ok: false, error: 'invalid job_id' }, 400);
+
+  let row;
+  try {
+    row = await coverLetter(jobId);
+  } catch (error) {
+    return json({ ok: false, error: `job store unavailable: ${errorMessage(error)}` }, 503);
+  }
+  if (!row) return json({ ok: true, status: 'none', text: null, model: null, error: null });
+  return json({ ok: true, ...row });
 };

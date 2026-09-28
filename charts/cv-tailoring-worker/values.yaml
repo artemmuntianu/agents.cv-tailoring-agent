@@ -136,6 +136,19 @@ cover:
   # Empty = inherit the worker's `resources` above.
   resources: {}
 
+# The application-form worker: the same image and configuration, a different entry point
+# (`apply.py`) and a different queue. The extension publishes the *rendered* form it annotated;
+# the worker answers with a plan - which field gets what - and the extension applies it to the DOM.
+# Separate from the other two for the same reason: a form draft neither waits behind a tailoring
+# backlog nor wakes a tailoring pod.
+apply:
+  enabled: true
+  # One form is one Gemini call, and a burst is rare (the operator clicks Populate).
+  maxReplicaCount: 3
+  queueName: applications.draft
+  # Empty = inherit the worker's `resources` above.
+  resources: {}
+
 keda:
   enabled: true
   minReplicaCount: 0

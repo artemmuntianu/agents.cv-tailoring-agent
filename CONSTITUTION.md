@@ -46,7 +46,14 @@ the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
                                      v
                      ai-agent-worker-cover pod (one Gemini call per letter)
                                      |
-                  resume_cover_letter (text) + the master cv_data.json
+                    resume_cover_letter (text) + the master cv_data.json
+
+the extension (a "Populate" click)  --> RabbitMQ (applications.draft)
+                                       |  KEDA: queue depth -> replicas (0 -> N -> 0)
+                                       v
+                     ai-agent-worker-apply pod (one Gemini call per rendered form)
+                                       |
+                    resume_application (the plan: which field gets what) + application_profile
 
 the scout (CronJob, twice an hour)  --> resumes rows (cards in the board's "Scraped")
         (+ once per deploy: the startup hook Job, `chart: charts/cv-tailoring-scout`)
@@ -481,6 +488,23 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     and always failed.
 
 ---
+
+29. **The extension fills application forms, and it never submits them.** The second half of
+    `extension/` (`src/formfill.js`, `src/form/`) puts the operator's *Populate* click through one
+    round trip: the page annotates every fillable control inside a **picked** form root with a
+    deterministic `data-cvt-id`, the board queues that snapshot on `applications.draft`
+    (`apply.py`, its own ScaledObject), and the plan comes back keyed by those ids. Two rules are
+    the point of the design. First, **the generated documents never travel**: the model is asked
+    *which element* the cover letter and the tailored PDF belong in (`cover_letter` /
+    `resume_file`, always with an empty value) and the extension inserts both itself, from
+    `GET /api/cover/<job_id>` and `GET /api/artifacts/<job_id>`. Second, **a missing fact is
+    skipped, never invented**: the prompt may use the vacancy, the CV digest and the candidate
+    facts (`application_profile`, one jsonb row per operator, because the board edits it on the
+    host while the worker reads it in the cluster), and everything else comes back as
+    `skip` + a reason for the review panel. The snapshot's hash is the cache key, so re-filling the
+    same rendered form costs no Gemini call while a changed form re-drafts; the extension never
+    clicks submit, a consent checkbox or a site preference control, and never touches a
+    `hidden`/`password`/disabled field.
 
 ## 8. When code and prose disagree
 

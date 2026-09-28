@@ -80,7 +80,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
 type: Opaque
 stringData:
-  definitions.json: "{\"bindings\":[{\"arguments\":{},\"destination\":\"resumes.generate.dlq\",\"destination_type\":\"queue\",\"routing_key\":\"resumes.generate.dlq\",\"source\":\"resumes.generate.dlx\",\"vhost\":\"/\"},{\"arguments\":{},\"destination\":\"resumes.cover.dlq\",\"destination_type\":\"queue\",\"routing_key\":\"resumes.cover.dlq\",\"source\":\"resumes.cover.dlx\",\"vhost\":\"/\"}],\"exchanges\":[{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"internal\":false,\"name\":\"resumes.generate.dlx\",\"type\":\"direct\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"internal\":false,\"name\":\"resumes.cover.dlx\",\"type\":\"direct\",\"vhost\":\"/\"}],\"global_parameters\":[],\"parameters\":[],\"permissions\":[{\"configure\":\".*\",\"read\":\".*\",\"user\":\"cvt\",\"vhost\":\"/\",\"write\":\".*\"}],\"policies\":[],\"queues\":[{\"arguments\":{\"x-dead-letter-exchange\":\"resumes.generate.dlx\",\"x-dead-letter-routing-key\":\"resumes.generate.dlq\"},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.generate\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.generate.dlq\",\"vhost\":\"/\"},{\"arguments\":{\"x-dead-letter-exchange\":\"resumes.cover.dlx\",\"x-dead-letter-routing-key\":\"resumes.cover.dlq\"},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.cover\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.cover.dlq\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"vacancies.parse\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"applications.submit\",\"vhost\":\"/\"}],\"rabbit_version\":\"3.13.0\",\"users\":[{\"name\":\"cvt\",\"password\":\"dev-only-change-me\",\"tags\":\"administrator\"}],\"vhosts\":[{\"name\":\"/\"}]}"
+  definitions.json: "{\"bindings\":[{\"arguments\":{},\"destination\":\"resumes.generate.dlq\",\"destination_type\":\"queue\",\"routing_key\":\"resumes.generate.dlq\",\"source\":\"resumes.generate.dlx\",\"vhost\":\"/\"},{\"arguments\":{},\"destination\":\"resumes.cover.dlq\",\"destination_type\":\"queue\",\"routing_key\":\"resumes.cover.dlq\",\"source\":\"resumes.cover.dlx\",\"vhost\":\"/\"},{\"arguments\":{},\"destination\":\"applications.draft.dlq\",\"destination_type\":\"queue\",\"routing_key\":\"applications.draft.dlq\",\"source\":\"applications.draft.dlx\",\"vhost\":\"/\"}],\"exchanges\":[{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"internal\":false,\"name\":\"resumes.generate.dlx\",\"type\":\"direct\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"internal\":false,\"name\":\"resumes.cover.dlx\",\"type\":\"direct\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"internal\":false,\"name\":\"applications.draft.dlx\",\"type\":\"direct\",\"vhost\":\"/\"}],\"global_parameters\":[],\"parameters\":[],\"permissions\":[{\"configure\":\".*\",\"read\":\".*\",\"user\":\"cvt\",\"vhost\":\"/\",\"write\":\".*\"}],\"policies\":[],\"queues\":[{\"arguments\":{\"x-dead-letter-exchange\":\"resumes.generate.dlx\",\"x-dead-letter-routing-key\":\"resumes.generate.dlq\"},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.generate\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.generate.dlq\",\"vhost\":\"/\"},{\"arguments\":{\"x-dead-letter-exchange\":\"resumes.cover.dlx\",\"x-dead-letter-routing-key\":\"resumes.cover.dlq\"},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.cover\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"resumes.cover.dlq\",\"vhost\":\"/\"},{\"arguments\":{\"x-dead-letter-exchange\":\"applications.draft.dlx\",\"x-dead-letter-routing-key\":\"applications.draft.dlq\"},\"auto_delete\":false,\"durable\":true,\"name\":\"applications.draft\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"applications.draft.dlq\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"vacancies.parse\",\"vhost\":\"/\"},{\"arguments\":{},\"auto_delete\":false,\"durable\":true,\"name\":\"applications.submit\",\"vhost\":\"/\"}],\"rabbit_version\":\"3.13.0\",\"users\":[{\"name\":\"cvt\",\"password\":\"dev-only-change-me\",\"tags\":\"administrator\"}],\"vhosts\":[{\"name\":\"/\"}]}"
 
 ---
 # Source: cv-tailoring-platform/templates/local-postgres.yaml
@@ -195,6 +195,7 @@ data:
   QUEUE_BACKEND: "amqp"
   QUEUE_NAME: "resumes.generate"
   COVER_QUEUE_NAME: "resumes.cover"
+  APPLICATION_QUEUE_NAME: "applications.draft"
   PREFETCH_COUNT: "1"
   MAX_ATTEMPTS: "3"
   QUEUE_RETRY_TTL_MS: "300000"
@@ -10591,6 +10592,125 @@ spec:
       targetPort: management
 
 ---
+# Source: cv-tailoring-platform/charts/cv-tailoring-worker/templates/apply-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-agent-worker-apply
+  labels:
+    helm.sh/chart: cv-tailoring-worker-0.2.0
+    app.kubernetes.io/name: cv-tailoring-worker
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: ai-worker
+    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+    cv-tailoring.io/workload: apply
+spec:
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cv-tailoring-worker
+      app.kubernetes.io/instance: cv-tailoring
+      app.kubernetes.io/component: ai-worker
+      # A *distinct* selector: three Deployments of the same image must not claim each other's
+      # pods. Deliberately not `app.kubernetes.io/component` - the chart's labels helper already
+      # sets that key, and a duplicated YAML key is invalid (kubeconform caught exactly that).
+      cv-tailoring.io/workload: apply
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cv-tailoring-worker
+        app.kubernetes.io/instance: cv-tailoring
+        app.kubernetes.io/component: ai-worker
+        cv-tailoring.io/workload: apply
+      annotations:
+        checksum/config: 281e503b26259f24efe99de1a752837bd0f25290bed6374c309b960c1961037c
+    spec:
+      serviceAccountName: ai-agent-worker
+      # One form is one Gemini call, but a rate-limited turn can back off for a while.
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: apply
+          image: "cv-tailoring-worker:dev"
+          imagePullPolicy: IfNotPresent
+          args: ["python", "apply.py"]
+          envFrom:
+            - configMapRef:
+                name: ai-agent-worker
+            - secretRef:
+                name: cv-tailoring-secrets
+          env:
+            - name: RABBITMQ_HOST
+              value: "rabbitmq"
+            - name: RABBITMQ_PORT
+              value: "5672"
+            - name: RABBITMQ_VHOST
+              value: "/"
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: rabbitmq-credentials
+                  key: rabbitmq-username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rabbitmq-credentials
+                  key: rabbitmq-password
+          livenessProbe:
+            exec:
+              command: ["python", "healthcheck.py", "--mode", "liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["python", "healthcheck.py", "--mode", "readiness"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 768Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: work
+              mountPath: /tmp/cvt
+            # The form prompt is built from files on the artifact volume: the master CV model
+            # (`cv_data.json`) and the candidate facts (`candidate_profile.json`).
+            - name: artifacts
+              mountPath: /data
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: cv-artifacts
+
+---
 # Source: cv-tailoring-platform/charts/cv-tailoring-worker/templates/cover-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -10629,7 +10749,7 @@ spec:
         app.kubernetes.io/component: ai-worker
         cv-tailoring.io/workload: cover
       annotations:
-        checksum/config: 1037cec6f8fe55c42a14ee08545e8baeb75e2d8f7951a743c540efde93735e28
+        checksum/config: 281e503b26259f24efe99de1a752837bd0f25290bed6374c309b960c1961037c
     spec:
       serviceAccountName: ai-agent-worker
       # One letter is a single Gemini call, but a rate-limited turn can back off for a while.
@@ -10743,7 +10863,7 @@ spec:
         app.kubernetes.io/component: ai-worker
       annotations:
         # Roll the pods when the non-secret config changes.
-        checksum/config: 1037cec6f8fe55c42a14ee08545e8baeb75e2d8f7951a743c540efde93735e28
+        checksum/config: 281e503b26259f24efe99de1a752837bd0f25290bed6374c309b960c1961037c
     spec:
       serviceAccountName: ai-agent-worker
       # Long enough for an in-flight 15-45s task to finish and be acked.
@@ -11674,6 +11794,47 @@ webhooks:
     - clustertriggerauthentications
   sideEffects: None
   timeoutSeconds: 10
+
+---
+# Source: cv-tailoring-platform/charts/cv-tailoring-worker/templates/apply-scaledobject.yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: ai-agent-worker-apply
+  labels:
+    helm.sh/chart: cv-tailoring-worker-0.2.0
+    app.kubernetes.io/name: cv-tailoring-worker
+    app.kubernetes.io/instance: cv-tailoring
+    app.kubernetes.io/component: ai-worker
+    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: cv-tailoring-platform
+    cv-tailoring.io/workload: apply
+spec:
+  scaleTargetRef:
+    name: ai-agent-worker-apply
+  minReplicaCount: 0
+  # One form is one Gemini call, and a burst is rare: the operator clicks Populate on one page at
+  # a time, so the ceiling stays well below the tailoring worker's.
+  maxReplicaCount: 3
+  pollingInterval: 10
+  cooldownPeriod: 60
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+  triggers:
+    - type: rabbitmq
+      metadata:
+        # Same reasoning as the other two ScaledObjects: `protocol: http` reads the management
+        # API, whose count includes unacknowledged messages - with `amqp` KEDA would scale the
+        # pod down while it is still drafting the form.
+        protocol: "http"
+        queueName: "applications.draft"
+        mode: "QueueLength"
+        value: "1"
+        activationValue: "0"
+      authenticationRef:
+        name: ai-agent-worker-rabbitmq
 
 ---
 # Source: cv-tailoring-platform/charts/cv-tailoring-worker/templates/cover-scaledobject.yaml

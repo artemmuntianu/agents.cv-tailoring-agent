@@ -93,6 +93,40 @@ the master `cv_data.json` itself (invariant 24), so a stale copy cannot reach th
 outcome is one row of `resume_cover_letter` (`queued` -> `running` -> `completed`/`failed`) -
 the broker semantics (ack / retry / TTL retry / DLQ) are the ones in the table below.
 
+## Application drafts (`applications.draft`)
+
+The extension's *Populate* button: published by `POST /api/apply/<job_id>`
+(`backoffice/src/pages/api/apply/[jobId].ts`), consumed by `apply.py`.
+
+```json
+{
+  "job_id": "53c558e4-...",
+  "schema_hash": "9f2c...",
+  "url": "https://djinni.co/jobs/746003-senior-nodejs-engineer/",
+  "host": "djinni.co",
+  "form": {
+    "root": "form#apply_form",
+    "html": "<form id=\"apply_form\">... <textarea data-cvt-id=\"f1\"></textarea> ...</form>",
+    "fields": [
+      {"id": "f1", "kind": "textarea", "label": "Which AWS services...", "name": "answer_161552",
+       "placeholder": "", "required": true, "hidden": false, "options": []}
+    ]
+  }
+}
+```
+
+* **The ids are minted by the extension** (`data-cvt-id`, f1..fN in DOM order) - the plan refers to
+  them, so the model never returns a selector it cannot verify.
+* **No documents travel**: the answer is a plan whose actions are `answer` / `select` /
+  `cover_letter` / `resume_file` / `skip`, and the last two carry no value - the extension pastes
+  the generated letter and the tailored PDF itself, from the board.
+* **`schema_hash` is the cache key** (the rendered form + the candidate facts' version). The board
+  claims `resume_application` and resets it to `queued` only when the hash differs, so a redelivery
+  or a repeated *Populate* on the same form is acked as a duplicate without a second Gemini call
+  (`apply.py::handle_delivery`), while a changed form is a genuine re-draft.
+  `GET /api/apply/<job_id>?schema=<hash>` answers `completed` / `running` / `queued` / `failed` /
+  `stale` / `none`, and the extension polls it while it waits.
+
 ## Acknowledgement semantics
 
 | Handler result | Broker action | When |

@@ -87,6 +87,15 @@ rabbitmqDefinitions:
         auto_delete: false
         internal: false
         arguments: {}
+      # ... and so does the extension's application-form queue (`apply.py`). Three workloads,
+      # three failures stories: a poison form must not bury a letter or a tailored CV.
+      - name: applications.draft.dlx
+        vhost: /
+        type: direct
+        durable: true
+        auto_delete: false
+        internal: false
+        arguments: {}
     queues:
       - name: resumes.generate
         vhost: /
@@ -114,6 +123,19 @@ rabbitmqDefinitions:
         durable: true
         auto_delete: false
         arguments: {}
+      - name: applications.draft
+        vhost: /
+        durable: true
+        auto_delete: false
+        # MUST stay identical to utils/messaging.py::_declare_topology() for this queue.
+        arguments:
+          x-dead-letter-exchange: applications.draft.dlx
+          x-dead-letter-routing-key: applications.draft.dlq
+      - name: applications.draft.dlq
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
       - name: vacancies.parse
         vhost: /
         durable: true
@@ -136,6 +158,12 @@ rabbitmqDefinitions:
         destination: resumes.cover.dlq
         destination_type: queue
         routing_key: resumes.cover.dlq
+        arguments: {}
+      - source: applications.draft.dlx
+        vhost: /
+        destination: applications.draft.dlq
+        destination_type: queue
+        routing_key: applications.draft.dlq
         arguments: {}
 
 # --------------------------------------------------------------------------- #

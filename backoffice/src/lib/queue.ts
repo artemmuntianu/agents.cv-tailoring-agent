@@ -42,11 +42,33 @@ export function coverDeadLetterQueue(): string {
   return process.env.COVER_QUEUE_DLQ?.trim() || `${coverQueueName()}.dlq`;
 }
 
+/**
+ * `applications.draft` - the extension's application-form queue (`apply.py`). Same naming rule as
+ * the cover queue: `config.py` is the reference, and every declarer of the topology (this
+ * publisher, the chart's definitions Secret, the worker's own spec) must agree field for field.
+ */
+export function applicationQueueName(): string {
+  return process.env.APPLICATION_QUEUE_NAME?.trim() || 'applications.draft';
+}
+
+export function applicationDeadLetterExchange(): string {
+  return process.env.APPLICATION_QUEUE_DLX?.trim() || `${applicationQueueName()}.dlx`;
+}
+
+export function applicationDeadLetterQueue(): string {
+  return process.env.APPLICATION_QUEUE_DLQ?.trim() || `${applicationQueueName()}.dlq`;
+}
+
 /** Every queue this client publishes to, declared on connect. */
 export function queueTopology(): { queue: string; dlx: string; dlq: string }[] {
   return [
     { queue: queueName(), dlx: deadLetterExchange(), dlq: deadLetterQueue() },
     { queue: coverQueueName(), dlx: coverDeadLetterExchange(), dlq: coverDeadLetterQueue() },
+    {
+      queue: applicationQueueName(),
+      dlx: applicationDeadLetterExchange(),
+      dlq: applicationDeadLetterQueue(),
+    },
   ];
 }
 
@@ -176,6 +198,18 @@ export async function publishCoverRequests(
   messages: Record<string, unknown>[],
 ): Promise<number> {
   return publish(coverQueueName(), messages);
+}
+
+/**
+ * Publish one application-draft request (the extension's *Populate* button).
+ *
+ * Same confirm semantics as the other two: the route must not tell the operator a draft is on its
+ * way before the broker acknowledged the publish.
+ */
+export async function publishApplicationRequests(
+  messages: Record<string, unknown>[],
+): Promise<number> {
+  return publish(applicationQueueName(), messages);
 }
 
 async function publish(queue: string, messages: Record<string, unknown>[]): Promise<number> {

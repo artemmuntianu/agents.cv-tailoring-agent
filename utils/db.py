@@ -216,6 +216,55 @@ class LocalDb:
     def get_cover_letter(self, job_id):
         return self._load().get("cover_letters", {}).get(job_id)
 
+    def upsert_application(
+        self, job_id, status, plan=None, model=None, schema_hash=None, error=None, attempts=0
+    ):
+        """Create/refresh the single application-draft row of one vacancy (see PostgresDb)."""
+        data = self._load()
+        drafts = data.setdefault("applications", {})
+        record = drafts.get(job_id) or {
+            "job_id": job_id,
+            "plan": None,
+            "model": None,
+            "schema_hash": None,
+            "attempts": 0,
+            "created_at": now_iso(),
+        }
+        record["status"] = status
+        record["error"] = error
+        if plan:
+            record["plan"] = plan
+        if model:
+            record["model"] = model
+        if schema_hash:
+            record["schema_hash"] = schema_hash
+        record["attempts"] = max(int(record.get("attempts") or 0), int(attempts or 0))
+        record["updated_at"] = now_iso()
+        drafts[job_id] = record
+        self._save(data)
+        return record
+
+    def get_application(self, job_id):
+        return self._load().get("applications", {}).get(job_id)
+
+    def upsert_application_profile(self, user_id, facts=None):
+        """Store one operator's candidate facts (see PostgresDb)."""
+        if not user_id:
+            return None
+        data = self._load()
+        profiles = data.setdefault("application_profiles", {})
+        record = profiles.get(user_id) or {"user_id": user_id, "created_at": now_iso()}
+        record["facts"] = facts if isinstance(facts, dict) else {}
+        record["updated_at"] = now_iso()
+        profiles[user_id] = record
+        self._save(data)
+        return record
+
+    def get_application_profile(self, user_id):
+        if not user_id:
+            return None
+        return self._load().get("application_profiles", {}).get(user_id)
+
     def update_job(self, job_id, **fields):
         data = self._load()
         record = data["jobs"].get(job_id)
@@ -514,6 +563,35 @@ create table if not exists resume_cover_letter (
     error      text,
     attempts   integer not null default 0,
     created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+-- Application drafts for a *rendered* application form (the extension's Populate button). One row
+-- per vacancy, owned by the apply worker (`apply.py`). `plan` is what it answered - the extension
+-- applies it to the DOM - and `schema_hash` records the snapshot it was answered for: repeating
+-- the same rendered form costs no Gemini call, while a changed form (or a changed candidate file)
+-- is a genuine re-draft. A removed vacancy takes its draft with it (cascade).
+create table if not exists resume_application (
+    job_id      text primary key references resumes (job_id) on delete cascade,
+    status      text not null default 'queued',
+    schema_hash text,
+    plan        jsonb,
+    model       text,
+    error       text,
+    attempts    integer not null default 0,
+    created_at  timestamptz not null default now(),
+    updated_at  timestamptz not null default now()
+);
+
+-- The candidate facts an application form is filled from (name, contacts, salary expectation,
+-- availability, work rights, standing answers). One JSON document per operator, held in the
+-- database rather than a file on purpose: the board edits it on the host and the `apply` worker
+-- reads it in the cluster, and those two see different filesystems - the shared Postgres is the
+-- only place both can reach. It is the same "facts the model may use, never invent" input the
+-- vacancy and the CV digest are.
+create table if not exists application_profile (
+    user_id    text primary key references app_users (id) on delete cascade,
+    facts      jsonb not null default '{}'::jsonb,
     updated_at timestamptz not null default now()
 );
 
@@ -1021,6 +1099,100 @@ class PostgresDb:
                 cur.execute(
                     "select * from resume_cover_letter where job_id = %s", (job_id,)
                 )
+                row = cur.fetchone()
+        return dict(row) if row else None
+
+    def upsert_application(
+        self, job_id, status, plan=None, model=None, schema_hash=None, error=None, attempts=0
+    ):
+        """Create/refresh the single application-draft row of one vacancy.
+
+        `plan`/`model` are only overwritten when the caller has them, so a failed retry cannot wipe
+        a draft that is already there; `schema_hash` is the snapshot the stored plan belongs to (a
+        `null` plan keeps the old hash, so "which form was this answered for" stays honest); and
+        `attempts` only ever grows.
+        """
+        self.ensure_schema()
+        payload = None if plan is None else json.dumps(plan, ensure_ascii=False)
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into resume_application
+                        (job_id, status, schema_hash, plan, model, error, attempts)
+                    values (%(job_id)s, %(status)s, %(schema_hash)s, %(plan)s::jsonb,
+                            %(model)s, %(error)s, %(attempts)s)
+                    on conflict (job_id) do update
+                        set status = excluded.status,
+                            schema_hash = case
+                                when excluded.plan is null then resume_application.schema_hash
+                                else coalesce(excluded.schema_hash,
+                                              resume_application.schema_hash)
+                            end,
+                            plan = coalesce(excluded.plan, resume_application.plan),
+                            model = coalesce(excluded.model, resume_application.model),
+                            error = excluded.error,
+                            attempts = greatest(resume_application.attempts,
+                                                excluded.attempts),
+                            updated_at = now()
+                    returning *
+                    """,
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "schema_hash": schema_hash,
+                        "plan": payload,
+                        "model": model,
+                        "error": error,
+                        "attempts": int(attempts or 0),
+                    },
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    def get_application(self, job_id):
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select * from resume_application where job_id = %s", (job_id,))
+                row = cur.fetchone()
+        return dict(row) if row else None
+
+    def upsert_application_profile(self, user_id, facts=None):
+        """Store one operator's candidate facts - the JSON document the form prompt is built from.
+
+        One row per user: the board writes it with the operator's own token, the `apply` worker
+        reads it for the card's owner, and both see the same Postgres. `facts` is stored as jsonb,
+        so a new fact is a prompt change and not a migration.
+        """
+        if not user_id:
+            return None
+        payload = json.dumps(facts if isinstance(facts, dict) else {}, ensure_ascii=False)
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into application_profile (user_id, facts)
+                    values (%(user_id)s, %(facts)s::jsonb)
+                    on conflict (user_id) do update
+                        set facts = excluded.facts, updated_at = now()
+                    returning *
+                    """,
+                    {"user_id": user_id, "facts": payload},
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    def get_application_profile(self, user_id):
+        if not user_id:
+            return None
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select * from application_profile where user_id = %s", (user_id,))
                 row = cur.fetchone()
         return dict(row) if row else None
 

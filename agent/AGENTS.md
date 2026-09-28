@@ -14,6 +14,7 @@ Read `CONSTITUTION.md` first; this file is the layer-specific detail.
 | `models.py` | Pydantic schemas used as Gemini `response_schema` (`JobRoleExtraction`, `TextModificationList`, `LayoutCheckResult`) |
 | `nodes.py` | The four nodes + the three `_call_gemini_*` functions + the tailoring prompt |
 | `cover.py` | The cover-letter prompt, its `response_schema` and `run_cover_letter()` - the one Gemini call the board triggers by hand |
+| `application.py` | The application-form prompt, `ApplicationPlan` and `normalize_plan()` - the one Gemini call the extension's *Populate* triggers. It answers with the ids the extension minted, never returns a selector, never carries the generated documents, and drops an id the snapshot does not contain |
 | `graph.py` | Graph topology, `check_after_adapt`, `should_continue`, `create_graph()` |
 | `pipeline.py` | `run_cv_tailoring()` / `run_task()` - the only entry into the graph |
 | `__init__.py` | Package marker |

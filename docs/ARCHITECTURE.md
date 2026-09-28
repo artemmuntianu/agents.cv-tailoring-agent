@@ -119,6 +119,8 @@ Queue topology as declared (chart definitions, byte-identical in intent to
 | `resumes.generate.retry.{60,300,900,1800,3600}s` | durable queues | `x-message-ttl=<rung>`, `x-dead-letter-exchange=""` → straight back to `resumes.generate` |
 | `resumes.cover` | durable queue | `x-dead-letter-exchange=resumes.cover.dlx`, `x-dead-letter-routing-key=resumes.cover.dlq` - the on-demand cover letters, consumed by `cover.py` |
 | `resumes.cover.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape as the tailoring set: a letter failure never lands in the tailoring DLQ |
+| `applications.draft` | durable queue | `x-dead-letter-exchange=applications.draft.dlx`, `x-dead-letter-routing-key=applications.draft.dlq` - the extension's application forms, consumed by `apply.py` |
+| `applications.draft.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape again: a poison form never buries a letter or a tailored CV |
 | `vacancies.parse`, `applications.submit` | durable queues | declared, unused today |
 
 ## 4. Per-task pipeline (design steps a–g)
@@ -209,6 +211,8 @@ amqp / postgres / postgres, as `deploy/values/dev.yaml` sets.
 | `Secret cv-tailoring-secrets` (`GEMINI_API_KEY`, `DATABASE_URL`) | `scripts/worker-secret.ps1` | values come from `.env`, never from git |
 | Worker non-secret env (`CM ai-agent-worker`) | `deploy/values/dev.yaml` → chart values → `configmap.yaml` | the single values→env mapping (`charts/AGENTS.md`) |
 | `resume_cover_letter` (one row per vacancy) | the **cover worker** (`cover.py`), requested by the board | the board only flips it to `queued` when it publishes, and reads it back through the card payload (`CONSTITUTION.md` invariant 24) |
+| `resume_application` (one row per vacancy) | the **apply worker** (`apply.py`), requested by the extension | keyed by `schema_hash`: the same rendered form is drafted once (`CONSTITUTION.md` invariant 29) |
+| `application_profile` (one row per operator) | the board (`PUT /api/profile`) | the candidate facts the form prompt may use and must never invent |
 | Replica count | KEDA (`ScaledObject` → HPA) | the Deployment must not set `replicas` while KEDA is enabled |
 | KEDA CRDs | the `keda` subchart | shipped as **templates**, so the first install runs in two phases (`scripts/local-deploy.ps1`) |
 | `PVC cv-artifacts` | chart, kept on uninstall | task data outlives the release by design |

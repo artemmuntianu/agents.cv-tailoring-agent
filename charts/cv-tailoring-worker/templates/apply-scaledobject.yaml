@@ -1,0 +1,42 @@
+{{- if and .Values.keda.enabled .Values.apply.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "cv-tailoring-worker.fullname" . }}-apply
+  labels:
+    {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+    cv-tailoring.io/workload: apply
+spec:
+  scaleTargetRef:
+    name: {{ include "cv-tailoring-worker.fullname" . }}-apply
+  minReplicaCount: 0
+  # One form is one Gemini call, and a burst is rare: the operator clicks Populate on one page at
+  # a time, so the ceiling stays well below the tailoring worker's.
+  maxReplicaCount: {{ .Values.apply.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  {{- if .Values.keda.fallback.enabled }}
+  fallback:
+    failureThreshold: {{ .Values.keda.fallback.failureThreshold }}
+    replicas: {{ .Values.keda.fallback.replicas }}
+  {{- end }}
+  {{- with .Values.keda.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+  triggers:
+    - type: rabbitmq
+      metadata:
+        # Same reasoning as the other two ScaledObjects: `protocol: http` reads the management
+        # API, whose count includes unacknowledged messages - with `amqp` KEDA would scale the
+        # pod down while it is still drafting the form.
+        protocol: {{ .Values.keda.protocol | quote }}
+        queueName: {{ .Values.apply.queueName | quote }}
+        mode: {{ .Values.keda.mode | quote }}
+        value: {{ .Values.keda.queueLength | quote }}
+        activationValue: {{ .Values.keda.activationQueueLength | quote }}
+      authenticationRef:
+        name: {{ include "cv-tailoring-worker.fullname" . }}-rabbitmq
+{{- end }}

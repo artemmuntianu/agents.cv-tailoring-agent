@@ -199,6 +199,27 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   decides what the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and it is
   unit tested, so the component stays a rendering layer.
 
+## Application drafts (`POST`/`GET /api/apply/<job_id>`, `GET`/`PUT /api/profile`)
+
+The extension's *Populate* button asks the board to **draft** a rendered application form, then
+polls for the plan. Same shape as the cover-letter route: claim the row, publish, and mark it
+`failed` when the broker refuses.
+
+* `POST /api/apply/<job_id>` takes the extension's snapshot (`{url, host, form: {root, html,
+  fields}}`), validates it in `lib/application.ts` (the ids the extension minted, ≤80 fields,
+  ≤200 KB of HTML, capped labels/options), hashes it together with the candidate facts' version and
+  claims `resume_application`. `queued: false` is a normal answer - a draft for *exactly this form*
+  is already in flight or already stored, and the worker acks the same snapshot without a second
+  Gemini call.
+* `GET /api/apply/<job_id>?schema=<hash>` is the poll: `completed` (with the plan), `running`,
+  `queued`, `failed`, `stale` (the stored plan belongs to a different form - POST again) or `none`.
+* `GET`/`PUT /api/profile` read and write the **candidate facts**: one `application_profile` jsonb
+  row per operator (`lib/candidate.ts` sanitises against the known keys and the caps). A database
+  row rather than a file, because the board runs on the host and the `apply` worker runs in the
+  cluster - the shared Postgres is the only place both can see.
+* `GET /api/cover/<job_id>` serves the generated letter to the extension, which pastes it into a
+  form; the board itself keeps reading it through the card payload.
+
 ## Status lookup (the extension's per-card buttons)
 
 - `GET /api/vacancies/status?external_ids=850374,850359` answers "is this already on the
