@@ -40,3 +40,7 @@ charts/*/charts/*.tgz
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
+
+# The offline render `kubeconform` reads (charts/AGENTS.md regenerates it). Build output,
+# not a source - it kept being swept into commits by `git add -A`.
+rendered.yaml
