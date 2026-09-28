@@ -250,7 +250,13 @@ automation         .github/workflows/
     is useless on a card scraped before 2026-09-26, and the API refuses such a request with 409
     (the worker would dead-letter it). The result is one row in `resume_cover_letter`, which the
     board reads through the card payload; `queued` means "asked for", which is what makes a
-    regeneration a genuine request and a redelivery a duplicate.
+    regeneration a genuine request and a redelivery a duplicate. A letter is asked for in two
+    ways: the card's *Generate* (always a fresh one - that is what a click means) and **a move
+    into Prepare**, which requests it beside the tailoring. `lib/coverRequest.ts` is the one
+    implementation both callers use; the automatic one is best effort (a cover failure never
+    rolls the move back, it is reported in the move's answer instead) and it leaves a letter that
+    is already written or on its way alone (`lib/cover.ts::coverNeeded`), because regenerating
+    behind the operator's back would replace text they may have read and pay for a second call.
 
 25. **The scheduled intake creates cards and nothing else.** `python -m scout` (`scout/`)
     fetches the configured feeds, de-duplicates against the **board** (`find_existing_ids`: any

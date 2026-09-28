@@ -1,5 +1,8 @@
 import type { APIRoute } from 'astro';
 import { parseMoveRequest, tailoringRequest } from '../../../lib/board';
+import { coverOutcomeNote } from '../../../lib/cover';
+import type { CoverOutcome } from '../../../lib/cover';
+import { requestCoverLetter } from '../../../lib/coverRequest';
 import type { InterviewRequest } from '../../../lib/types';
 import { fetchCard, moveCard, taskMessageRow } from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
@@ -18,6 +21,11 @@ export const prerender = false;
  * broker refuses, a card that just left Scraped goes back - "in Prepare" has to mean
  * "tailoring was requested", not quietly the opposite. A card already in Prepare with a parked
  * status is *retried* by the same request (the stage does not change, so no history noise).
+ *
+ * Entering Prepare also asks for the **cover letter** (`lib/coverRequest.ts`): one drop sets up
+ * the whole application kit. That half is best effort - it never moves the card back and never
+ * replaces a letter that is already there - and what it did comes back as the response's `note`,
+ * which the board shows above the columns.
  *
  * A card without a stored job description cannot be queued at all: it predates the
  * `description_raw` column, and the worker would refuse a message with no description. The
@@ -101,6 +109,33 @@ export const POST: APIRoute = async ({ request }) => {
     }
   }
 
+  // Entering **Prepare** asks for the whole application kit, not only the CV. The letter is
+  // written from the master CV and the same stored description, on its own queue, so it runs
+  // beside the tailoring instead of after it - and a cover problem must never undo a tailoring
+  // the broker already accepted, which is why this is best effort and only reported.
+  let cover: CoverOutcome = 'skipped';
+  if (move.to === 'prepare') {
+    if (!row.descriptionRaw) {
+      // The cover route refuses such a card with 409 and the worker would dead-letter the
+      // message, so nothing is queued and the answer says why (invariant 24).
+      cover = 'unavailable';
+    } else {
+      try {
+        cover = (await requestCoverLetter(move.jobId, { onlyIfMissing: true })).outcome;
+      } catch {
+        // The store refused the claim: the move is still valid, so report it and leave the
+        // operator the card's own *Generate*.
+        cover = 'failed';
+      }
+    }
+  }
+
+  const notes: string[] = [];
+  if (wanted === 'queue') notes.push('Tailoring queued.');
+  else if (wanted === 'retry') notes.push('Tailoring retried.');
+  const coverNote = coverOutcomeNote(cover);
+  if (coverNote) notes.push(coverNote);
+
   try {
     // A retry does not change the column: answer with the card as it stands.
     const card =
@@ -108,7 +143,13 @@ export const POST: APIRoute = async ({ request }) => {
     if (!card) {
       return json({ ok: false, error: `no vacancy with job_id ${move.jobId}` }, 404);
     }
-    return json({ ok: true, card, queued });
+    return json({
+      ok: true,
+      card,
+      queued,
+      cover,
+      ...(notes.length ? { note: notes.join(' ') } : {}),
+    });
   } catch (error) {
     return json({ ok: false, error: errorMessage(error) }, 500);
   }

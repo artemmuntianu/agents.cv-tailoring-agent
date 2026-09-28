@@ -212,10 +212,12 @@ the worker uses (`backoffice/AGENTS.md` documents the contract). The board re-re
 database every few seconds (the `● Live` toggle), so worker progress shows up on its
 own.
 
-The card modal also offers a **cover letter**: *Generate* on any card (any column, archived or
-not) publishes to `resumes.cover`, whose own worker writes one letter from the stored job
-description and the master `cv_data.json` - it can only repeat what the CV says - and the modal
-shows it with a *Copy* button. `docs/MESSAGE_CONTRACT.md` documents that payload.
+The card modal also offers a **cover letter**, published to `resumes.cover`: *Generate* writes
+a fresh one on any card (any column, archived or not), and a move into **Prepare** asks for one
+beside the CV tailoring, leaving a letter that is already there alone. Its own worker writes it
+from the stored job description and the master `cv_data.json` - it can only repeat what the CV
+says - and the modal shows it with a *Copy* button. `docs/MESSAGE_CONTRACT.md` documents that
+payload.
 
 The card is the operator's workspace. An **`➕ Add action`** button records a change
 *without* moving the card - which is also how a card escapes the auto-archiver's ten-day rule.

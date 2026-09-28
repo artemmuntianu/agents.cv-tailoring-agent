@@ -58,7 +58,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/index.astro` | The board page (the shell + `App`); passes the session name/email down |
 | `src/pages/processes.astro`, `src/components/ProcessesPage.tsx`, `src/components/ProcessRunTable.tsx` | `/processes` - the internal jobs' run log as a page (read-only, unpolled) |
 | `src/pages/api/board.ts` | `GET` the cards |
-| `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing), refuse it, undo a refusal, purge it for good |
+| `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
 | `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the card's `➕ Add action`): a `move` history row with `from_state = to_state` |
 | `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, never a history row |
 | `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels) - the whole set in one write, never a history row |
@@ -87,6 +87,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/processes.ts` | The Processes page's vocabulary: process labels and hints, run status chips, one-line run summaries, durations, the trigger label |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
+| `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
 | `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
@@ -170,7 +171,10 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   moves second, and a card that just left Scraped is moved back if the broker refuses - so
   "in Prepare" cannot quietly mean "no message was ever sent" (`CONSTITUTION.md` invariant
   23). A card whose stored `description_raw` is still null (scraped before 2026-09-26) is
-  refused with 409 instead of poisoning the DLQ.
+  refused with 409 instead of poisoning the DLQ. The same request also asks for the **cover
+  letter** (`lib/coverRequest.ts`, best effort: it never rolls the move back and never replaces a
+  letter that is already there) - one drop sets up the whole application kit, and the response's
+  `note` says what happened to each half.
 - One message per vacancy, shaped like `agent/contracts.py::ResumeTaskMessage`
   (`user_id` = the **row's** owner, `source` = the site slug, `cv_data` omitted so the
   worker downloads the master CV it validates against `cv.docx`).
@@ -193,7 +197,14 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   now*.
 - Order: claim the row (`resume_cover_letter.status = 'queued'`, refused while it says
   `running`), publish to `resumes.cover`, and mark the row `failed` with the broker's error if
-  the publish throws - the modal then shows why instead of a card that waits forever.
+  the publish throws - the modal then shows why instead of a card that waits forever. That order
+  lives in `lib/coverRequest.ts`: one implementation, two callers.
+- **A move into Prepare asks for the letter too**, with `onlyIfMissing: true`: the automatic
+  request leaves a letter that is already written or on its way alone (`coverNeeded` - `queued`
+  means "asked for"), while a click on *Generate* always regenerates. The move route treats it as
+  best effort (never a rollback, never a failed move) and reports
+  `queued`/`already`/`busy`/`failed`/`unavailable` as the response's `note`, which the board
+  shows above the columns (`coverOutcomeNote`, pure and unit tested).
 - The result comes back through the **card payload** (`coverLetter`, a `LEFT JOIN` in
   `CARD_SELECT`) and the existing 5s poll: no push channel, no second request. `lib/cover.ts`
   decides what the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and it is

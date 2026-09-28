@@ -117,7 +117,7 @@ Queue topology as declared (chart definitions, byte-identical in intent to
 | `resumes.generate.dlx` | direct exchange, durable | — |
 | `resumes.generate.dlq` | durable queue | bound to the DLX with routing key `resumes.generate.dlq` |
 | `resumes.generate.retry.{60,300,900,1800,3600}s` | durable queues | `x-message-ttl=<rung>`, `x-dead-letter-exchange=""` → straight back to `resumes.generate` |
-| `resumes.cover` | durable queue | `x-dead-letter-exchange=resumes.cover.dlx`, `x-dead-letter-routing-key=resumes.cover.dlq` - the on-demand cover letters, consumed by `cover.py` |
+| `resumes.cover` | durable queue | `x-dead-letter-exchange=resumes.cover.dlx`, `x-dead-letter-routing-key=resumes.cover.dlq` - cover letters (asked for on demand, or alongside a move into Prepare), consumed by `cover.py` |
 | `resumes.cover.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape as the tailoring set: a letter failure never lands in the tailoring DLQ |
 | `applications.draft` | durable queue | `x-dead-letter-exchange=applications.draft.dlx`, `x-dead-letter-routing-key=applications.draft.dlq` - the extension's application forms, consumed by `apply.py` |
 | `applications.draft.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape again: a poison form never buries a letter or a tailored CV |

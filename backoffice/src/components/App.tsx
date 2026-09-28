@@ -182,7 +182,13 @@ export default function App({ session }: AppProps) {
     if (!pending) return;
     const request: MoveRequest = { jobId: pending.card.jobId, to: pending.to, actor, action };
     setPending(null);
-    await mutate('/api/board/move', interview ? { ...request, interview } : request);
+    const result = await mutate(
+      '/api/board/move',
+      interview ? { ...request, interview } : request,
+    );
+    // Entering Prepare also queues the cover letter; the route says what happened to it.
+    const explanation = typeof result?.note === 'string' ? result.note : null;
+    if (explanation) setNote(explanation);
   }
 
   /**

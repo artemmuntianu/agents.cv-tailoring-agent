@@ -1,12 +1,9 @@
 import type { APIRoute } from 'astro';
-import {
-  coverLetter,
-  failCoverRequest,
-  markCoverRequested,
-  taskMessageRow,
-} from '../../../lib/db';
+import { requestCoverLetter } from '../../../lib/coverRequest';
+import type { CoverRequestResult } from '../../../lib/coverRequest';
+import { coverLetter, taskMessageRow } from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
-import { coverQueueName, publishCoverRequests } from '../../../lib/queue';
+import { coverQueueName } from '../../../lib/queue';
 
 export const prerender = false;
 
@@ -21,9 +18,10 @@ const JOB_ID = /^[A-Za-z0-9_.:-]{4,80}$/;
  * tailoring task - and the card's own row (`resume_cover_letter`, read by the board's card
  * payload) is how the modal sees the result.
  *
- * Order: claim the row, publish, and mark the row `failed` when the broker refuses. A claim
- * that is refused means a letter is *being written right now* - two clicks must not queue two
- * generations, and the modal's polling will show the first one landing.
+ * The claim/publish/rollback order itself lives in `lib/coverRequest.ts`, which the move route
+ * shares: a claim that is refused means a letter is *being written right now* - two clicks must
+ * not queue two generations, and the modal's polling will show the first one landing. Unlike the
+ * automatic request this route passes no `onlyIfMissing`: a click means "write it again".
  */
 export const POST: APIRoute = async ({ params, locals }) => {
   const session = locals.session;
@@ -55,27 +53,28 @@ export const POST: APIRoute = async ({ params, locals }) => {
     );
   }
 
+  let result: CoverRequestResult;
   try {
-    const claimed = await markCoverRequested(jobId);
-    if (!claimed) {
-      return json(
-        { ok: false, error: 'a cover letter is already being written for this card' },
-        409,
-      );
-    }
+    result = await requestCoverLetter(jobId);
   } catch (error) {
     return json({ ok: false, error: `job store unavailable: ${errorMessage(error)}` }, 503);
   }
 
-  try {
-    const published = await publishCoverRequests([
-      { job_id: jobId, enqueued_at: new Date().toISOString() },
-    ]);
-    return json({ ok: true, published, queue: coverQueueName() });
-  } catch (error) {
-    await failCoverRequest(jobId, errorMessage(error)).catch(() => undefined);
-    return json({ ok: false, error: errorMessage(error) }, 502);
+  if (result.outcome === 'busy') {
+    return json(
+      { ok: false, error: 'a cover letter is already being written for this card' },
+      409,
+    );
   }
+  if (result.outcome === 'failed') {
+    return json({ ok: false, error: result.error ?? 'the publish failed' }, 502);
+  }
+  // `onlyIfMissing` is off here, so `already` cannot come back: `queued` is the normal answer.
+  return json({
+    ok: true,
+    published: result.outcome === 'queued' ? 1 : 0,
+    queue: coverQueueName(),
+  });
 };
 
 /**

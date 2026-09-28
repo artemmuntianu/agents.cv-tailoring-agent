@@ -33,6 +33,47 @@ export function coverStateLabel(state: CoverState): string {
 }
 
 /**
+ * What a request for a letter did, or decided not to do.
+ *
+ * `skipped` is the honest answer for a card that did not enter Prepare, so the move route can
+ * report one value in every case; `unavailable` is the card that cannot have a letter at all
+ * (no stored job description - invariant 24).
+ */
+export type CoverOutcome = 'queued' | 'already' | 'busy' | 'failed' | 'skipped' | 'unavailable';
+
+/**
+ * Whether entering Prepare should publish a letter request.
+ *
+ * Everything except "nothing here" and "the last attempt failed" counts as already asked for:
+ * `queued` means *asked for* (invariant 24), so a letter that is written or on its way must not
+ * be regenerated behind the operator's back - that would replace text they may have read, and
+ * pay for a second Gemini call. A `completed` row without text is no exception: the modal
+ * reads that as "on its way", and the operator's own *Generate* is what fixes it.
+ */
+export function coverNeeded(letter: CoverLetterState | null): boolean {
+  const state = coverState(letter);
+  return state === 'absent' || state === 'failed';
+}
+
+/** The one line the board shows after a move; null when there is nothing worth saying. */
+export function coverOutcomeNote(outcome: CoverOutcome): string | null {
+  switch (outcome) {
+    case 'queued':
+      return 'Cover letter queued as well.';
+    case 'already':
+      return 'Cover letter already written or on its way - left it alone.';
+    case 'busy':
+      return 'A cover letter is being written right now.';
+    case 'failed':
+      return 'Cover letter could not be queued - use Generate in the card.';
+    case 'unavailable':
+      return 'No letter: this card has no stored job description (scrape the page again).';
+    case 'skipped':
+      return null;
+  }
+}
+
+/**
  * Why *Generate* is unavailable, or null when it is available.
  *
  * A card without a stored job description cannot produce a letter at all - the worker refuses
