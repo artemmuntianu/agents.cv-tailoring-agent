@@ -93,7 +93,10 @@ Sign in, open the vacancy, click the site's own **Apply** so the form is on the 
 3. **Populate.** The extension snapshots the form, asks the board to draft it (one Gemini call, on
    the `applications.draft` queue) and writes the answers into the page: the recruiter's questions,
    the cover letter into the message field, the tailored PDF into the resume field. What it could
-   not answer is listed for you.
+   not answer is listed for you. The status line counts through the flow's own steps (*snapshotting
+   the form* -> *sending the snapshot* -> *waiting for a worker pod* / *drafting with Gemini* ->
+   *fetching the documents* -> *filling the form*), seconds included, so a cold queue pod reads as
+   waiting rather than as a hang.
 4. **Read the report, then submit the site's own form.** The extension never submits anything.
 
 It says no, on purpose, when: the vacancy is not on the board yet (scrape and tailor it first), no

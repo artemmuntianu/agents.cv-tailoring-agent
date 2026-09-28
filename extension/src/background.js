@@ -208,6 +208,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } else if (message && message.type === 'storeFormPick') {
         // The page's form filler picked something: remember it per host.
         sendResponse(await formWorker.storeFormPick(message.kind, message.picked, tabUrl));
+      } else if (message && message.type === 'phase') {
+        // The popup's ticker while a fill runs: one step, and how long the run has taken.
+        sendResponse({ ok: true, phase: formWorker.phase() });
       } else if (message && message.type === 'formRecipe') {
         const all = await formWorker.recipes();
         sendResponse({ ok: true, recipe: all[formWorker.hostOf(tabUrl)] || null });

@@ -21,6 +21,32 @@ const POLL_DEADLINE_MS = 120000;
 const DEFAULT_GATEWAY = 'http://localhost:4321';
 
 export function createFormWorker({ settings, cardStatus }) {
+  // -- progress --------------------------------------------------------------- //
+
+  /**
+   * Where the current run is. The popup polls this through `background.js`
+   * (`{ type: 'phase' }`), because one click covers a KEDA cold start, a Gemini call and two
+   * document fetches - and one frozen label for a minute is indistinguishable from a hang.
+   */
+  let phase = { step: 'idle', startedAt: 0, at: 0, status: '', error: '' };
+
+  function setPhase(step, extra = {}) {
+    phase = { ...phase, ...extra, step, at: Date.now() };
+  }
+
+  function beginRun() {
+    phase = { step: 'snapshot', startedAt: Date.now(), at: Date.now(), status: '', error: '' };
+  }
+
+  function endRun(result) {
+    const ok = Boolean(result && result.ok);
+    setPhase(ok ? 'done' : 'failed', {
+      status: '',
+      error: ok ? '' : (result && result.error) || '',
+    });
+    return result;
+  }
+
   function hostOf(url) {
     try {
       return new URL(String(url || '')).hostname.toLowerCase();
@@ -195,16 +221,32 @@ export function createFormWorker({ settings, cardStatus }) {
           error: 'the form changed while the draft was being written - run Populate again',
         };
       }
+      setPhase('drafting', { status: body.status });
       await sleep(POLL_INTERVAL_MS);
     }
     return { ok: false, error: 'the draft is taking longer than expected - check the board' };
   }
 
   /**
+   * One Populate click: the flow below, plus the progress record the popup ticks through.
+   *
+   * A throw is turned into the `{ ok: false, error }` shape the popup already handles, so a crash
+   * is *reported* - and the phase ends as `failed` - instead of leaving the ticker mid-step.
+   */
+  async function populate(tabId) {
+    beginRun();
+    try {
+      return endRun(await runPopulate(tabId));
+    } catch (error) {
+      return endRun({ ok: false, error: error && error.message ? error.message : String(error) });
+    }
+  }
+
+  /**
    * The whole Populate flow. It returns the page's own report (what was written, what was left),
    * plus where it came from: the card, the snapshot hash and the draft's status.
    */
-  async function populate(tabId) {
+  async function runPopulate(tabId) {
     const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
     const url = (tab && tab.url) || '';
     const host = hostOf(url);
@@ -228,6 +270,7 @@ export function createFormWorker({ settings, cardStatus }) {
       return { ok: false, error: 'the picked element has no fillable fields in it' };
     }
 
+    setPhase('board');
     const externalId = externalIdFromUrl(url);
     if (!externalId) {
       return {
@@ -256,15 +299,18 @@ export function createFormWorker({ settings, cardStatus }) {
     if (!started.ok) return started;
     const schemaHash = started.body.schemaHash;
 
+    setPhase('drafting', { status: started.body.status || 'none' });
     const planned = await waitForPlan(jobId, schemaHash);
     if (!planned.ok) return planned;
     const plan = planned.body.plan || { fields: [] };
     const pins = recipe.pins || {};
 
+    setPhase('documents');
     const need = neededDocuments(plan.fields || [], pins);
     const cover = need.cover ? await fetchCoverLetter(jobId) : null;
     const file = need.file ? await fetchResumePdf(jobId) : null;
 
+    setPhase('applying');
     const applied = await formMessage(tabId, {
       action: 'apply',
       instructions: {
@@ -311,6 +357,8 @@ export function createFormWorker({ settings, cardStatus }) {
 
   return {
     populate,
+    /** The popup's ticker: which step the flow is in, and since when. */
+    phase: () => ({ ...phase }),
     storeFormPick,
     recipes,
     clearRecipe,

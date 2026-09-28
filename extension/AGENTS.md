@@ -46,6 +46,13 @@ TomSelect's synthetic search box stays out); the snapshot is hashed by the board
 the same rendered form costs no Gemini call while a changed form (or newly saved candidate facts)
 re-drafts.
 
+**One click is not one step.** A fill can take a minute - KEDA scaling a queue pod from zero, one
+Gemini call, two document fetches - so the popup's status follows the run instead of claiming to be
+snapshotting for all of it: `form/worker.js` records the step it is in, the popup polls it once a
+second (`{ type: 'phase' }` -> `{ ok, phase }`) and `src/form/phases.js` words it, with the run's
+elapsed seconds appended. While the draft is being written the label follows the **board's own**
+`queued`/`running` status, which is the half the extension cannot see.
+
 ## Load it (unpacked, no build step)
 
 There is deliberately no bundler and no `package.json`: three small files Chrome can
@@ -80,8 +87,9 @@ for `fetch` from a service worker without it).
 | `src/inject.js` | The listing-page content script: the per-card `Scrape`/`Scraped` buttons. **Classic script** (no imports/exports) |
 | `src/formfill.js` | The form filler (a second `content_scripts` entry, also classic): the HITL picker, the deterministic annotator, the snapshot, the applier and the per-site adapters |
 | `src/form/plan.js` | Pure plan plumbing: the pins overriding the model, which documents a plan needs, and the popup's report |
-| `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply |
-| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `profileGet`, `profilePut`) |
+| `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply, recording the phase of each step |
+| `src/form/phases.js` | The progress vocabulary: the step list and the one-line label the popup ticks through while a fill runs (pure, unit tested) |
+| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `profileGet`, `profilePut`, `phase`) |
 | `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome |
 | `README.md` | The same load-and-use steps as above, for an operator |
 
@@ -163,7 +171,8 @@ deliberate choice, not an oversight: jsdom has no `DataTransfer`, so `input.file
 asserted in CI, and no `elementFromPoint`, which is why the picker reads `event.target` and the file
 assignment sits behind `assignFile()`. What *is* checked automatically: the import graph
 (`npx esbuild ../extension/src/*.js ../extension/src/form/*.js --bundle`), the syntax of the two
-classic scripts (`node --check`), and the pure helpers (`form/plan.js`).
+classic scripts (`node --check`), and the pure helpers (`form/plan.js`, `form/phases.js` -
+the progress wording has its own vitest, `backoffice/src/lib/form-phase.test.ts`).
 
 The scraper and the injected buttons run where the JS tests already live - the backoffice's
 vitest, with jsdom:

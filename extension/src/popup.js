@@ -1,4 +1,5 @@
 import { extractVacancies } from './extract.js';
+import { phaseLabel } from './form/phases.js';
 import { describeReport } from './form/plan.js';
 
 /**
@@ -157,13 +158,28 @@ async function pick(kind, buttonId) {
   }
 }
 
-/** The whole fill: snapshot -> board draft -> apply. */
+/**
+ * The whole fill: snapshot -> board draft -> apply.
+ *
+ * The status area follows the flow's **own** phases (a `{ type: 'phase' }` poll every second,
+ * worded by `form/phases.js`): a fill is a KEDA cold start plus a Gemini call plus two document
+ * fetches, and claiming to be "snapshotting" for all of it reads like a hang. The ticker stops the
+ * moment the flow returns, so the summary below is the last thing said.
+ */
 async function populate() {
   $('populate').disabled = true;
   report('');
   status('Snapshotting the form…');
+
+  let running = true;
+  const ticker = setInterval(async () => {
+    const response = await send({ type: 'phase' });
+    if (running && response && response.ok) status(phaseLabel(response.phase));
+  }, 1000);
+
   try {
     const response = await send({ type: 'populate' });
+    running = false;
     if (!response.ok) {
       report((response && response.error) || 'the fill did not run', 'error');
       return status('Populate failed.', 'error');
@@ -179,6 +195,8 @@ async function populate() {
     report(error && error.message ? error.message : String(error), 'error');
     status('Populate failed.', 'error');
   } finally {
+    running = false;
+    clearInterval(ticker);
     $('populate').disabled = false;
   }
 }
