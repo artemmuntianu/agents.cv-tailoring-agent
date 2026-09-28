@@ -116,3 +116,17 @@ def test_the_ledger_lists_the_newest_run_first():
             first = store.start_process_run(process_runs.FEED_PARSER)
             second = store.start_process_run(process_runs.FEED_PARSER)
             assert [run["id"] for run in store.list_process_runs()] == [second, first]
+
+
+def test_a_run_records_what_triggered_it():
+    """The trigger is the caller's word - a CronJob slot, a hand-run, or the intake's startup
+    hook - and the ledger passes it through instead of deciding it (`utils/db.py` owns the
+    vocabulary)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            with process_runs.record(process_runs.FEED_PARSER, trigger="startup") as ledger:
+                ledger.note(new_cards=1)
+
+            (run,) = db_module.get_db().list_process_runs()
+            assert run["trigger"] == "startup"
+            assert run["summary"] == {"new_cards": 1}

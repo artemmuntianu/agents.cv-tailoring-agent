@@ -930,8 +930,12 @@ def test_the_process_ledger_round_trips_with_its_counters(store):
     store.finish_process_run(first, status="ok", summary={"new_cards": 3, "notified": 3})
     second = store.start_process_run("auto-archiver", trigger="manual")
     store.finish_process_run(second, status="failed", summary={"refused": 1}, error="boom")
+    # The startup trigger: the intake's deploy-time hook run (`charts/cv-tailoring-scout`),
+    # recorded with the same vocabulary a CronJob slot uses.
+    third = store.start_process_run("feed-parser", trigger="startup")
+    store.finish_process_run(third, status="ok", summary={"new_cards": 0})
 
-    assert [run["id"] for run in store.list_process_runs()] == [second, first], "newest first"
+    assert [run["id"] for run in store.list_process_runs()] == [third, second, first], "newest first"
 
     runs = {run["id"]: run for run in store.list_process_runs()}
     assert runs[first]["process"] == "feed-parser"
@@ -943,6 +947,8 @@ def test_the_process_ledger_round_trips_with_its_counters(store):
     assert runs[second]["trigger"] == "manual"
     assert runs[second]["summary"] == {"refused": 1}
     assert runs[second]["error"] == "boom"
+    assert runs[third]["trigger"] == "startup"
+    assert runs[third]["status"] == "ok"
 
     # The slug shape and the five statuses are the window's vocabulary, not free text.
     rejected = [

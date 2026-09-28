@@ -56,6 +56,13 @@ Only KEDA comes from an upstream chart. The broker is ours, on the official
 - **A missed CronJob slot still runs.** `startingDeadlineSeconds` is the whole mechanism (there is
   no in-app timer and no "is a run due?" logic): the jobs are idempotent, so a late run is
   harmless while a silently skipped day would not be.
+- **"Run this at startup" is a Helm hook, not a second workload.** `cv-tailoring-scout` renders one
+  extra `Job` (`templates/startup-job.yaml`) annotated `post-install,post-upgrade` with
+  `--trigger startup`, from the *same* pod template as the CronJob (`_helpers.tpl`), so the two
+  triggers cannot drift; `hook-delete-policy: before-hook-creation,hook-succeeded` is what lets the
+  next deploy re-create it, and it renders only when the job is actually configured
+  (`config.userId`), because a hook that cannot succeed would fail the install. `local-deploy.ps1`
+  holds it back in its CRDs-only phase 1 so one deploy runs the intake once.
 - **`cv-tailoring-worker/templates/configmap.yaml` is the single values -> env
   mapping.** Adding a knob means `config.py` (+ `.env.example`), then
   `values.yaml`, `values.schema.json` and `configmap.yaml` - and a removed key

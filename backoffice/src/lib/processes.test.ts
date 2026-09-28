@@ -10,6 +10,7 @@ import {
   runDurationMs,
   runStatus,
   summarizeRuns,
+  triggerLabel,
 } from './processes';
 import type { ProcessRun } from './types';
 
@@ -46,6 +47,14 @@ describe('the process vocabulary', () => {
       expect(runStatus(status).chip).toContain('ring-');
     }
     expect(runStatus('lost').label).toBe('lost');
+  });
+
+  it('names what started a run, including the deploy hook', () => {
+    expect(triggerLabel(run())).toBe('schedule');
+    expect(triggerLabel(run({ trigger: 'manual' }))).toBe('manual');
+    expect(triggerLabel(run({ trigger: 'startup' }))).toBe('startup');
+    // A `--dry-run` writes no ledger row, so the marker comes from the run's own counters.
+    expect(triggerLabel(run({ summary: { dry_run: true } }))).toBe('dry run');
   });
 });
 

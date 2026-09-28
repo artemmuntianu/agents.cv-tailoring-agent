@@ -53,7 +53,7 @@ can show progress and hand over the files.
 extension (Chrome MV3) --batch--> backoffice gateway --> cards in "Scraped"
                     (validates, creates a card per vacancy, queues nothing)   |
 scout (CronJob, python -m scout) --feeds--> one card per new vacancy --------+
-                    (the same intake, on a schedule; Telegram per new card)  |
+                    (on a schedule and once per deploy; Telegram per card)   |
 archiver (CronJob, python -m archiver) --> refuses the "Applied" cards nobody
                     touched for 10 days, in place; both jobs log their runs  |
                                                                              |  the operator drags

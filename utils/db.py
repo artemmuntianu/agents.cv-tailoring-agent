@@ -606,8 +606,11 @@ create table if not exists process_runs (
     -- The job's slug (`feed-parser`, `auto-archiver`) - the same shape rule as
     -- `resumes.source`, because it is both queried and shown.
     process     text not null check (process ~ '^[a-z0-9][a-z0-9-]{1,31}$'),
-    -- A CronJob slot, or a human `--force` run.
-    trigger     text not null default 'schedule' check (trigger in ('schedule', 'manual')),
+    -- A CronJob slot, a human `--force` run, or the intake's startup hook
+    -- (`charts/cv-tailoring-scout` runs one at install/upgrade time). Code + CHECK, like the
+    -- slugs: a job's `--trigger` is what writes it.
+    trigger     text not null default 'schedule'
+                check (trigger in ('schedule', 'manual', 'startup')),
     started_at  timestamptz not null default now(),
     finished_at timestamptz,
     status      text not null default 'running'
@@ -619,6 +622,22 @@ create table if not exists process_runs (
 );
 
 create index if not exists process_runs_process_started_idx on process_runs (process, started_at desc);
+
+-- A database created before the startup trigger still carries the two-value CHECK from the
+-- `create table` above (which only applies to a table this DDL creates). Widen it once,
+-- guard-first, so re-running this is a no-op. `process_runs_trigger_check` is the name
+-- Postgres derives from the column-level constraint.
+do $ddl$
+begin
+    if exists (select 1 from pg_constraint
+                where conname = 'process_runs_trigger_check'
+                  and pg_get_constraintdef(oid) not like '%startup%') then
+        alter table process_runs drop constraint process_runs_trigger_check;
+        alter table process_runs
+            add constraint process_runs_trigger_check
+            check (trigger in ('schedule', 'manual', 'startup'));
+    end if;
+end $ddl$;
 
 -- Shape guard for the opaque job_id (characters that are safe in logs, storage
 -- keys and URLs). Added idempotently so existing tables get it too.

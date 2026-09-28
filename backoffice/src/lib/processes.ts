@@ -7,7 +7,9 @@ import type { ProcessRun } from './types';
  * The slugs are the jobs' own (`utils/process_runs.py`, enforced by the `process_runs`
  * CHECK), so a new job adds a slug there and a label here - never a column. An unknown slug
  * still renders (the row is data, the label is presentation), which is what keeps the window
- * honest when a job is deployed before its label is.
+ * honest when a job is deployed before its label is. The same goes for a run's `trigger`: the
+ * words are the database's (`schedule`, `manual`, `startup`), so an unknown one is shown as it
+ * is instead of being mistaken for a scheduled slot.
  */
 
 export const PROCESS_LABELS: Record<string, { label: string; hint: string }> = {
@@ -72,6 +74,16 @@ export function describeRun(run: ProcessRun): string {
     .map(([key, value]) => `${humanizeKey(key)}: ${formatValue(value)}`);
   if (summary.dry_run === true) parts.push('dry run');
   return parts.length > 0 ? parts.join(' · ') : 'no counters reported';
+}
+
+/**
+ * What started this row: `schedule` (a CronJob slot), `manual` (a hand-run), `startup` (the
+ * deploy's hook Job), or `dry run` - a `--dry-run` writes no ledger row at all, so the marker is
+ * the operator's own, read from the counters the run reported.
+ */
+export function triggerLabel(run: ProcessRun): string {
+  if (run.summary?.dry_run === true) return 'dry run';
+  return run.trigger;
 }
 
 /** `12.4s`, `3m 04s`, `1h 12m` - how long a run took, or how long it has been running. */

@@ -81,6 +81,13 @@ def parse_args(argv=None):
         default=None,
         help="comma-separated feed URLs to use instead of SCOUT_FEEDS",
     )
+    parser.add_argument(
+        "--trigger",
+        choices=("schedule", "manual", "startup"),
+        default="schedule",
+        help="what the ledger records this run as (a CronJob slot, a hand-run, or the deploy's "
+        "startup hook)",
+    )
     return parser.parse_args(argv)
 
 
@@ -106,7 +113,11 @@ def main(argv=None) -> int:
     # The run ledger surrounds everything after the argument parsing - preflight included: a
     # run that failed before it could read a feed is exactly what the board's Processes
     # window has to show. `enabled=False` for a dry run, which must write nothing at all.
-    with process_runs.record(process_runs.FEED_PARSER, enabled=not args.dry_run) as ledger:
+    # `--trigger` is how the two k8s triggers of the one command stay tellable apart: a CronJob
+    # slot, and the startup hook that runs the same intake once per install/upgrade.
+    with process_runs.record(
+        process_runs.FEED_PARSER, trigger=args.trigger, enabled=not args.dry_run
+    ) as ledger:
         return _run(args, ledger)
 
 

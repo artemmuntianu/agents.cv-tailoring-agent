@@ -143,6 +143,11 @@ if ($scaledObjectCrdPresent) {
     Ok 'KEDA CRDs already in the cluster - single-step install'
 } else {
     Say '  first install: phase 1/2 installs the platform and the KEDA CRDs (no worker yet)'
+    # The scout's startup hook is held back here on purpose: this phase exists only to put the
+    # CRDs in the cluster, and phase 2 upgrades the same release right away - running the intake
+    # in both would fetch the feeds twice within a minute (harmless, thanks to the dedupe, but
+    # two ledger rows for one deploy). Phase 2 leaves the value at its default, so the run
+    # happens exactly once.
     & helm upgrade --install $Release charts/cv-tailoring-platform `
         --namespace $Namespace --create-namespace `
         -f $Values `
@@ -150,6 +155,7 @@ if ($scaledObjectCrdPresent) {
         --set "cv-tailoring-worker.image.tag=$imageTag" `
         --set cv-tailoring-worker.image.pullPolicy=IfNotPresent `
         --set cv-tailoring-worker.enabled=false `
+        --set cv-tailoring-scout.startup.enabled=false `
         --wait --timeout 10m
     if ($LASTEXITCODE -ne 0) { Fail 'helm install failed (phase 1: platform + CRDs) - inspect with: kubectl get pods' }
     Ok 'KEDA CRDs installed; phase 2/2 adds the worker'

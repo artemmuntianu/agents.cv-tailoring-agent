@@ -30,6 +30,17 @@ successfulJobsHistoryLimit: 1
 failedJobsHistoryLimit: 3
 restartPolicy: OnFailure
 
+# The startup trigger: one run as part of `helm install`/`helm upgrade`, so a deploy does not
+# wait up to half an hour for the first CronJob slot. It is the same Job as a slot - the same
+# pod, one `--trigger startup` in the ledger - created as a Helm hook, so a run that fails fails
+# the release (`README.md` says why that is the honest answer). Turn it off with
+# `--set cv-tailoring-scout.startup.enabled=false`; it is not rendered at all while
+# `config.userId` is empty, because the preflight would refuse to run.
+startup:
+  enabled: true
+  hook: post-install,post-upgrade
+  hookDeletePolicy: before-hook-creation,hook-succeeded
+
 # The worker's Secret: DATABASE_URL, plus SCOUT_TELEGRAM_TOKEN / SCOUT_TELEGRAM_CHAT_ID.
 existingSecret: cv-tailoring-secrets
 

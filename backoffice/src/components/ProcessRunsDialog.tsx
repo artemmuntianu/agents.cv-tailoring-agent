@@ -8,6 +8,7 @@ import {
   runDurationMs,
   runStatus,
   summarizeRuns,
+  triggerLabel,
 } from '../lib/processes';
 import type { ProcessRun } from '../lib/types';
 
@@ -19,19 +20,13 @@ interface ProcessRunsDialogProps {
   onClose: () => void;
 }
 
-/** `schedule`, `manual`, `dry run` - what started this row. */
-function triggerLabel(run: ProcessRun): string {
-  if (run.summary?.dry_run === true) return 'dry run';
-  return run.trigger === 'manual' ? 'manual' : 'schedule';
-}
-
 /**
  * The navbar's **Processes** window: the run history of the internal jobs in a table.
  *
- * The rows are the jobs' own (`utils/process_runs.py`): the RSS intake (`feed-parser`, twice an
- * hour) and the inactivity sweep (`auto-archiver`, daily) open a row when they start and close
- * it with their counters - so a run that found nothing is visible, and a row still `running`
- * after a day means the pod died and the next run retired it as `aborted`.
+ * The rows are the jobs' own (`utils/process_runs.py`): the RSS intake (`feed-parser`, at deploy
+ * time and then twice an hour) and the inactivity sweep (`auto-archiver`, daily) open a row when
+ * they start and close it with their counters - so a run that found nothing is visible, and a row
+ * still `running` after a day means the pod died and the next run retired it as `aborted`.
  *
  * The window has no per-job knowledge: a counter a job starts reporting shows up by itself, and
  * a slug without a label still renders (the label is presentation, the row is data). It closes
@@ -98,8 +93,8 @@ export default function ProcessRunsDialog({
         <div className="min-h-0 flex-1 overflow-auto">
           {runs.length === 0 && !loading && !error ? (
             <p className="px-5 py-6 text-sm text-slate-500">
-              No runs recorded yet. The rows appear as the scheduled jobs run: the feed parser
-              twice an hour, the auto-archiver once a day.
+              No runs recorded yet. The rows appear as the jobs run: the feed parser at deploy
+              time and then twice an hour, the auto-archiver once a day.
             </p>
           ) : (
             <table className="w-full border-collapse text-left text-sm">

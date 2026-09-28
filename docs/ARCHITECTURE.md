@@ -62,7 +62,7 @@ of the same Secret, so the password still exists once.
 | ③ Autoscaler | `keda-operator`, `keda-operator-metrics-apiserver`, `keda-admission-webhooks` | `kedacore/keda` subchart (the only upstream chart) |
 | ④ State | `Deploy/postgres` + `Svc/postgres` 5432 + `PVC/postgres-data` + `Secret/local-postgres` | `charts/cv-tailoring-platform/templates/local-postgres.yaml` |
 | ⑤ Artifacts | `PVC/cv-artifacts` (2 Gi, hostpath, `keep`) + `Deploy/cv-files` | `charts/cv-tailoring-platform/templates/storage.yaml` |
-| Scheduled jobs | `CronJob/cv-tailoring-cv-tailoring-scout` (every 30 min, 07:00-23:30) and `CronJob/cv-tailoring-cv-tailoring-archiver` (daily 09:00, `startingDeadlineSeconds: 86400`) - both on the worker's image and Secret, outside the queue | `charts/cv-tailoring-scout`, `charts/cv-tailoring-archiver` |
+| Scheduled jobs | `CronJob/cv-tailoring-cv-tailoring-scout` (every 30 min, 07:00-23:30) and `CronJob/cv-tailoring-cv-tailoring-archiver` (daily 09:00, `startingDeadlineSeconds: 86400`) - both on the worker's image and Secret, outside the queue; `Job/cv-tailoring-cv-tailoring-scout-startup` is the same intake once per **deploy** (a `post-install,post-upgrade` Helm hook, `--trigger startup`) | `charts/cv-tailoring-scout`, `charts/cv-tailoring-archiver` |
 
 The producer in the source design is Chrome extension → Vercel gateway → AMQP. Locally
 scraping only *creates cards*: `POST /api/vacancies/batch` validates the batch and inserts

@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CV Tailoring Agent - runtime architecture",
+    "output": "docs/diagrams/cv-tailoring-runtime.html",
+    "locale": "en",
+    "quality_profile": "standard",
+    "animation": "none",
+    "views": [
+      {
+        "id": "intake",
+        "label": "Intake - a vacancy becomes a card",
+        "focus": ["extension", "board", "auth_gate", "api", "postgres", "rabbitmq"],
+        "note": "Scraper and operator both pass the one authenticated gateway; nothing is generated until a card is queued."
+      },
+      {
+        "id": "tailoring",
+        "label": "Tailoring - one vacancy per message",
+        "focus": ["rabbitmq", "keda", "worker", "adapt_text", "render", "vision_check", "persist", "gemini"],
+        "note": "One message per vacancy, one container per message: the graph runs once and Gemini is called twice."
+      },
+      {
+        "id": "output",
+        "label": "Output - artifacts and status",
+        "focus": ["persist", "artifacts", "postgres", "api", "board"],
+        "note": "The PDF and DOCX land on the volume, the row keeps the paths, and the board serves the download."
+      },
+      {
+        "id": "automation",
+        "label": "Automation - around the main path",
+        "focus": ["scout", "archiver", "postgres", "telegram", "cover_worker"],
+        "note": "Two CronJobs and the on-demand cover worker touch board state only - no schedule ever queues a vacancy."
+      }
+    ]
+  },
+  "components": [
+    { "id": "extension", "type": "external", "label": "Chrome scraper", "sublabel": "listing -> batch", "tag": "extension/", "pos": [40, 180], "size": [130, 62] },
+    { "id": "board", "type": "frontend", "label": "Operator board", "sublabel": "kanban + drag", "tag": "Astro + React", "pos": [40, 350], "size": [130, 62] },
+    { "id": "auth_gate", "type": "security", "label": "Auth gate", "sublabel": "cookie / bearer", "tag": "middleware.ts", "pos": [250, 350], "size": [130, 62] },
+    { "id": "api", "type": "backend", "label": "Backoffice API", "sublabel": "batch + board API", "tag": "host-side POC", "pos": [460, 350], "size": [130, 62] },
+    { "id": "rabbitmq", "type": "messagebus", "label": "RabbitMQ", "sublabel": "resumes.generate", "tag": "rabbitmq-0", "pos": [670, 350], "size": [130, 62] },
+    { "id": "worker", "type": "backend", "label": "Worker consumer", "sublabel": "prefetch 1", "tag": "one vacancy", "pos": [880, 350], "size": [130, 62] },
+    { "id": "adapt_text", "type": "backend", "label": "adapt_text", "sublabel": "1 - Gemini edits", "tag": "no fabrication", "pos": [1090, 350], "size": [130, 62] },
+    { "id": "render", "type": "backend", "label": "render", "sublabel": "2 - DOCX -> PDF", "tag": "LibreOffice", "pos": [1300, 350], "size": [130, 62] },
+    { "id": "vision_check", "type": "backend", "label": "vision_check", "sublabel": "3 - page images", "tag": "approve / revise", "pos": [1510, 350], "size": [130, 62] },
+    { "id": "persist", "type": "backend", "label": "persist", "sublabel": "4 - upload + row", "tag": "ack follows", "pos": [1720, 350], "size": [130, 62] },
+    { "id": "cover_worker", "type": "backend", "label": "Cover worker", "sublabel": "cover.py", "tag": "resumes.cover", "pos": [670, 180], "size": [130, 62] },
+    { "id": "keda", "type": "cloud", "label": "KEDA ScaledObject", "sublabel": "queue depth", "tag": "0 -> N -> 0", "pos": [880, 180], "size": [130, 62] },
+    { "id": "gemini", "type": "external", "label": "Google Gemini", "sublabel": "text + vision", "tag": "only outbound", "pos": [1090, 50], "size": [130, 62] },
+    { "id": "postgres", "type": "database", "label": "PostgreSQL", "sublabel": "resumes + board", "tag": "SCHEMA_SQL", "pos": [670, 500], "size": [130, 62] },
+    { "id": "artifacts", "type": "database", "label": "cv-artifacts PVC", "sublabel": "PDF + DOCX on /data", "tag": "keep policy", "pos": [1720, 500], "size": [130, 62] },
+    { "id": "scout", "type": "backend", "label": "Scout CronJob", "sublabel": "RSS -> cards", "tag": "0,30 7-23 * * *", "pos": [670, 700], "size": [130, 62] },
+    { "id": "archiver", "type": "backend", "label": "Archiver CronJob", "sublabel": "inactivity sweep", "tag": "0 9 * * *", "pos": [880, 700], "size": [130, 62] },
+    { "id": "telegram", "type": "external", "label": "Telegram Bot API", "sublabel": "new card notices", "tag": "scout only", "pos": [40, 700], "size": [130, 62] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "Untrusted client", "wraps": ["extension", "board"], "pad": 14 },
+    { "kind": "security-group", "label": "Backoffice host - outside the cluster", "wraps": ["auth_gate", "api"], "pad": 14 },
+    { "kind": "region", "label": "Local Kubernetes cluster (Docker Desktop)", "wraps": ["rabbitmq", "cover_worker", "keda", "worker", "adapt_text", "render", "vision_check", "persist", "postgres", "artifacts", "scout", "archiver"], "pad": 20 },
+    { "kind": "security-group", "label": "Worker pod", "wraps": ["worker", "adapt_text", "render", "vision_check", "persist"], "pad": 12 }
+  ],
+  "connections": [
+    { "id": "scrape-batch", "from": "extension", "to": "auth_gate", "label": "batch + status", "variant": "emphasis", "fromSide": "left", "toSide": "bottom", "via": [[20, 211], [20, 470], [315, 470]], "labelAt": [260, 470] },
+    { "id": "operator-drag", "from": "board", "to": "auth_gate", "label": "session", "variant": "emphasis" },
+    { "id": "session-gate", "from": "auth_gate", "to": "api", "label": "tenant", "variant": "security" },
+    { "id": "publish", "from": "api", "to": "rabbitmq", "label": "publish", "variant": "emphasis" },
+    { "id": "cards", "from": "api", "to": "postgres", "label": "cards + state", "variant": "emphasis", "fromSide": "bottom", "toSide": "left", "via": [[525, 531]] },
+    { "id": "deliver", "from": "rabbitmq", "to": "worker", "label": "consume", "variant": "emphasis" },
+    { "id": "replicas", "from": "keda", "to": "worker", "label": "scale 0..N", "variant": "dashed", "labelAt": [945, 296] },
+    { "id": "cover-consume", "from": "rabbitmq", "to": "cover_worker", "label": "resumes.cover", "variant": "dashed" },
+    { "id": "graph-step-1", "from": "worker", "to": "adapt_text", "variant": "emphasis" },
+    { "id": "graph-step-2", "from": "adapt_text", "to": "render", "variant": "emphasis" },
+    { "id": "graph-step-3", "from": "render", "to": "vision_check", "label": "PNGs", "variant": "emphasis", "labelAt": [1435, 336] },
+    { "id": "graph-step-4", "from": "vision_check", "to": "persist", "label": "verdict", "variant": "emphasis" },
+    { "id": "adapt-gemini", "from": "adapt_text", "to": "gemini", "label": "text edits", "variant": "security" },
+    { "id": "vision-gemini", "from": "vision_check", "to": "gemini", "label": "page images", "variant": "security", "fromSide": "left", "toSide": "right", "via": [[1475, 381], [1475, 81]] },
+    { "id": "cover-gemini", "from": "cover_worker", "to": "gemini", "label": "cover letter", "variant": "security", "fromSide": "left", "toSide": "left", "via": [[640, 211], [640, 81]] },
+    { "id": "upload", "from": "persist", "to": "artifacts", "label": "PDF + DOCX", "variant": "emphasis", "labelAt": [1785, 456] },
+    { "id": "status", "from": "persist", "to": "postgres", "label": "final status", "variant": "dashed", "fromSide": "right", "toSide": "top", "via": [[1895, 381], [1895, 430], [735, 430]] },
+    { "id": "scout-cards", "from": "scout", "to": "postgres", "label": "new cards", "variant": "dashed", "labelAt": [735, 640] },
+    { "id": "scout-notify", "from": "scout", "to": "telegram", "label": "1 msg / card", "variant": "dashed" },
+    { "id": "archiver-refuse", "from": "archiver", "to": "postgres", "label": "refuse stale", "variant": "dashed", "fromSide": "left", "toSide": "right", "via": [[845, 731], [845, 531]] }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Trust boundaries",
+      "items": [
+        "The operator workstation is untrusted: only a signed session crosses inward, and the scraper carries a JWT",
+        "The backoffice host runs outside the cluster - the cluster accepts the gateway only as a queue publisher",
+        "Gemini is the only LLM call, and Telegram the only other outbound request"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Queue contract",
+      "items": [
+        "resumes.generate and resumes.cover each own a DLX/DLQ and a ScaledObject; prefetch_count = 1",
+        "The topology is declared three times - chart Secret, utils/messaging.py, backoffice queue.ts - and a mismatch makes RabbitMQ answer 406",
+        "Retries climb RETRY_LADDER_SECONDS, and the message is acked only after persist returns"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Graph control flow",
+      "items": [
+        "adapt_text short-circuits to persist when nothing matched in the DOCX",
+        "vision_check loops back to adapt_text until approved or MAX_REVISIONS is spent",
+        "persist is the mandatory terminal node, and the ack follows it"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Artifacts and the master CV",
+      "items": [
+        "/data holds cv_data.json and input/cv.docx, which must stay verbatim in sync - one whitespace mismatch fails the task",
+        "The stored paths are served through GET /api/artifacts/<job_id>?format=docx",
+        "The cv-files helper pod keeps the volume reachable while the worker sits at zero replicas"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Scheduled automation",
+      "items": [
+        "Scout runs 0,30 7-23 * * * and writes Scraped cards plus one Telegram message - never a queue message, never Gemini",
+        "The archiver refuses Applied cards left untouched for 10 days and deletes nothing",
+        "Both append one process_runs row per run; a dry run writes nothing"
+      ]
+    }
+  ]
+}

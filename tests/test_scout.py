@@ -6,6 +6,8 @@ Hermetic - the feed is a fixture, the store is the file backend and Telegram is 
 import tempfile
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from scout import dou, feeds, run, telegram
 from scout import store as scout_store
 from tests.helpers import isolated_config
@@ -177,6 +179,33 @@ def test_a_run_records_itself_in_the_process_ledger(monkeypatch):
                 "created_cards": 2,
                 "notified": 0,
             }
+
+
+def test_the_startup_run_is_recorded_as_its_own_trigger(monkeypatch):
+    """`--trigger startup` is the deploy's run (`charts/cv-tailoring-scout` posts the same Job as
+    a Helm hook): the window has to be able to tell the boot run from a CronJob slot."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            monkeypatch.setattr(feeds, "fetch_all", lambda urls=None: [("fixture", FEED)])
+            monkeypatch.setattr(run.config, "SCOUT_USER_ID", "scout-user")
+            monkeypatch.setattr(run.config, "SCOUT_NOTIFY", "none")
+
+            assert run.main(["--trigger", "startup"]) == 0
+
+            (row,) = db_module.get_db().list_process_runs()
+            assert row["trigger"] == "startup"
+            assert row["status"] == "ok"
+            assert row["summary"]["created_cards"] == 2
+
+
+def test_the_trigger_vocabulary_is_the_databases():
+    """`--trigger` and the `process_runs.trigger` CHECK (`utils/db.py`) are one vocabulary: a
+    word the column rejects must not be accepted here, and the CronJob's own command - no flag -
+    stays a scheduled slot."""
+    with pytest.raises(SystemExit):
+        run.parse_args(["--trigger", "cron"])
+    assert run.parse_args(["--trigger", "startup"]).trigger == "startup"
+    assert run.parse_args([]).trigger == "schedule"
 
 
 def test_a_run_without_a_feed_is_an_error_not_an_empty_week(monkeypatch):

@@ -49,6 +49,7 @@ the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
                   resume_cover_letter (text) + the master cv_data.json
 
 the scout (CronJob, twice an hour)  --> resumes rows (cards in the board's "Scraped")
+        (+ once per deploy: the startup hook Job, `chart: charts/cv-tailoring-scout`)
 the archiver (CronJob, once a day)  --> resume_board + resume_history (the Applied cards
                                        nobody touched for 10 days are refused *in place*)
           both write one row per run to process_runs -> the board's "Processes" window
@@ -88,7 +89,8 @@ documentation      docs/ · README.md
 backoffice         backoffice/  (Astro+React kanban UI + the authenticated batch gateway;
                                  shares the worker's Postgres)
 scraper            extension/   (Chrome MV3 scraper -> backoffice gateway -> queue)
-scheduled jobs     scout/ · archiver/   (CronJobs on the worker's image; each records its run
+scheduled jobs     scout/ · archiver/   (CronJobs on the worker's image; the scout's chart also runs
+                                 it once per deploy as a Helm hook Job; each records its run
                                  in process_runs - `utils/process_runs.py` is the ledger)
 automation         .github/workflows/
 ```
@@ -280,8 +282,14 @@ automation         .github/workflows/
     (`utils/process_runs.py`: `feed-parser`, `auto-archiver`), which is what the board's
     **Processes** window reads - a run that changed nothing is visible, a killed run stays
     `running` until the next run of that job retires it as `aborted`, and a `--dry-run` writes
-    no row at all. CronJob slots are the only timer; `startingDeadlineSeconds` is what makes a
-    slot missed while the cluster was down run as soon as it is back.
+    no row at all. A row also says *what* started the run - the column's CHECK is
+    `schedule | manual | startup` - and the intake is the one job that uses the third: its
+    chart (`charts/cv-tailoring-scout`) posts the same Job once as a Helm
+    `post-install,post-upgrade` hook (`python -m scout --trigger startup`), so a deploy runs
+    the intake instead of waiting up to half an hour for a slot, and a startup run that fails
+    fails the release (the run is idempotent, so the next deploy or slot is free to try
+    again). CronJob slots are the timer besides that hook; `startingDeadlineSeconds` is what
+    makes a slot missed while the cluster was down run as soon as it is back.
 
 28. **The card's detail fields are board state, and editing one is activity.** The
     `recruiter`, `salary_offered`, `salary_desired` and `communication_channels` columns on

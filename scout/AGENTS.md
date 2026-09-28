@@ -9,7 +9,9 @@ Read `CONSTITUTION.md` first (invariants 16, 17, 23, 25); this file is the layer
 
 ```sh
 python -m scout --dry-run     # fetch, parse, print what would be created, write nothing
-python -m scout               # the CronJob's command
+python -m scout               # the CronJob's command (records `trigger: schedule`)
+python -m scout --trigger startup   # what the deploy's startup hook Job runs
+                              # (`charts/cv-tailoring-scout`, `post-install,post-upgrade`)
 python -m scout --feeds "https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect"
 make scout-dry-run            # the dry run with DB_BACKEND/DATABASE_SSLMODE set
 ```
@@ -41,7 +43,10 @@ counters - `feeds`, `feeds_ok`, `parsed`, `new_cards`, `created_cards`, `notifie
 the board's **Processes** window shows. A dry run writes **no** row at all; a preflight failure or
 "no feed answered" is recorded as `failed` like any other outcome; and a run whose pod died is
 retired as `aborted` by the next run (`PROCESS_RUN_STALE_HOURS`). The ledger never decides whether
-the intake runs - the CronJob slot does - it only records what happened.
+the intake runs - the CronJob slot, a hand-run (`--trigger manual`) or the deploy's startup hook
+(`--trigger startup`) do - it only records what happened, and *which* of them it was: the column's
+CHECK is `schedule | manual | startup` (`utils/db.py`), so a new trigger is a migration and a word
+the CLI accepts, never a free-text value.
 
 ## What it does NOT do (on purpose)
 

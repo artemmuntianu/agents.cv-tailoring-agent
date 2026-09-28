@@ -25,7 +25,7 @@ live, so no agent has to re-derive them.
 - **`scout/AGENTS.md`** - the scheduled RSS intake (`python -m scout`): the feed contract, the board-scoped dedupe, the Telegram message, and what it deliberately never does (no Gemini, no queue message).
 - **`archiver/AGENTS.md`** - the scheduled housekeeping (`python -m archiver`): the inactivity sweep that refuses the Applied cards nobody touched for 10 days, the staleness clock it uses, and the run ledger both jobs write.
 - **`tests/AGENTS.md`** - the hermetic verification layer.
-- **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what.
+- **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what; it also owns the runtime diagram spec + artifact in `docs/diagrams/`.
 - **`.github/AGENTS.md`** - CI workflows.
 - **Root entry points** (`config.py`, `worker.py`, `publisher.py`, `healthcheck.py`) are
   mapped in `CONSTITUTION.md` section 6.

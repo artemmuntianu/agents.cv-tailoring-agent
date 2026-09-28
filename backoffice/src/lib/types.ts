@@ -287,7 +287,12 @@ export interface ProcessRun {
   id: number;
   /** The job's slug (`feed-parser`, `auto-archiver`); `lib/processes.ts` labels it. */
   process: string;
-  trigger: 'schedule' | 'manual';
+  /**
+   * What started the run - the `process_runs.trigger` CHECK (`utils/db.py`): a CronJob slot
+   * (`schedule`), a hand-run (`manual`, `--trigger manual`), or the deploy's startup hook
+   * (`startup`, the intake's `post-install,post-upgrade` Job in `charts/cv-tailoring-scout`).
+   */
+  trigger: 'schedule' | 'manual' | 'startup';
   startedAt: string;
   finishedAt: string | null;
   status: ProcessRunStatus;

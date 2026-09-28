@@ -20,6 +20,8 @@ model_state.json
 !**/values.schema.json
 !.github/**/*.json
 !backoffice/**/*.json
+# The diagram source is a versioned descriptor, not runtime state.
+!docs/diagrams/*.archify.json
 
 # Backoffice (Astro): dependency and build output never enters git.
 backoffice/node_modules/

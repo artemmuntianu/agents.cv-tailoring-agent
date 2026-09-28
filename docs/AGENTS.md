@@ -17,10 +17,51 @@ and the disagreement is recorded.
 | `docs/ARCHITECTURE.md` | How the code maps onto the design documents: the verified cluster topology (pod groups, ports, scaling path), the per-task step table (a-g), scaling/storage invariants, what owns what, deliberate deviations |
 | `docs/MESSAGE_CONTRACT.md` | The queue contract: payload fields, `job_id` semantics, the ack/retry/DLQ matrix, status lifecycle, idempotency key, directory-backend behaviour |
 | `docs/RUNBOOK.md` | Operations: daily checks, queue backlog, CrashLoop, DLQ, Gemini quota, secret rotation, scaling/cost knobs, rollback |
+| `docs/diagrams/` | The runtime architecture diagram: `cv-tailoring-runtime.archify.json` is the authored source, the delivered `cv-tailoring-runtime.html` is the artifact. Dense `standard` profile by design - see the section below |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
 
 Do not restate a layer's rules here - link to `charts/AGENTS.md`, `tests/AGENTS.md` and
 the rest instead.
+
+## The runtime architecture diagram
+
+`docs/diagrams/cv-tailoring-runtime.archify.json` is the authored source (archify schema
+v1) and `docs/diagrams/cv-tailoring-runtime.html` is the delivered, self-contained
+artifact. `meta.output` must stay a *relative* path inside the repo root - the deliver
+step resolves it against the working directory, so a bare filename lands the artifact at
+the root. Regenerate with:
+
+```sh
+node <archify-skill>/bin/archify.mjs validate architecture docs/diagrams/cv-tailoring-runtime.archify.json
+node <archify-skill>/bin/archify.mjs deliver  architecture docs/diagrams/cv-tailoring-runtime.archify.json
+```
+
+It is deliberately authored as a **dense `standard` map**, not `showcase`. The 18
+components need a 1910px-wide canvas (the whole pipeline reads in one row), while the
+showcase contract requires the 9px node context line to project to at least 6px at a
+960px reader width - i.e. a viewBox of roughly 1300px or less. Folding the pipeline is
+what would meet it; the choice was to keep the single-row pipeline and accept the
+recorded finding (the single `composition/desktop-readability` warning in an otherwise
+clean receipt: 9/9 artifact checks, 0 errors).
+
+**Status 2026-09-27: the spec is clean, the HTML is a WIP artifact - only `validate` was
+run.** `archify visual-check docs/diagrams/cv-tailoring-runtime.html` **fails** with
+`Adaptive reader layout did not reach stable dimensions`. The shipped viewer sizes its
+frame as `desiredWidth = availableSvgHeight * (viewBox.w / viewBox.h) + chrome` against
+`MIN_READER_WIDTH = 960` / `MAX_READER_WIDTH = 1920` (`assets/template.html`), and every
+example the skill ships has a canvas 1030-1096px wide (aspect 1.60-1.93); ours is
+1910x850 (aspect 2.25), so at 1440x900 the frame over-sizes, `settleOverflow` changes the
+width, the cards re-wrap and the layout never settles (reproduced twice). The same 1910px
+width projects the 9px context line to 4.5px at the 960px floor - the browser-side twin of
+the descriptor warning above. **The fix is a narrower canvas (roughly 1080-1400px)**: fold
+`vision_check` + `persist` into a second pipeline row and move the storage/cron rows down.
+No component or edge is dropped, but the lower half's coordinates, corridors and `labelAt`
+pins all move - that re-layout was deliberately not done, so re-run `visual-check` before
+treating this HTML as shippable.
+
+What the diagram asserts is checked against the code - only `adapt_text` and `vision_check`
+call Gemini, `render` does not - so when the pipeline changes, the same change updates the
+spec and re-delivers the HTML.
 
 ## One Postgres schema (D10, resolved)
 
