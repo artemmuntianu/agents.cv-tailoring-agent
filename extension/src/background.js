@@ -155,6 +155,18 @@ async function scrapeCard(message, tabId, tabUrl) {
  * the content script (an older page, another site) rejects, which is not an error.
  */
 /** The active tab's URL, for messages that arrive without a sender tab (the popup). */
+/**
+ * The tab the popup is acting on.
+ *
+ * The picker and the fill need the *active* tab, and a popup message carries no `sender.tab` (only
+ * a message from a page does), so it has to be looked up. `activeTabUrl()` below answers the
+ * narrower "which URL?" question the card-status lookup asks.
+ */
+async function activeTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return tab || null;
+}
+
 async function activeTabUrl() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
