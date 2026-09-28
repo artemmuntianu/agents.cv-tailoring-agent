@@ -20,13 +20,16 @@ function formatDate(iso: string): string {
 }
 
 /**
- * The editable Action vocabulary: add, reword, remove - plus the values that only history
- * knows, shown struck through and marked `retired` (no longer suggested, still filterable,
- * and `Add back` puts them in the vocabulary again).
+ * The editable Action vocabulary: add, reword, remove.
+ *
+ * The table is the catalogue (`board_actions`) and nothing else, so what this page lists is
+ * exactly what a dialog suggests and what the Filters panel offers - there is no second,
+ * history-derived half any more.
  *
  * Deleting or renaming never rewrites `resume_history` or a card's refusal reason: the
- * audit trail keeps the words it was recorded with, which is why the note under the table
- * says so out loud.
+ * audit trail keeps the words it was recorded with (the card's own History section still
+ * shows them), which is why the note under the table says so out loud. The wording simply
+ * stops being offered, and typing it again in a dialog adds it back.
  */
 export default function ActionVocabulary({
   actions,
@@ -122,14 +125,8 @@ export default function ActionVocabulary({
             </tr>
           )}
           {rows.map((action) => {
-            const retired = action.catalogued === false;
             return (
-              <tr
-                key={action.value}
-                className={`border-b border-slate-100 ${
-                  retired ? 'text-slate-400' : 'text-slate-700'
-                }`}
-              >
+              <tr key={action.value} className="border-b border-slate-100 text-slate-700">
                 <td className="py-1.5 pr-2">
                   {editing?.from === action.value ? (
                     <span className="flex items-center gap-1">
@@ -159,7 +156,7 @@ export default function ActionVocabulary({
                       </button>
                     </span>
                   ) : (
-                    <span className={retired ? 'line-through' : ''}>{action.value}</span>
+                    <span>{action.value}</span>
                   )}
                 </td>
                 <td className="py-1.5 pr-2 text-[11px]">
@@ -168,21 +165,7 @@ export default function ActionVocabulary({
                 <td className="py-1.5 pr-2 tabular-nums">{action.uses}</td>
                 <td className="py-1.5 pr-2 text-[11px]">{formatDate(action.lastUsedAt)}</td>
                 <td className="py-1.5 text-right">
-                  {retired ? (
-                    <span className="flex items-center justify-end gap-2">
-                      <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 ring-1 ring-amber-200">
-                        retired
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void onAdd(action.value, action.kind)}
-                        disabled={busy}
-                        className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                      >
-                        Add back
-                      </button>
-                    </span>
-                  ) : confirming === action.value ? (
+                  {confirming === action.value ? (
                     <span className="flex items-center justify-end gap-2">
                       <span className="text-[11px] text-rose-700">remove it?</span>
                       <button
@@ -233,8 +216,9 @@ export default function ActionVocabulary({
 
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
         Renaming or deleting never rewrites history: cards already refused or moved keep the
-        words they were recorded with, and such a value stays filterable - shown struck through
-        as <em>retired</em>, and re-addable.
+        words they were recorded with, in the card's own History section. The vocabulary is
+        exactly this table - a value that is gone from it is no longer suggested in a dialog
+        nor offered as a filter, and typing it again adds it back.
       </p>
     </>
   );

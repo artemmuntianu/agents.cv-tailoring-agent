@@ -488,14 +488,15 @@ def test_the_action_catalogue_can_be_administered(store):
         conn.commit()
 
 
-def test_a_removed_action_is_still_visible_to_history(store):
-    """Vocabulary values are the union of the catalogue and what history recorded.
+def test_a_removed_action_leaves_the_vocabulary_and_stays_in_history(store):
+    """The Action vocabulary is the catalogue - `board_actions`, nothing else.
 
-    Mirrors the query in `backoffice/src/lib/db.ts::fetchActionVocabulary`: a value removed
-    from `board_actions` must come back as `catalogued = false` (filterable, no longer
-    suggested) while the history rows keep the words they were recorded with.
+    Mirrors `backoffice/src/lib/db.ts::fetchActionVocabulary`: the read lists the catalogue
+    only, so removing an entry takes it out of every list (no dialog suggests it, no filter
+    offers it) while `resume_history` keeps the wording it was recorded with - which is what
+    the card's own History section still shows (invariant 19).
     """
-    job_id = "848944-retired"
+    job_id = "848944-removed"
     store.upsert_job(_row(job_id))
 
     with store.connection() as conn:
@@ -505,35 +506,20 @@ def test_a_removed_action_is_still_visible_to_history(store):
                 "values (%s, 'Company', 'Salary mismatch', 'archive', 'active', 'archived')",
                 (job_id,),
             )
-            cur.execute("delete from board_actions where action = 'Salary mismatch'")
-            cur.execute(
-                """
-                select value, kind, uses, catalogued
-                  from (
-                    select a.action as value, a.kind, a.uses, true as catalogued
-                      from board_actions a
-                    union all
-                    select h.action as value,
-                           (case when bool_or(h.kind = 'archive') then 'archive' else 'move' end),
-                           count(*)::int,
-                           false
-                      from resume_history h
-                     where not exists (select 1 from board_actions a where a.action = h.action)
-                     group by h.action
-                  ) vocabulary
-                 where value = 'Salary mismatch'
-                """
-            )
-            retired = cur.fetchone()
 
-            # The audit trail is untouched by the catalogue delete...
+            cur.execute("delete from board_actions where action = 'Salary mismatch'")
+            assert cur.rowcount == 1
+
+            # The vocabulary read - a plain `board_actions` select - has no such value...
+            cur.execute(
+                "select count(*) as n from board_actions where action = 'Salary mismatch'"
+            )
+            assert cur.fetchone()["n"] == 0
+
+            # ...and the audit trail is untouched by the catalogue delete.
             cur.execute("select action from resume_history where job_id = %s", (job_id,))
             assert cur.fetchone()["action"] == "Salary mismatch"
         conn.commit()
-
-    assert retired["catalogued"] is False
-    assert retired["kind"] == "archive"  # derived from the history kind
-    assert retired["uses"] == 1
 
 
 def test_removing_a_card_cascades_and_queues_its_artifacts(store):

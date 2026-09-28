@@ -1,7 +1,7 @@
 import type { ProcessRun } from './types';
 
 /**
- * The Processes window's vocabulary: the slugs the jobs record, their labels, and how a run's
+ * The Processes page's vocabulary: the slugs the jobs record, their labels, and how a run's
  * counters read as one line.
  *
  * The slugs are the jobs' own (`utils/process_runs.py`, enforced by the `process_runs`

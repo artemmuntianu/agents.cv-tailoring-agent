@@ -490,12 +490,14 @@ async function recordAction(
 }
 
 /**
- * The whole vocabulary, for the dialogs, the Filters panel and the admin page.
+ * The Action catalogue: `board_actions`, and nothing else.
  *
- * It is the catalogue **union** what history actually recorded: a value an administrator
- * removed (or one typed before `board_actions` existed) is marked `catalogued: false`, so
- * the Filters panel can still select it while the dialog comboboxes stop suggesting it -
- * deleting a word must not make past cards unfilterable.
+ * It used to be the catalogue **union** what history had recorded, with the history-only
+ * values marked `catalogued: false` ("retired") so the Filters panel could still select
+ * them. That is gone: a value an administrator removed is out of every list here. The
+ * words themselves are not lost - `resume_history` and `resume_board.archived_reason` keep
+ * what they were recorded with (invariant 19), and the card's own History section still
+ * shows them; only the *vocabulary* is catalogue-only.
  */
 export async function fetchActionVocabulary(): Promise<BoardAction[]> {
   const rows = await pool().query<{
@@ -503,30 +505,16 @@ export async function fetchActionVocabulary(): Promise<BoardAction[]> {
     kind: string;
     uses: number;
     last_used_at: Date | string;
-    catalogued: boolean;
   }>(
-    `select value, kind, uses, last_used_at, catalogued
-       from (
-         select a.action as value, a.kind, a.uses, a.last_used_at, true as catalogued
-           from board_actions a
-         union all
-         select h.action as value,
-                (case when bool_or(h.kind = 'archive') then 'archive' else 'move' end) as kind,
-                count(*)::int as uses,
-                max(h.at) as last_used_at,
-                false as catalogued
-           from resume_history h
-          where not exists (select 1 from board_actions a where a.action = h.action)
-          group by h.action
-       ) vocabulary
-      order by catalogued desc, uses desc, last_used_at desc, value asc`,
+    `select action as value, kind, uses, last_used_at
+       from board_actions
+      order by uses desc, last_used_at desc, value asc`,
   );
   return rows.rows.map((row) => ({
     value: row.value,
     kind: row.kind as BoardAction['kind'],
     uses: row.uses,
     lastUsedAt: toIso(row.last_used_at),
-    catalogued: row.catalogued,
   }));
 }
 
@@ -545,8 +533,8 @@ export async function insertAction(input: ActionInput): Promise<'created' | 'exi
  * Replace a catalogue entry with new wording, carrying its `uses` over.
  *
  * History is *not* rewritten: a card refused last month keeps the words it was refused
- * with (the audit trail), and until those rows are gone the old value stays filterable as
- * `catalogued: false`.
+ * with (the audit trail), and the old wording simply stops being offered - neither as a
+ * suggestion nor as a filter option.
  */
 export async function renameAction(from: string, to: string): Promise<'renamed' | 'unknown' | 'exists'> {
   const client = await pool().connect();
@@ -583,7 +571,7 @@ export async function renameAction(from: string, to: string): Promise<'renamed' 
   }
 }
 
-/** Drop an entry from the vocabulary. History rows keep their wording. */
+/** Drop an entry from the vocabulary. History rows keep their wording (the audit trail). */
 export async function deleteAction(value: string): Promise<boolean> {
   const deleted = await pool().query('delete from board_actions where action = $1', [value]);
   return (deleted.rowCount ?? 0) > 0;
@@ -1117,7 +1105,7 @@ export async function deleteHistoryLine(id: number): Promise<HistoryWrite> {
   return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
 }
 
-// -- the internal process ledger (the navbar's Processes window) ---------------- #
+// -- the internal process ledger (the Processes page) --------------------------- #
 
 /**
  * The recent runs of the internal processes, newest first.

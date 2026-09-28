@@ -152,19 +152,17 @@ export interface BoardCard {
   interviews: Interview[];
 }
 
-/** One row of the Action vocabulary (`board_actions`) the dialogs suggest. */
+/**
+ * One row of the Action vocabulary (`board_actions`): what the dialogs suggest, what the
+ * Filters panel offers and what the admin page edits. A value that is not in the table is
+ * not in the vocabulary - the catalogue is the whole list.
+ */
 export interface BoardAction {
   value: string;
   /** Where a dialog shows it first: refusal reasons vs. progress notes. */
   kind: 'archive' | 'move';
   uses: number;
   lastUsedAt: string;
-  /**
-   * False for a value that only *history* knows: it was removed from `board_actions`
-   * (or typed before the catalogue existed), so it is filterable but no longer
-   * suggested. Undefined means catalogued.
-   */
-  catalogued?: boolean;
 }
 
 /** What the drop dialog sends; the API validates it before touching the DB. */
@@ -279,7 +277,7 @@ export interface DetailsRequest extends VacancyDetails {
 export type ProcessRunStatus = 'running' | 'ok' | 'failed' | 'skipped' | 'aborted';
 
 /**
- * One run of an internal process (`process_runs`) - what the navbar's Processes window lists.
+ * One run of an internal process (`process_runs`) - what the Processes page lists.
  * A job writes its own row (`utils/process_runs.py`), so a run that changed nothing is still
  * visible, and `running` without `finishedAt` is a pod that died mid-run.
  */

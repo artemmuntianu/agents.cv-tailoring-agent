@@ -81,8 +81,8 @@ export function parseActionInput(body: unknown): ParseResult<ActionInput> {
  * `PATCH /api/admin/actions` - reword an entry.
  *
  * The catalogue row is replaced, never the past: history entries keep the words they
- * were recorded with (they are the audit trail), and until they are gone the old value
- * still appears in the Filters panel marked as retired.
+ * were recorded with (they are the audit trail), while the old wording leaves the
+ * vocabulary - no longer suggested in a dialog, no longer offered as a filter option.
  */
 export function parseRenameInput(body: unknown): ParseResult<RenameInput> {
   const object = asObject(body);
@@ -105,11 +105,9 @@ export function parseActionValue(raw: string | null | undefined): ParseResult<st
   return parseValue(raw, 'value');
 }
 
-/** Stable table order: catalogued first, then most used, then alphabetically. */
+/** Stable table order: most used first, then most recent, then alphabetically. */
 export function sortVocabulary(actions: BoardAction[]): BoardAction[] {
   return actions.slice().sort((a, b) => {
-    const catalogued = Number(b.catalogued !== false) - Number(a.catalogued !== false);
-    if (catalogued !== 0) return catalogued;
     if (b.uses !== a.uses) return b.uses - a.uses;
     const recent = (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '');
     if (recent !== 0) return recent;
@@ -122,13 +120,10 @@ export function summarizeVocabulary(actions: BoardAction[]): {
   total: number;
   refusals: number;
   progress: number;
-  retired: number;
 } {
-  const live = actions.filter((action) => action.catalogued !== false);
   return {
-    total: live.length,
-    refusals: live.filter((action) => action.kind === 'archive').length,
-    progress: live.filter((action) => action.kind === 'move').length,
-    retired: actions.length - live.length,
+    total: actions.length,
+    refusals: actions.filter((action) => action.kind === 'archive').length,
+    progress: actions.filter((action) => action.kind === 'move').length,
   };
 }

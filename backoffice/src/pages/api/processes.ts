@@ -4,7 +4,7 @@ import { errorMessage, json } from '../../lib/http';
 
 export const prerender = false;
 
-/** How many runs the navbar's Processes window asks for. */
+/** How many runs the Processes page asks for. */
 const RUN_LIMIT = 100;
 
 /**

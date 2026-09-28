@@ -46,7 +46,7 @@ provide one as a service container (`.github/AGENTS.md`). They cover the worker'
 semantics (including the ingest row the gateway pre-creates), the board's tables
 (`resume_board` with its archive columns, `resume_history` with the `Candidate`/`Company`
 actor vocabulary and the four kinds), the backoffice's `app_users`, the Action catalogue's
-admin writes / retired-value view (`board_actions`) and the removal purge
+admin writes and its catalogue-only read (`board_actions`) and the removal purge
 (`artifact_purge` + the cascade).
 
 ## The harness contract (`helpers.py`)

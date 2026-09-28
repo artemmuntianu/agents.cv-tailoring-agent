@@ -79,10 +79,10 @@ kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
 
 - **A deploy already ran it.** `helm upgrade` posts the startup hook Job
   (`cv-tailoring-cv-tailoring-scout-startup`, i.e. `python -m scout --trigger startup`), so a fresh
-  deploy shows up in the board's Processes window within a minute instead of up to half an hour
-  later. The Job is deleted when it succeeds (the `process_runs` row is the record) and kept only
-  when the hook failed - and a failed hook fails the deploy, so `kubectl logs job/<name>-startup`
-  is the first place to look. Skip it once with
+  deploy shows up on the board's **Processes** page (`/processes`) within a minute instead of up to
+  half an hour later. The Job is deleted when it succeeds (the `process_runs` row is the record) and
+  kept only when the hook failed - and a failed hook fails the deploy, so
+  `kubectl logs job/<name>-startup` is the first place to look. Skip it once with
   `helm upgrade ... --set cv-tailoring-scout.startup.enabled=false`.
 - **Nothing new arrives**: read the last job's log. `no feed answered` (exit 1) means the feeds are
   unreachable, *not* that the week is quiet - the scout refuses to report that as an empty result.

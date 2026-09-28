@@ -52,16 +52,18 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 |---|---|
 | `src/middleware.ts` | The auth gate for **every** page and API route |
 | `src/pages/login.astro`, `src/components/LoginForm.tsx` | The only auth surface (no signup) |
-| `src/pages/admin.astro`, `src/components/AdminApp.tsx`, `src/components/ActionVocabulary.tsx` | `/admin` - the vocabulary admin surface (Actions editable, the rest read-only) |
+| `src/pages/admin.astro`, `src/components/AdminApp.tsx`, `src/components/ActionVocabulary.tsx` | `/admin` - the vocabulary admin **page** (Actions editable, the rest read-only) |
+| `src/components/AppShell.tsx` | The chrome **every** page renders: the `NavBar`, the header (title · subtitle · the page's own controls) and the scrolling content region - plus sign-out, so it has one implementation |
 | `src/pages/403.astro` | Where a non-admin who asks for `/admin` lands |
-| `src/pages/index.astro` | Board shell; passes the session name/email down |
+| `src/pages/index.astro` | The board page (the shell + `App`); passes the session name/email down |
+| `src/pages/processes.astro`, `src/components/ProcessesPage.tsx`, `src/components/ProcessRunTable.tsx` | `/processes` - the internal jobs' run log as a page (read-only, unpolled) |
 | `src/pages/api/board.ts` | `GET` the cards |
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing), refuse it, undo a refusal, purge it for good |
 | `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the card's `➕ Add action`): a `move` history row with `from_state = to_state` |
 | `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, never a history row |
 | `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels) - the whole set in one write, never a history row |
 | `src/pages/api/board/history/[id].ts` | `PATCH` one history line (date, actor, wording, kind, both states) · `DELETE` one - the audit trail's only corrective write, and it touches nothing else (invariant 29) |
-| `src/pages/api/processes.ts` | `GET` the internal jobs' run history (`process_runs`) for the navbar's Processes window |
+| `src/pages/api/processes.ts` | `GET` the internal jobs' run history (`process_runs`) for the Processes page |
 | `src/pages/api/board/actions.ts` | `GET` the Action vocabulary (`board_actions`) |
 | `src/pages/api/admin/vocabulary.ts`, `src/pages/api/admin/actions.ts` | Admin-only: read every vocabulary · add / reword / remove an Action |
 | `src/pages/api/vacancies/batch.ts` | `POST` a scraped batch -> the cards + one AMQP message per vacancy |
@@ -82,10 +84,10 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/interviews.ts` | The Interviews section: the four types, `hasReachedInterviewing`, the list sort/format and the interview parsers |
 | `src/lib/details.ts` | The card's detail fields: the six communication channels, the draft/dirty helpers and the details parser |
 | `src/lib/history.ts` | The History section: the four kinds, the states each kind may carry, the per-kind fallback transition, the edit parser and the draft helpers |
-| `src/lib/processes.ts` | The Processes window's vocabulary: process labels and hints, run status chips, one-line run summaries, durations |
+| `src/lib/processes.ts` | The Processes page's vocabulary: process labels and hints, run status chips, one-line run summaries, durations, the trigger label |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
-| `src/components/*` | `App` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessRunsDialog` · `ActionCombobox` · `LoginForm` |
+| `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
 ## Vocabulary admin (`/admin`)
@@ -99,11 +101,12 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   three vocabularies are rendered read-only *from the code that defines them* - Actors are
   a DB CHECK, the columns are the board's shape (`isStageId`), the tailoring sub-states are
   derived from `resumes.status` - because changing any of them means changing behaviour.
-- **A vocabulary edit is catalogue-only.** `resume_history` and
-  `resume_board.archived_reason` keep the wording they were recorded with; the old value
-  comes back from `GET /api/admin/vocabulary` as `catalogued: false`, which is why the
-  Filters panel still offers it (marked *retired*) while the dialog comboboxes stop
-  suggesting it. The page says this under the table, and `Add back` re-catalogues a value.
+- **The vocabulary is the catalogue** (`board_actions`): what the page lists is exactly what
+  the dialogs suggest and what the board's Filters panel offers - one list, with no second
+  history-derived half. An edit is *catalogue-only*: `resume_history` and
+  `resume_board.archived_reason` keep the wording they were recorded with (the card's own
+  History section still shows it), so a removed value simply stops being offered anywhere
+  while the audit trail stays intact, and typing it again in a dialog re-adds it.
 - Renaming **carries `uses` over** (insert the new wording, then delete the old key, one
   transaction); adding an existing wording is a 409, removing an absent one a 404.
 - `lib/admin.ts` holds every rule (parsers, sorting, the path predicate), so the routes are
@@ -337,17 +340,25 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   a laptop screen on purpose: `w-80` per column in `KanbanBoard` (one class to change), a
   horizontally scrolling row inside `main`, and each column's own card list scrolling vertically.
   Nothing is squeezed into a fifth of the viewport any more.
+- **Every page wears the same chrome** (`AppShell`): the `NavBar` panel, a header with the page's
+  title, its one-line subtitle and the page's own controls, and a content region that is what
+  scrolls (the viewport is fixed, so the panel and the header stay put on a long run log). `/`
+  (the board), `/processes` (the run log) and `/admin` (the vocabularies) are three routes on that
+  one shell - which is also why sign-out has a single implementation.
 - **The nav panel folds to its icons.** The `«` toggle collapses `NavBar` to the four icons
   (Board, Vocabularies, Processes, Sign out) and hides the words, the pipeline counts and the
   roadmap placeholders; the choice lives in `localStorage` under `cvt.nav.collapsed` and is read
   in an `effect`, never during render, so the server-rendered shell and the first client render
-  agree. The panel deliberately has **no** reload button and no help text - the board's own
-  `Reload` and `● Live` controls sit in the `main` header where the board is.
-- **The Processes window is a window, not a route.** The navbar's item opens
-  `ProcessRunsDialog`, which reads `GET /api/processes` (`process_runs`, newest first, written by
-  the scheduled jobs through `utils/process_runs.py`). Read-only and unpolled by design - a run
-  log is something the operator looks at - and an unknown process slug still renders, so a job
-  deployed before its label appears anyway.
+  agree. The panel deliberately has **no** reload button and no help text - a page's own controls
+  (`Reload` and `● Live` on the board, `Refresh` on the run log) sit in the shell's header. The
+  panel's **Pipeline** summary is board state, so only the board passes `counts`/`total`/
+  `archived`: the other two pages render the panel without that block rather than paying for a
+  board read they would not use.
+- **The run log is a page, not a window.** `/processes` (`ProcessesPage` + `ProcessRunTable`) reads
+  `GET /api/processes` (`process_runs`, newest first, written by the scheduled jobs through
+  `utils/process_runs.py`). Read-only and unpolled by design - a run log is something the operator
+  looks at - and an unknown process slug still renders, so a job deployed before its label appears
+  anyway.
 - **The board's columns have a second, headless writer.** The `archiver` CronJob refuses the
   Applied cards that went quiet (invariant 27); it uses the same transaction shape as
   `/api/board/archive` and the reason lands in `board_actions`, so the result is
@@ -458,7 +469,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 - **No interview reminders, invitations or calendar export**: an interview is a row in the card
   and the only reminder is the card itself. The inactivity sweep ignores interviews on purpose -
   `resume_board.updated_at` is the activity clock, and a scheduled call is not an action.
-- **No "run this job now" button** in the Processes window: the CronJob slot is the only timer,
+- **No "run this job now" button** on the Processes page: the CronJob slot is the only timer,
   and a manual run is `kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-archiver ...`
   (`charts/cv-tailoring-archiver`).
 - **No interview rows in `resume_history`** - by design, not an oversight: the list in the
@@ -498,8 +509,9 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 - Date a card by anything other than `updated_at` in the filters without saying so.
 - Let an archived card be dragged, or let the ingest gateway re-queue one.
 - Rewrite `resume_history` (or `archived_reason`) when a vocabulary value is renamed or
-  removed: the audit trail keeps its wording, and the retired value stays filterable. (An operator
-  *correcting one line* through the pencil is a different thing and is allowed - invariant 29.)
+  removed: the audit trail keeps its wording, and a removed value simply stops being offered
+  from the catalogue (invariant 21). (An operator *correcting one line* through the pencil is
+  a different thing and is allowed - invariant 29.)
 - Route a history correction through the move/archive machinery: `PATCH`/`DELETE
   /api/board/history/<id>` writes `resume_history` and **nothing else** - no `resume_board`
   touch, no `board_actions` upsert, no column change. A correction is not activity, and it must

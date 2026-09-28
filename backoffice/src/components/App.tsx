@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import AppShell from './AppShell';
 import BoardToolbar from './BoardToolbar';
 import KanbanBoard from './KanbanBoard';
-import NavBar from './NavBar';
-import ProcessRunsDialog from './ProcessRunsDialog';
 import ReasonDialog from './ReasonDialog';
 import RemoveDialog from './RemoveDialog';
 import VacancyModal from './VacancyModal';
@@ -19,7 +18,6 @@ import type {
   HistoryEntryRequest,
   InterviewRequest,
   MoveRequest,
-  ProcessRun,
   StageId,
 } from '../lib/types';
 
@@ -56,11 +54,6 @@ export default function App({ session }: AppProps) {
   const [note, setNote] = useState<string | null>(null);
   /** The card waiting for the Add Action dialog: the Move dialog, with no column change. */
   const [pendingAction, setPendingAction] = useState<BoardCard | null>(null);
-  /** The navbar's Processes window: the internal jobs' run history. */
-  const [processesOpen, setProcessesOpen] = useState(false);
-  const [runs, setRuns] = useState<ProcessRun[]>([]);
-  const [runsLoading, setRunsLoading] = useState(false);
-  const [runsError, setRunsError] = useState<string | null>(null);
 
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoading(true);
@@ -102,39 +95,10 @@ export default function App({ session }: AppProps) {
     }
   }, []);
 
-  /**
-   * The internal processes' run history (the navbar's Processes window).
-   *
-   * Read when the window opens and on demand - never polled: a run log is something the operator
-   * looks at, and the board's 5s cadence would say nothing new for hours.
-   */
-  const loadRuns = useCallback(async () => {
-    setRunsLoading(true);
-    try {
-      const response = await fetch('/api/processes');
-      const payload = (await response.json()) as {
-        ok: boolean;
-        runs?: ProcessRun[];
-        error?: string;
-      };
-      if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-      setRuns(payload.runs ?? []);
-      setRunsError(null);
-    } catch (cause) {
-      setRunsError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setRunsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     void refresh();
     void loadActions();
   }, [refresh, loadActions]);
-
-  useEffect(() => {
-    if (processesOpen) void loadRuns();
-  }, [processesOpen, loadRuns]);
 
   useEffect(() => {
     if (!live) return;
@@ -330,223 +294,195 @@ export default function App({ session }: AppProps) {
   const archivedCount = useMemo(() => countArchived(visible), [visible]);
   const openCard = cards.find((card) => card.jobId === openId) ?? null;
 
-  async function signOut() {
-    // The JSON content-type is sent even though there is no body: Astro's `checkOrigin`
-    // refuses a non-GET without one (`backoffice/AGENTS.md`).
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    }).catch(() => undefined);
-    window.location.assign('/login');
-  }
-
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-100 text-slate-900">
-      <NavBar
-        counts={counts}
-        total={visible.length}
-        archived={archivedCount}
-        session={session}
-        onSignOut={() => void signOut()}
-        onOpenProcesses={() => setProcessesOpen(true)}
+    <AppShell
+      active="board"
+      title="Vacancy pipeline"
+      subtitle="Drag a card to another column - it only moves once you confirm the reason."
+      counts={counts}
+      total={visible.length}
+      archived={archivedCount}
+      session={session}
+      // The board is a fixed viewport: the toolbar and the columns scroll inside it, not the page.
+      contentClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={() => setLive((value) => !value)}
+            aria-pressed={live}
+            className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+              live
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            {live ? '● Live' : '○ Paused'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            {loading ? 'Loading…' : 'Reload'}
+          </button>
+        </>
+      }
+    >
+      <BoardToolbar
+        filters={filters}
+        onChange={setFilters}
+        onReset={() => setFilters(DEFAULT_FILTERS)}
+        actions={actions}
+        shown={visible.length}
+        total={cards.length}
       />
 
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
-          <div>
-            <h1 className="text-base font-semibold text-slate-900">Vacancy pipeline</h1>
-            <p className="text-xs text-slate-500">
-              Drag a card to another column - it only moves once you confirm the reason.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setLive((value) => !value)}
-              aria-pressed={live}
-              className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
-                live
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {live ? '● Live' : '○ Paused'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              {loading ? 'Loading…' : 'Reload'}
-            </button>
-          </div>
-        </header>
-
-        <BoardToolbar
-          filters={filters}
-          onChange={setFilters}
-          onReset={() => setFilters(DEFAULT_FILTERS)}
-          actions={actions}
-          shown={visible.length}
-          total={cards.length}
-        />
-
-        {error && (
-          <p className="border-b border-rose-200 bg-rose-50 px-6 py-2 text-sm text-rose-700">
-            {error}
-          </p>
-        )}
-
-        {note && (
-          <p className="border-b border-emerald-200 bg-emerald-50 px-6 py-2 text-sm text-emerald-800">
-            {note}
-          </p>
-        )}
-
-        {!error && !loading && cards.length === 0 && (
-          <p className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-800">
-            No vacancies yet. Scrape a listing page with the Chrome extension
-            (<code>extension/</code>), or publish one with{' '}
-            <code>.\scripts\send-test-job.ps1 -Smoke</code> - it will appear here, in{' '}
-            <strong>Created</strong>.
-          </p>
-        )}
-
-        {/* Filters can hide everything (the date window is on by default): say so, and
-            make the way out one click, instead of showing an empty board. */}
-        {!error && !loading && cards.length > 0 && visible.length === 0 && (
-          <p className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-800">
-            <span>
-              No card matches the current filters ({cards.length} loaded - the date range and the
-              Filters panel are hiding them).
-            </span>
-            <button
-              type="button"
-              onClick={() => setFilters(DEFAULT_FILTERS)}
-              className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
-            >
-              Show all cards
-            </button>
-          </p>
-        )}
-
-        <KanbanBoard
-          cards={visible}
-          onRequestMove={(card, to) => setPending({ card, to })}
-          onOpen={setOpenId}
-          onArchive={(jobId) =>
-            setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null)
-          }
-          onRestore={(jobId) => void restore(jobId)}
-          onRemove={(jobId) =>
-            setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null)
-          }
-          onAddAction={(jobId) =>
-            setPendingAction(cards.find((card) => card.jobId === jobId) ?? null)
-          }
-        />
-      </main>
-
-      {pending && (
-        <ReasonDialog
-          title="Move vacancy"
-          subtitle={`${pending.card.title || pending.card.externalId} · ${pending.card.company}`}
-          fromLabel={stageLabel(pending.card.stage)}
-          toLabel={stageLabel(pending.to)}
-          actions={actions}
-          actionsKind="move"
-          confirmLabel="Proceed"
-          // Entering Interviewing also collects the first interview; entering Prepare is what
-          // queues tailoring - say so before it happens.
-          interview={pending.to === 'interviewing'}
-          warning={
-            pending.to === 'prepare'
-              ? 'Moving this card to Prepare queues the tailored CV for it: the worker will run Gemini on this vacancy.'
-              : undefined
-          }
-          onProceed={confirmMove}
-          onCancel={() => setPending(null)}
-        />
+      {error && (
+        <p className="border-b border-rose-200 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+          {error}
+        </p>
       )}
 
-      {pendingAction && (
-        <ReasonDialog
-          title="➕ Add action"
-          subtitle={`${pendingAction.title || pendingAction.externalId} · ${pendingAction.company}`}
-          fromLabel={stageLabel(pendingAction.stage)}
-          toLabel={`${stageLabel(pendingAction.stage)} · stays here`}
-          actions={actions}
-          actionsKind="move"
-          confirmLabel="Record action"
-          warning={
-            'The card does not move. The action is recorded in its history and counts as ' +
-            'activity, so the auto-archiver leaves this vacancy alone.'
-          }
-          onProceed={confirmAction}
-          onCancel={() => setPendingAction(null)}
-        />
+      {note && (
+        <p className="border-b border-emerald-200 bg-emerald-50 px-6 py-2 text-sm text-emerald-800">
+          {note}
+        </p>
       )}
 
-      {pendingArchive && (
-        <ReasonDialog
-          title="⛔️ Archive vacancy"
-          subtitle={`${pendingArchive.title || pendingArchive.externalId} · ${pendingArchive.company}`}
-          fromLabel={stageLabel(pendingArchive.stage)}
-          toLabel="Archived (stays in this column)"
-          actionLabel="Action"
-          actions={actions}
-          actionsKind="archive"
-          confirmLabel="⛔️ Archive"
-          tone="danger"
-          defaultActor="Company"
-          onProceed={confirmArchive}
-          onCancel={() => setPendingArchive(null)}
-        />
+      {!error && !loading && cards.length === 0 && (
+        <p className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-800">
+          No vacancies yet. Scrape a listing page with the Chrome extension
+          (<code>extension/</code>), or publish one with{' '}
+          <code>.\scripts\send-test-job.ps1 -Smoke</code> - it will appear here, in{' '}
+          <strong>Created</strong>.
+        </p>
       )}
 
-      {openCard && (
-        <VacancyModal
-          card={openCard}
-          onClose={() => setOpenId(null)}
-          onArchive={(jobId) => {
-            setOpenId(null);
-            setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null);
-          }}
-          onRestore={(jobId) => {
-            setOpenId(null);
-            void restore(jobId);
-          }}
-          onRemove={(jobId) => {
-            setOpenId(null);
-            setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
-          }}
-          onGenerateCover={generateCover}
-          onAddInterview={addInterview}
-          onEditInterview={editInterview}
-          onRemoveInterview={removeInterview}
-          onEditHistory={editHistoryLine}
-          onRemoveHistory={removeHistoryLine}
-          onSaveDetails={saveDetails}
-        />
+      {/* Filters can hide everything (the date window is on by default): say so, and
+          make the way out one click, instead of showing an empty board. */}
+      {!error && !loading && cards.length > 0 && visible.length === 0 && (
+        <p className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-800">
+          <span>
+            No card matches the current filters ({cards.length} loaded - the date range and the
+            Filters panel are hiding them).
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilters(DEFAULT_FILTERS)}
+            className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
+          >
+            Show all cards
+          </button>
+        </p>
       )}
 
-      {processesOpen && (
-        <ProcessRunsDialog
-          runs={runs}
-          loading={runsLoading}
-          error={runsError}
-          onReload={() => void loadRuns()}
-          onClose={() => setProcessesOpen(false)}
-        />
-      )}
+      <KanbanBoard
+        cards={visible}
+        onRequestMove={(card, to) => setPending({ card, to })}
+        onOpen={setOpenId}
+        onArchive={(jobId) =>
+          setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null)
+        }
+        onRestore={(jobId) => void restore(jobId)}
+        onRemove={(jobId) =>
+          setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null)
+        }
+        onAddAction={(jobId) =>
+          setPendingAction(cards.find((card) => card.jobId === jobId) ?? null)
+        }
+      />
 
-      {pendingRemoval && (
-        <RemoveDialog
-          card={pendingRemoval}
-          onConfirm={() => void confirmRemove()}
-          onCancel={() => setPendingRemoval(null)}
-        />
-      )}
-    </div>
+    {pending && (
+      <ReasonDialog
+        title="Move vacancy"
+        subtitle={`${pending.card.title || pending.card.externalId} · ${pending.card.company}`}
+        fromLabel={stageLabel(pending.card.stage)}
+        toLabel={stageLabel(pending.to)}
+        actions={actions}
+        actionsKind="move"
+        confirmLabel="Proceed"
+        // Entering Interviewing also collects the first interview; entering Prepare is what
+        // queues tailoring - say so before it happens.
+        interview={pending.to === 'interviewing'}
+        warning={
+          pending.to === 'prepare'
+            ? 'Moving this card to Prepare queues the tailored CV for it: the worker will run Gemini on this vacancy.'
+            : undefined
+        }
+        onProceed={confirmMove}
+        onCancel={() => setPending(null)}
+      />
+    )}
+
+    {pendingAction && (
+      <ReasonDialog
+        title="➕ Add action"
+        subtitle={`${pendingAction.title || pendingAction.externalId} · ${pendingAction.company}`}
+        fromLabel={stageLabel(pendingAction.stage)}
+        toLabel={`${stageLabel(pendingAction.stage)} · stays here`}
+        actions={actions}
+        actionsKind="move"
+        confirmLabel="Record action"
+        warning={
+          'The card does not move. The action is recorded in its history and counts as ' +
+          'activity, so the auto-archiver leaves this vacancy alone.'
+        }
+        onProceed={confirmAction}
+        onCancel={() => setPendingAction(null)}
+      />
+    )}
+
+    {pendingArchive && (
+      <ReasonDialog
+        title="⛔️ Archive vacancy"
+        subtitle={`${pendingArchive.title || pendingArchive.externalId} · ${pendingArchive.company}`}
+        fromLabel={stageLabel(pendingArchive.stage)}
+        toLabel="Archived (stays in this column)"
+        actionLabel="Action"
+        actions={actions}
+        actionsKind="archive"
+        confirmLabel="⛔️ Archive"
+        tone="danger"
+        defaultActor="Company"
+        onProceed={confirmArchive}
+        onCancel={() => setPendingArchive(null)}
+      />
+    )}
+
+    {openCard && (
+      <VacancyModal
+        card={openCard}
+        onClose={() => setOpenId(null)}
+        onArchive={(jobId) => {
+          setOpenId(null);
+          setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null);
+        }}
+        onRestore={(jobId) => {
+          setOpenId(null);
+          void restore(jobId);
+        }}
+        onRemove={(jobId) => {
+          setOpenId(null);
+          setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
+        }}
+        onGenerateCover={generateCover}
+        onAddInterview={addInterview}
+        onEditInterview={editInterview}
+        onRemoveInterview={removeInterview}
+        onEditHistory={editHistoryLine}
+        onRemoveHistory={removeHistoryLine}
+        onSaveDetails={saveDetails}
+      />
+    )}
+
+    {pendingRemoval && (
+      <RemoveDialog
+        card={pendingRemoval}
+        onConfirm={() => void confirmRemove()}
+        onCancel={() => setPendingRemoval(null)}
+      />
+    )}
+    </AppShell>
   );
 }

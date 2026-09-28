@@ -205,10 +205,12 @@ automation         .github/workflows/
     **Only Actions are editable**: the Actor list is a DB CHECK, the columns are the board's
     shape (`isStageId`) and the tailoring sub-states are derived from the worker's statuses,
     so `/admin` renders those three from the code that defines them.
-    **A vocabulary edit is catalogue-only** - `resume_history` and `archived_reason` keep
-    the words they were recorded with, and a removed value stays filterable as
-    `catalogued: false` (dialog comboboxes stop suggesting it; the Filters panel keeps
-    offering it, because deleting a word must not make past cards unfindable).
+    **The vocabulary is the catalogue, and an edit is catalogue-only.** `board_actions` is
+    the whole list (`backoffice/src/lib/db.ts::fetchActionVocabulary` reads nothing else), so
+    a removed or reworded value stops being suggested in a dialog and stops being offered as
+    a filter option - there is no second, history-derived half. The words themselves are not
+    touched: `resume_history` and `archived_reason` keep what they were recorded with, and
+    the card's own History section still shows them (invariant 19).
 22. **Removal is a purge, and it is the only irreversible action.** `POST /api/board/remove`
     requires an **archived** card whose status is terminal (`REMOVABLE_STATUSES`) - a
     vacancy a worker still owns is refused, because the task that finishes after the purge

@@ -16,8 +16,7 @@ const action = (
   kind: BoardAction['kind'] = 'archive',
   uses = 0,
   lastUsedAt = '2026-09-01T00:00:00.000Z',
-  catalogued = true,
-): BoardAction => ({ value, kind, uses, lastUsedAt, catalogued });
+): BoardAction => ({ value, kind, uses, lastUsedAt });
 
 describe('who may see the vocabulary admin surface', () => {
   it('matches the page and its API, and nothing else', () => {
@@ -79,23 +78,23 @@ describe('the add/rename/remove contract', () => {
 });
 
 describe('the table (sorting and the summary)', () => {
-  it('keeps catalogue entries above retired ones, most used first', () => {
+  it('orders by uses, then recency, then wording', () => {
     const sorted = sortVocabulary([
       action('Beta', 'archive', 2),
       action('Alpha', 'archive', 2),
       action('Gamma', 'archive', 5),
-      action('Old wording', 'move', 99, '2026-01-01T00:00:00.000Z', false),
+      action('Old wording', 'move', 99, '2026-01-01T00:00:00.000Z'),
     ]);
-    expect(sorted.map((item) => item.value)).toEqual(['Gamma', 'Alpha', 'Beta', 'Old wording']);
+    expect(sorted.map((item) => item.value)).toEqual(['Old wording', 'Gamma', 'Alpha', 'Beta']);
   });
 
-  it('counts live entries per kind and the retired remainder', () => {
+  it('counts the entries per kind', () => {
     const summary = summarizeVocabulary([
       action('Salary mismatch', 'archive', 3),
       action('No response', 'archive', 1),
       action('Applied via portal', 'move', 2),
-      action('Old wording', 'move', 7, '2026-01-01T00:00:00.000Z', false),
+      action('Old wording', 'move', 7, '2026-01-01T00:00:00.000Z'),
     ]);
-    expect(summary).toEqual({ total: 3, refusals: 2, progress: 1, retired: 1 });
+    expect(summary).toEqual({ total: 4, refusals: 2, progress: 2 });
   });
 });

@@ -58,26 +58,6 @@ describe('the Action combobox suggests the persisted vocabulary', () => {
     expect(rankActions(actions, { kind: 'archive', limit: 2 })).toHaveLength(2);
     expect(MAX_SUGGESTIONS).toBeGreaterThanOrEqual(20);
   });
-
-  it('does not suggest a value retired from the catalogue, but can be asked to', () => {
-    const retired: BoardAction = {
-      value: 'Old wording',
-      kind: 'archive',
-      uses: 99,
-      lastUsedAt: '2026-01-01T00:00:00.000Z',
-      catalogued: false,
-    };
-    const live = action('Salary mismatch', 'archive', 1);
-
-    expect(rankActions([retired, live], { kind: 'archive' }).map((item) => item.value)).toEqual([
-      'Salary mismatch',
-    ]);
-    expect(
-      rankActions([retired, live], { kind: 'archive', includeRetired: true }).map(
-        (item) => item.value,
-      ),
-    ).toEqual(['Old wording', 'Salary mismatch']);
-  });
 });
 
 describe('what gets stored vs what gets suggested', () => {
@@ -95,7 +75,6 @@ describe('what gets stored vs what gets suggested', () => {
       kind: 'archive',
       uses: 1,
       lastUsedAt: '2026-09-26T10:00:00.000Z',
-      catalogued: true,
     });
     expect(added).toHaveLength(2);
 

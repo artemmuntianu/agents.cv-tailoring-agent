@@ -6,11 +6,12 @@ import type { BoardAction } from './types';
  * the dropdown affordance, the keyboard support and the free text, and this module
  * supplies the order.
  *
- * Suggestions come from the persisted vocabulary (`board_actions`, loaded with the
- * board). A dialog ranks its own kind first - refusal reasons in the Archive dialog,
- * progress notes in the Move dialog - most used on top, then the rest - so a value
- * typed in either dialog is still one keystroke away in the other. Nothing here is
- * hard-coded: whatever the operator typed last time comes back as a suggestion.
+ * Suggestions are the catalogue (`board_actions`, loaded with the board) and nothing else:
+ * a dialog ranks its own kind first - refusal reasons in the Archive dialog, progress
+ * notes in the Move dialog - most used on top, then the rest, so a value typed in either
+ * dialog is still one keystroke away in the other. Nothing here is hard-coded: whatever the
+ * operator typed last time comes back as a suggestion, and typing a *new* wording stores
+ * it (one upsert in the same transaction as the change).
  */
 
 export const MAX_SUGGESTIONS = 50;
@@ -21,21 +22,13 @@ export interface SuggestionOptions {
   /** What has been typed so far; empty shows the whole ranked list. */
   query?: string;
   limit?: number;
-  /**
-   * Offer values that were retired from the catalogue (still present in history).
-   * A dialog does not: it should suggest the wording the operator is keeping.
-   */
-  includeRetired?: boolean;
 }
 
 export function rankActions(actions: BoardAction[], options: SuggestionOptions): BoardAction[] {
   const query = (options.query ?? '').trim().toLowerCase();
-  const candidates = options.includeRetired
-    ? actions.slice()
-    : actions.filter((action) => action.catalogued !== false);
   const matches = query
-    ? candidates.filter((action) => action.value.toLowerCase().includes(query))
-    : candidates;
+    ? actions.filter((action) => action.value.toLowerCase().includes(query))
+    : actions.slice();
 
   matches.sort((a, b) => {
     const sameKind = Number(b.kind === options.kind) - Number(a.kind === options.kind);
@@ -74,9 +67,9 @@ export function withNewAction(
   if (existing) {
     return actions.map((action) =>
       action.value === value
-        ? { ...action, uses: action.uses + 1, lastUsedAt: now.toISOString(), catalogued: true }
+        ? { ...action, uses: action.uses + 1, lastUsedAt: now.toISOString() }
         : action,
     );
   }
-  return [{ value, kind, uses: 1, lastUsedAt: now.toISOString(), catalogued: true }, ...actions];
+  return [{ value, kind, uses: 1, lastUsedAt: now.toISOString() }, ...actions];
 }

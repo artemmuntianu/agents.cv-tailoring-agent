@@ -2,14 +2,22 @@ import { useEffect, useState } from 'react';
 import { STAGES } from '../lib/stages';
 import type { StageId } from '../lib/types';
 
+/** The three pages this panel links to - the only thing it knows about routing. */
+export type NavSection = 'board' | 'processes' | 'vocabularies';
+
 interface NavBarProps {
-  counts: Record<StageId, number>;
-  total: number;
-  /** Refused vacancies among the currently visible cards. */
-  archived: number;
+  /** Which of the three the page being rendered is; it decides the highlighted item. */
+  active: NavSection;
   session: { email: string; name: string | null; admin: boolean };
-  /** Open the internal-process run history (the window this panel's own item opens). */
-  onOpenProcesses: () => void;
+  /**
+   * The Pipeline summary is **board** state: the board passes the counts of the cards its
+   * toolbar is showing, and that is why the block is optional - a page with no board read
+   * renders the panel without it instead of inventing numbers.
+   */
+  counts?: Record<StageId, number>;
+  total?: number;
+  /** Refused vacancies among the cards the counts were taken from. */
+  archived?: number;
   onSignOut: () => void;
 }
 
@@ -21,27 +29,26 @@ const FUTURE: { label: string; note: string }[] = [{ label: 'Vacancies', note: '
 /** One nav item's shape, in both widths (icons stay, the words go). */
 function itemClass(collapsed: boolean, active = false): string {
   return [
-    'flex w-full items-center rounded-md text-sm',
+    'flex w-full items-center gap-2 rounded-md text-sm',
     collapsed ? 'justify-center px-2 py-2' : 'justify-between px-3 py-2',
     active ? 'bg-slate-900 font-medium text-white' : 'text-slate-700 hover:bg-slate-100',
   ].join(' ');
 }
 
-const ACTIVE_LINK = 'flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white';
-
 /**
- * Left nav panel: the board, the administrator's vocabulary screen and the **Processes** window.
+ * The left panel every page wears: the board, the internal jobs' run log and (for an
+ * administrator) the vocabulary screen - three links, one highlighted per page.
  *
- * The `«` toggle collapses the panel to its icons, so a narrow screen gives the board almost all
+ * The `«` toggle collapses the panel to its icons, so a narrow screen gives the page almost all
  * of its width back; the choice is remembered in `localStorage` and read in an `effect` (never
  * during render), because the server-rendered shell and the first client render have to agree.
  */
 export default function NavBar({
+  active,
+  session,
   counts,
   total,
   archived,
-  session,
-  onOpenProcesses,
   onSignOut,
 }: NavBarProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -107,7 +114,12 @@ export default function NavBar({
       </div>
 
       <div className={collapsed ? 'px-2 py-3' : 'px-3 py-4'}>
-        <a href="/" className={collapsed ? itemClass(true, true) : ACTIVE_LINK} title="Board">
+        <a
+          href="/"
+          className={itemClass(collapsed, active === 'board')}
+          title="Board"
+          aria-current={active === 'board' ? 'page' : undefined}
+        >
           <span aria-hidden>▦</span>
           {!collapsed && <span>Board</span>}
         </a>
@@ -117,8 +129,9 @@ export default function NavBar({
             <li>
               <a
                 href="/admin"
-                className={itemClass(collapsed)}
+                className={itemClass(collapsed, active === 'vocabularies')}
                 title={collapsed ? 'Vocabularies (admin)' : undefined}
+                aria-current={active === 'vocabularies' ? 'page' : undefined}
               >
                 <span className="flex items-center gap-2">
                   <span aria-hidden>⚙</span>
@@ -134,11 +147,11 @@ export default function NavBar({
           )}
 
           <li>
-            <button
-              type="button"
-              onClick={onOpenProcesses}
-              className={itemClass(collapsed)}
+            <a
+              href="/processes"
+              className={itemClass(collapsed, active === 'processes')}
               title={collapsed ? 'Processes · run log' : undefined}
+              aria-current={active === 'processes' ? 'page' : undefined}
             >
               <span className="flex items-center gap-2">
                 <span aria-hidden>▤</span>
@@ -149,7 +162,7 @@ export default function NavBar({
                   run log
                 </span>
               )}
-            </button>
+            </a>
           </li>
 
           {/* Roadmap placeholders: they are words, not icons, so a collapsed panel drops them. */}
@@ -167,7 +180,7 @@ export default function NavBar({
         </ul>
       </div>
 
-      {!collapsed && (
+      {!collapsed && counts && total !== undefined && (
         <div className="px-5 py-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
             Pipeline ({total})
@@ -180,7 +193,7 @@ export default function NavBar({
               </li>
             ))}
           </ul>
-          {archived > 0 && (
+          {archived !== undefined && archived > 0 && (
             <p className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-sm text-rose-600">
               <span>
                 <span aria-hidden>⛔️</span> Refused

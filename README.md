@@ -233,10 +233,14 @@ A **`⛔️ Archive`** refusal keeps the card in its column and mutes it, and a 
 **Interviewing** gains an **Interviews** section: the Move dialog can schedule the first call,
 and every row has *✏️ Edit* (date & time, type and the free-text result) and *✕ Remove*. Each
 column sorts itself by the card's last change (`↓ Newest` by default, `↑ Oldest` on a click),
-and the navbar's **Processes** window shows the run history of the internal jobs - the RSS
-intake twice an hour, the auto-archiver once a day - one row per run with its counters, duration
-and outcome. Every dialog, the full-screen card included, closes on Escape, on Cancel and on a
-click on the overlay.
+and the **Processes** page (`/processes`, reachable from the same left panel) shows the run history
+of the internal jobs - the RSS intake at deploy time and then twice an hour, the auto-archiver once
+a day - one row per run with its counters, duration and outcome. Every dialog, the full-screen card
+included, closes on Escape, on Cancel and on a click on the overlay.
+
+The board, the run log and (for an administrator) the vocabularies are **three pages of one
+application**: the same left panel and page header, and each on its own URL - so a bookmark, a
+browser Back and a reload all do what they say.
 
 It is also where the scraper posts: `extension/` collects every vacancy card on a listing
 page, and `POST /api/vacancies/batch` validates the batch and creates **one card per

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { VOCABULARY_KINDS, summarizeVocabulary } from '../lib/admin';
 import type { BoardAction } from '../lib/types';
 import ActionVocabulary from './ActionVocabulary';
+import AppShell from './AppShell';
 
 interface Vocabulary {
   actions: BoardAction[];
@@ -108,45 +109,14 @@ export default function AdminApp({ session }: AdminAppProps) {
 
   const summary = vocabulary ? summarizeVocabulary(vocabulary.actions) : null;
 
-  /** Sign out for real (the board island does the same): clear the cookie, then land. */
-  async function signOut() {
-    // Body-less, but it still needs the JSON content-type (Astro's `checkOrigin`).
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    }).catch(() => undefined);
-    window.location.assign('/login');
-  }
-
-
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
-        <div>
-          <h1 className="text-base font-semibold text-slate-900">Vocabularies</h1>
-          <p className="text-xs text-slate-500">
-            {session.name ? `${session.name} · ` : ''}
-            {session.email} · administrator
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <a
-            href="/"
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            ← Board
-          </a>
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-5">
+    <AppShell
+      active="vocabularies"
+      title="Vocabularies"
+      subtitle="The words the board uses - Actions are data, the other three are fixed in code."
+      session={session}
+    >
+      <div className="mx-auto w-full max-w-5xl">
         {error && (
           <p className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
             {error}
@@ -173,8 +143,8 @@ export default function AdminApp({ session }: AdminAppProps) {
                 </div>
                 {summary && (
                   <p className="text-[11px] text-slate-500">
-                    {summary.total} live ({summary.refusals} refusal · {summary.progress} progress)
-                    {summary.retired > 0 ? ` · ${summary.retired} retired` : ''}
+                    {summary.total} entries ({summary.refusals} refusal ·{' '}
+                    {summary.progress} progress)
                   </p>
                 )}
               </div>
@@ -248,7 +218,7 @@ export default function AdminApp({ session }: AdminAppProps) {
             </div>
           </div>
         )}
-      </main>
-    </div>
+      </div>
+    </AppShell>
   );
 }

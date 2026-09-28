@@ -13,9 +13,10 @@ export const prerender = false;
  *   DELETE /api/admin/actions?value=…                    remove from the catalogue
  *
  * Every one of them is *catalogue-only*: `resume_history` and
- * `resume_board.archived_reason` keep the words they were recorded with, which is why a
- * removed value comes back from `GET /api/admin/vocabulary` as `catalogued: false` (still
- * filterable, no longer suggested). Nothing here can rewrite history.
+ * `resume_board.archived_reason` keep the words they were recorded with, so a removed value
+ * simply disappears from the vocabulary - `GET /api/admin/vocabulary` stops listing it, a
+ * dialog stops suggesting it and the Filters panel stops offering it - while the cards that
+ * carry it still show it in their own History section. Nothing here can rewrite history.
  *
  * Admin-only; see `GET /api/admin/vocabulary` for why the route re-checks the claim.
  */
