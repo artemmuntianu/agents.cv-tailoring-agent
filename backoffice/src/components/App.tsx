@@ -5,6 +5,7 @@ import KanbanBoard from './KanbanBoard';
 import ReasonDialog from './ReasonDialog';
 import RemoveDialog from './RemoveDialog';
 import VacancyModal from './VacancyModal';
+import { defaultArchiveAction, defaultMoveAction } from '../lib/actions';
 import { countArchived, countByStage } from '../lib/board';
 import { DEFAULT_FILTERS, filterCards, type BoardFilters } from '../lib/filters';
 import { stageLabel } from '../lib/stages';
@@ -401,6 +402,10 @@ export default function App({ session }: AppProps) {
         toLabel={stageLabel(pending.to)}
         actions={actions}
         actionsKind="move"
+        // The destination decides the default wording ("To Prepare", "To Applied",
+        // ...): the common case is then one keystroke, and the trail reads the way it
+        // always has.
+        defaultAction={defaultMoveAction(pending.to)}
         confirmLabel="Proceed"
         // Entering Interviewing also collects the first interview; entering Prepare is what
         // queues tailoring - say so before it happens.
@@ -444,7 +449,11 @@ export default function App({ session }: AppProps) {
         actionsKind="archive"
         confirmLabel="⛔️ Archive"
         tone="danger"
-        defaultActor="Company"
+        // The Actor stays the dialog's own default (**Candidate**, i.e. "you" - the
+        // operator is the one recording the change). The reason defaults to "Not
+        // Applicable" only where that is the only honest answer; every other column
+        // starts empty.
+        defaultAction={defaultArchiveAction(pendingArchive.stage)}
         onProceed={confirmArchive}
         onCancel={() => setPendingArchive(null)}
       />

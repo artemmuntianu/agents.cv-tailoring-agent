@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_SUGGESTIONS, normalizeAction, rankActions, withNewAction } from './actions';
+import {
+  MAX_SUGGESTIONS,
+  defaultArchiveAction,
+  defaultMoveAction,
+  normalizeAction,
+  rankActions,
+  withNewAction,
+} from './actions';
+import { STAGES } from './stages';
 import type { BoardAction } from './types';
 
 const action = (
@@ -83,5 +91,26 @@ describe('what gets stored vs what gets suggested', () => {
     expect(bumped[0].uses).toBe(4);
     // An empty value changes nothing.
     expect(withNewAction(existing, '   ', 'archive')).toEqual(existing);
+  });
+});
+
+describe('the wording each dialog starts with', () => {
+  it("offers the destination column's own wording for a move", () => {
+    expect(defaultMoveAction('prepare')).toBe('To Prepare');
+    expect(defaultMoveAction('applied')).toBe('To Applied');
+
+    // Every column has one: the pattern is `To <column>`, and a renamed column has to be
+    // renamed here too - which is the point, the default and the column cannot drift apart.
+    expect(STAGES.map((stage) => defaultMoveAction(stage.id))).toEqual(
+      STAGES.map((stage) => `To ${stage.label}`),
+    );
+  });
+
+  it('offers "Not Applicable" only for a card still in Scraped', () => {
+    expect(defaultArchiveAction('scraped')).toBe('Not Applicable');
+    // A refusal from any other column is a judgement call, so nothing is prefilled.
+    expect(STAGES.map((stage) => defaultArchiveAction(stage.id))).toEqual(
+      STAGES.map((stage) => (stage.id === 'scraped' ? 'Not Applicable' : '')),
+    );
   });
 });

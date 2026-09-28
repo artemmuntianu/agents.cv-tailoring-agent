@@ -24,6 +24,12 @@ interface ReasonDialogProps {
   warning?: string;
   defaultActor?: Actor;
   /**
+   * What the Action field starts with. The dialog is opened *for* one change, so the caller
+   * knows the context (the column being entered, or the one a refusal leaves) and can make
+   * the routine wording the default - the operator can still type anything.
+   */
+  defaultAction?: string;
+  /**
    * True when the target column is **Interviewing**: the dialog then also collects the first
    * interview (date & time + type), which the move inserts in the same transaction. Left empty,
    * nothing is inserted - the card's Interviews section is where an unscheduled one lives.
@@ -54,12 +60,13 @@ export default function ReasonDialog({
   tone = 'neutral',
   warning,
   defaultActor = 'Candidate',
+  defaultAction = '',
   interview = false,
   onProceed,
   onCancel,
 }: ReasonDialogProps) {
   const [actor, setActor] = useState<Actor>(defaultActor);
-  const [action, setAction] = useState('');
+  const [action, setAction] = useState(defaultAction);
   // The Interview section (a move into Interviewing). An empty draft sends nothing at all.
   const [draft, setDraft] = useState<InterviewDraft>({ ...EMPTY_INTERVIEW_DRAFT });
   const interviewRequest = interview ? draftToRequest(draft) : null;

@@ -301,6 +301,14 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   (`scripts/archive_not_applicable.sql` is the last artifact of it). Every row that
   import wrote is prefixed `Imported: ` in `resume_history`, so an imported card can
   always be told apart from a hand-made move.
+- **A dialog starts from the context, not from a blank field.** `ReasonDialog` opens with Actor
+  **Candidate** ("you" - the operator is the one recording the change) and an Action the *card's
+  context* decides: a move into a column offers that column's own wording (`To Prepare`,
+  `To Applied`, ... - `MOVE_DEFAULT` in `src/lib/actions.ts`), and a refusal offers
+  `Not Applicable` **only** for a card still in Scraped, because no application was ever made
+  for it (`ARCHIVE_DEFAULT`); a refusal from any other column is a judgement call and starts
+  empty. These are *defaults*, not suggestions: the catalogue still learns only what was
+  confirmed.
 - **The board carries the operator's own history**: that import adopted 226 cards from
   the job-search export, each stamped with the sheet's own dates, and archived the
   rows the sheet had already closed - 121 `NA` cards ("fits neither side") as
@@ -524,6 +532,8 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
 - Import from `agent/`/`utils/`, or add a Python dependency for this layer.
 - Add "Archived" as a stage or a column, or a second archive table: the state lives in
   `resume_board.archived_*` (invariant 19) and `isStageId('archived')` must stay false.
+- Prefill an Action from anywhere but `MOVE_DEFAULT`/`ARCHIVE_DEFAULT` (the dialogs' two
+  context defaults): free text and the `board_actions` catalogue are the only other sources.
 - Hard-code the Action suggestions in the UI: they come from `board_actions`, written by
   the same transaction as the change that used them.
 - Write `Me`/`Them`: the stored vocabulary is `Candidate`/`Company` (invariant 20).

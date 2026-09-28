@@ -1,5 +1,5 @@
 import { MAX_ACTION_LENGTH } from './board';
-import type { BoardAction } from './types';
+import type { BoardAction, StageId } from './types';
 
 /**
  * The Action field is a `<input list>` + `<datalist>` combobox: the browser supplies
@@ -72,4 +72,40 @@ export function withNewAction(
     );
   }
   return [{ value, kind, uses: 1, lastUsedAt: now.toISOString() }, ...actions];
+}
+
+/**
+ * The Action wording each dialog starts with, so a routine move is confirmed with one
+ * keystroke instead of a retyped phrase.
+ *
+ * A **default, not a suggestion list**: the field stays free text, and whatever gets confirmed
+ * is what the vocabulary learns (the route upserts `board_actions` in the same transaction as
+ * the change). Both maps read the way the operator's own trail already reads - `To <column>`
+ * for a move, `Not Applicable` for refusing a card nobody has acted on - which is why those
+ * strings are already in the catalogue.
+ */
+const MOVE_DEFAULT: Record<StageId, string> = {
+  scraped: 'To Scraped',
+  prepare: 'To Prepare',
+  applied: 'To Applied',
+  negotiating: 'To Negotiating',
+  interviewing: 'To Interviewing',
+  offer: 'To Offer',
+};
+
+/**
+ * Only a card still in **Scraped** is `Not Applicable`: no application was ever made, so there
+ * is nothing to have been refused. Every other column starts blank - the reason is a judgement
+ * call (no response, salary mismatch, ...) that only the operator can make.
+ */
+const ARCHIVE_DEFAULT: Partial<Record<StageId, string>> = { scraped: 'Not Applicable' };
+
+/** What the Move dialog offers for a card entering `to`. */
+export function defaultMoveAction(to: StageId): string {
+  return MOVE_DEFAULT[to] ?? '';
+}
+
+/** What the Archive dialog offers for a card leaving `from` ('' = nothing prefilled). */
+export function defaultArchiveAction(from: StageId): string {
+  return ARCHIVE_DEFAULT[from] ?? '';
 }
