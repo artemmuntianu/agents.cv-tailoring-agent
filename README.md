@@ -119,7 +119,10 @@ row id, not a business key.
 `prefetch = 1` plus KEDA's `QueueLength` trigger (`ready + unacked`) means one pod
 per waiting vacancy and no pod when the queue is empty. Counting in-flight work is
 the important part: the deployment cannot scale to zero while a task is still
-being processed.
+being processed. The two **interactive** queues (`resumes.cover`,
+`applications.draft`) are the exception - they keep one pod warm
+(`minReplicaCount: 1`) - because a cold start is most of the wait when a click,
+not a batch, is what woke the queue.
 
 ### Fail loudly at the edges, never silently mid-task
 
@@ -296,7 +299,7 @@ can reach and queues the rest, so the one thing left to do is sweep the cluster 
 ## Your files
 
 Everything the agent reads or writes lives on one volume, so nothing is lost when
-the worker scales to zero:
+a worker scales to zero:
 
 ```
 /data/cv_data.json     structured CV model (must match cv.docx exactly)

@@ -9,7 +9,9 @@ metadata:
 spec:
   scaleTargetRef:
     name: {{ include "cv-tailoring-worker.fullname" . }}-cover
-  minReplicaCount: 0
+  # Kept warm for the same reason as the apply worker: a letter is asked for by a click - or by
+  # a move into Prepare - and the cold start is the most visible part of that wait.
+  minReplicaCount: {{ .Values.cover.minReplicaCount }}
   # A letter is one short Gemini call, so the ceiling is well below the tailoring worker's:
   # nothing here converts documents, and a burst of letters is rare (the operator clicks).
   maxReplicaCount: {{ .Values.cover.maxReplicaCount }}

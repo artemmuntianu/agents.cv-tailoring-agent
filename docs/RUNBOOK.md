@@ -57,9 +57,10 @@ psql "$DATABASE_URL" -c "select status, count(*) from resumes group by status or
 psql "$DATABASE_URL" -c "select process, status, started_at, finished_at, summary from process_runs order by started_at desc limit 10;"
 ```
 
-Healthy signs: worker replicas `0` when idle (scale-to-zero works), `Ready`
-depth rises with a batch and returns to 0, `messages_unacknowledged` ≤ max
-replicas, and the DLQ stays at 0.
+Healthy signs: the tailoring worker at `0` when idle while the apply and cover
+workers sit at `1` (they are kept warm on purpose - a cold pod was most of the wait
+for a click), `Ready` depth rises with a batch and returns to 0,
+`messages_unacknowledged` ≤ max replicas, and the DLQ stays at 0.
 
 ## Scheduled intake (the scout)
 
@@ -238,7 +239,7 @@ kubectl rollout restart deploy/ai-agent-worker
 | hard cap on parallel spend | `cv-tailoring-worker.keda.maxReplicaCount` |
 | stop all new work | `kubectl scale scaledobject ... --replicas=0` (or suspend KEDA autoscaling) |
 | drain the queue faster | raise `maxReplicaCount` and `keda.queueLength` (e.g. `"2"` = 1 pod / 2 messages) |
-| keep pods warm (latency) | `keda.minReplicaCount=1` (costs money at idle) |
+| keep the *tailoring* pod warm too (latency) | `cv-tailoring-worker.keda.minReplicaCount=1` - the apply and cover workers are already warm by default; this one then costs an idle 250m/512Mi |
 
 ## After a schema change (the worker owns the DDL)
 

@@ -9,7 +9,10 @@ metadata:
 spec:
   scaleTargetRef:
     name: {{ include "cv-tailoring-worker.fullname" . }}-apply
-  minReplicaCount: 0
+  # The interactive half of the platform: `Populate` is a click, and paying KEDA's cold start
+  # (poll interval + pod boot) on top of the Gemini call made one click read as a hang. One pod
+  # stays warm - the queue depth still scales it up, since `queueLength` is 1.
+  minReplicaCount: {{ .Values.apply.minReplicaCount }}
   # One form is one Gemini call, and a burst is rare: the operator clicks Populate on one page at
   # a time, so the ceiling stays well below the tailoring worker's.
   maxReplicaCount: {{ .Values.apply.maxReplicaCount }}

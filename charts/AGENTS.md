@@ -39,6 +39,12 @@ Only KEDA comes from an upstream chart. The broker is ours, on the official
 - **KEDA owns the replica count.** `replicaCount: 0`; the Deployment only renders
   `replicas` when `keda.enabled=false`. `keda.mode: QueueLength` counts ready
   **+ unacked**, with `queueLength: "1"` = one pod per vacancy.
+- **The interactive workers are kept warm, the batch one is not.** `cover.minReplicaCount`
+  and `apply.minReplicaCount` are `1`: a letter and a form draft are asked for by a *click*
+  (or by a move into Prepare), so KEDA's cold start - up to `pollingInterval` plus the pod
+  boot - was the largest single piece of that wait. The tailoring worker keeps
+  `keda.minReplicaCount: 0`, because it is the slow, batch-ish one and a cold pod costs it
+  proportionally little.
 - **Credentials exist once.** `rabbitmq-credentials` is consumed by the broker
   StatefulSet, by the worker's `RABBITMQ_USERNAME`/`RABBITMQ_PASSWORD` env and by
   the KEDA `TriggerAuthentication` (never inline in the ScaledObject).

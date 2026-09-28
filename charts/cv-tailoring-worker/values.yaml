@@ -130,6 +130,10 @@ readinessProbe:
 # tailoring backlog nor wakes a tailoring pod, because each queue has its own ScaledObject.
 cover:
   enabled: true
+  # KEDA keeps one pod warm: a letter is asked for by a click (or by a move into Prepare) and
+  # the cold start is the most visible part of that wait. Nothing converts documents here, so an
+  # idle pod is cheaper than the latency.
+  minReplicaCount: 1
   # One letter is one short Gemini call: nothing converts documents here.
   maxReplicaCount: 3
   queueName: resumes.cover
@@ -143,6 +147,9 @@ cover:
 # backlog nor wakes a tailoring pod.
 apply:
   enabled: true
+  # Same warm-pod rule as the cover worker: Populate is a click, and the form draft is the
+  # middle of three steps the operator is watching.
+  minReplicaCount: 1
   # One form is one Gemini call, and a burst is rare (the operator clicks Populate).
   maxReplicaCount: 3
   queueName: applications.draft
@@ -153,7 +160,9 @@ keda:
   enabled: true
   minReplicaCount: 0
   maxReplicaCount: 20
-  pollingInterval: 15
+  # How fast a waiting message is noticed (KEDA polls the broker's management API). At 15s a
+  # click could spend that long *before* a pod even started; 5s is still one cheap HTTP call.
+  pollingInterval: 5
   cooldownPeriod: 300
   # 1 pod per pending message ("20 vacancies -> 20 pods" in the design docs).
   queueLength: "1"

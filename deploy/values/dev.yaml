@@ -132,10 +132,16 @@ cv-tailoring-worker:
     modelName: gemini-3.5-flash-lite
     preferredModels: gemini-3.5-flash-lite,gemini-3.1-flash-lite
   keda:
+    # Only the *tailoring* worker scales to zero: it is the slow, batch-ish one (it renders
+    # documents), so a cold start is a small share of a task that takes a minute or more. The two
+    # interactive workers - a form draft and a cover letter - are kept warm by the chart itself
+    # (`minReplicaCount: 1`), because there a cold pod was most of the visible wait.
     minReplicaCount: 0
     maxReplicaCount: 3
-    cooldownPeriod: 60
-    pollingInterval: 10
+    # 5s is how fast KEDA notices a waiting message; 5 minutes is how long a drained queue waits
+    # before tearing the pod down again - long enough to cover a session of cards back to back.
+    cooldownPeriod: 300
+    pollingInterval: 5
   resources:
     requests:
       cpu: 100m

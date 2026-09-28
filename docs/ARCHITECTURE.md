@@ -167,10 +167,10 @@ re-queue a card the operator has closed (invariant 19).
 
 | Knob | Value | Why it matters here |
 |---|---|---|
-| `keda.minReplicaCount` / `maxReplicaCount` | 0 / 3 | 0 → N → 0; the Deployment renders no `replicas` while KEDA is enabled |
+| `keda.minReplicaCount` / `maxReplicaCount` | tailoring 0 / 3, apply + cover **1** / 3 | only the tailoring worker goes to zero: it renders documents and takes a minute or more, so a cold pod is a small share of that. The two interactive workers keep one warm pod, because there the cold start is most of the wait for a *click*; the Deployment renders no `replicas` while KEDA is enabled |
 | `keda.mode` / `queueLength` / `activationValue` | `QueueLength` / `1` / `0` | one pod per waiting vacancy |
 | `keda.protocol` | **`http`** (+ the management URL from the Secret) | the count must include **unacknowledged** messages - the AMQP count is ready-only, so a prefetched job would look like an empty queue and KEDA would scale a working pod to zero |
-| `keda.pollingInterval` / `cooldownPeriod` | 10 s / 60 s | how fast a vacancy wakes a pod, and how long a drained queue waits before scaling down |
+| `keda.pollingInterval` / `cooldownPeriod` | 5 s / 300 s | how fast a waiting message wakes a pod (5 s of a click's wait, not 15), and how long a drained queue waits before scaling down - five minutes covers a session of cards back to back |
 | `keda.fallback` | threshold 3, replicas 1 | if the scaler cannot reach the broker, one worker stays alive instead of stalling |
 | `PREFETCH_COUNT` | 1 | one task per pod; with `queueLength=1` this is what makes "20 vacancies → 20 pods" |
 | `terminationGracePeriodSeconds` | 120 s | SIGTERM (scale-down, rolling update) lets the in-flight task finish and be acked |

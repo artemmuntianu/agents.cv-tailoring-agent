@@ -38,6 +38,17 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
+        "minReplicaCount": { "type": "integer", "minimum": 0 },
+        "maxReplicaCount": { "type": "integer", "minimum": 0 },
+        "queueName": { "type": "string", "minLength": 1 },
+        "resources": { "type": "object" }
+      }
+    },
+    "apply": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicaCount": { "type": "integer", "minimum": 0 },
         "maxReplicaCount": { "type": "integer", "minimum": 0 },
         "queueName": { "type": "string", "minLength": 1 },
         "resources": { "type": "object" }

@@ -262,7 +262,7 @@ cv-tailoring-worker:
     mode: QueueLength
     queueLength: "1"
     cooldownPeriod: 300
-    pollingInterval: 15
+    pollingInterval: 5
   resources:
     requests:
       cpu: 250m
