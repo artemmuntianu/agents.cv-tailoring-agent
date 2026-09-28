@@ -1,3 +1,4 @@
+import { MAX_COMPANY_LENGTH } from './missing';
 import { STAGES, describeHistory, isStageId } from './stages';
 import type {
   ActionRequest,
@@ -55,6 +56,26 @@ function parseAction(raw: unknown): ParseResult<string> {
   return { ok: true, value: action };
 }
 
+/**
+ * The optional `company` a move may carry (the dialog's *Missing fields* section).
+ *
+ * Absent or empty is the normal case; when it is there it is collapsed and capped exactly like
+ * the scrape caps its own fields, so the column can never grow a value the batch contract would
+ * refuse. Whether it is *used* is `lib/missing.ts::resolveCompany` - the stored value always wins
+ * and this only ever fills a blank - so here it is nothing but a shape check.
+ */
+function parseOptionalCompany(raw: unknown): ParseResult<string | undefined> {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== 'string') return { ok: false, error: 'company must be a string' };
+
+  const company = raw.replace(/\s+/g, ' ').trim();
+  if (!company) return { ok: true, value: undefined };
+  if (company.length > MAX_COMPANY_LENGTH) {
+    return { ok: false, error: `company must be at most ${MAX_COMPANY_LENGTH} characters` };
+  }
+  return { ok: true, value: company };
+}
+
 function asObject(body: unknown): ParseResult<Record<string, unknown>> {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return { ok: false, error: 'body must be a JSON object' };
@@ -86,7 +107,19 @@ export function parseMoveRequest(body: unknown): ParseResult<MoveRequest> {
   const action = parseAction(raw.action);
   if (!action.ok) return action;
 
-  return { ok: true, value: { jobId: jobId.value, to: raw.to, actor: actor.value, action: action.value } };
+  const company = parseOptionalCompany(raw.company);
+  if (!company.ok) return company;
+
+  return {
+    ok: true,
+    value: {
+      jobId: jobId.value,
+      to: raw.to,
+      actor: actor.value,
+      action: action.value,
+      ...(company.value ? { company: company.value } : {}),
+    },
+  };
 }
 
 /**

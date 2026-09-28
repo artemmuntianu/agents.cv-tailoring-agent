@@ -343,6 +343,22 @@ export async function moveCard(
 }
 
 /**
+ * Fill in a company the scrape left empty - the Move dialog's *Missing fields* section.
+ *
+ * The one write the board makes to a `resumes` column. `company` is a scraped field, but the
+ * scrape came back blank and both the tailoring prompt and the cover letter read it, so the
+ * operator's answer has to reach the row *before* the move publishes anything. The guard is the
+ * rule itself: `coalesce(company, '') = ''` means this can only ever fill a gap, never overwrite
+ * what the site told us. Like the card's own detail fields, it is not historicised (invariant 28).
+ */
+export async function fillCompany(jobId: string, company: string): Promise<void> {
+  await pool().query(
+    `update resumes set company = $2 where job_id = $1 and coalesce(company, '') = ''`,
+    [jobId, company],
+  );
+}
+
+/**
  * Record an action **without** moving the card - the card's `➕ Add action` button.
  *
  * The column is read and written back untouched (a card without a board row is seeded as

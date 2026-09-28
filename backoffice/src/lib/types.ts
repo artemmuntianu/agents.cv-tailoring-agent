@@ -171,6 +171,12 @@ export interface MoveRequest {
   to: StageId;
   actor: Actor;
   action: string;
+  /**
+   * A field the scrape left empty, filled in the dialog's *Missing fields* section. It only ever
+   * fills a blank (`lib/missing.ts::resolveCompany`): the stored company always wins, and the
+   * value is written before the move publishes, so the task and the letter carry it.
+   */
+  company?: string;
 }
 
 /** What the Archive dialog sends - the same actor + reason contract as a move. */

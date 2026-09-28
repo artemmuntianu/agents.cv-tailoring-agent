@@ -236,7 +236,12 @@ automation         .github/workflows/
     can never quietly mean "no message was ever sent". A card whose stored `description_raw`
     is null (scraped before 2026-09-26) is refused with 409 and stays where it is rather than
     poisoning the DLQ, and a parked card already in Prepare is *retried* by the same request
-    without a stage change.
+    without a stage change. The move may also carry a **company the scrape left empty** (the
+    dialog's *Missing fields* section): `resumes.company` is the one worker column the board
+    writes, and only into a blank - the site's value always wins
+    (`lib/missing.ts::resolveCompany`), and it is written *before* the task is built, because both
+    the tailoring prompt and the cover letter read it and would otherwise say "unknown company".
+    Like the card's detail fields it is not historicised (invariant 28).
 
 24. **Cover letters are on demand, on their own queue.** A letter is application material,
     not a stage of the funnel: the board offers *Generate* on **any** card, whatever its column

@@ -8,6 +8,7 @@ import VacancyModal from './VacancyModal';
 import { defaultArchiveAction, defaultMoveAction } from '../lib/actions';
 import { countArchived, countByStage } from '../lib/board';
 import { DEFAULT_FILTERS, filterCards, type BoardFilters } from '../lib/filters';
+import { missingFields, missingRequest } from '../lib/missing';
 import { stageLabel } from '../lib/stages';
 import type {
   ActionRequest,
@@ -176,11 +177,25 @@ export default function App({ session }: AppProps) {
   /**
    * The move confirmed. Entering Interviewing can carry a first interview, which the move route
    * inserts in the same transaction as the column change (so a card can never claim the column
-   * without it) - an empty draft simply sends nothing.
+   * without it) - an empty draft simply sends nothing. The Missing fields section rides along
+   * the same way: whatever the operator typed for a field the scrape left empty is sent with the
+   * move, and the move route is what stores it.
    */
-  async function confirmMove(actor: Actor, action: string, interview: InterviewRequest | null) {
+  async function confirmMove(
+    actor: Actor,
+    action: string,
+    interview: InterviewRequest | null,
+    missing: Record<string, string>,
+  ) {
     if (!pending) return;
-    const request: MoveRequest = { jobId: pending.card.jobId, to: pending.to, actor, action };
+    const request: MoveRequest = {
+      jobId: pending.card.jobId,
+      to: pending.to,
+      actor,
+      action,
+      // The Missing fields values: only the ones that were actually typed.
+      ...missingRequest(missing),
+    };
     setPending(null);
     const result = await mutate(
       '/api/board/move',
@@ -412,6 +427,8 @@ export default function App({ session }: AppProps) {
         // ...): the common case is then one keystroke, and the trail reads the way it
         // always has.
         defaultAction={defaultMoveAction(pending.to)}
+        // Empty for a card the scrape filled completely.
+        missingFields={missingFields(pending.card)}
         confirmLabel="Proceed"
         // Entering Interviewing also collects the first interview; entering Prepare is what
         // queues tailoring - say so before it happens.

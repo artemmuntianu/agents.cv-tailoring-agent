@@ -4,9 +4,10 @@ import { coverOutcomeNote } from '../../../lib/cover';
 import type { CoverOutcome } from '../../../lib/cover';
 import { requestCoverLetter } from '../../../lib/coverRequest';
 import type { InterviewRequest } from '../../../lib/types';
-import { fetchCard, moveCard, taskMessageRow } from '../../../lib/db';
+import { fetchCard, fillCompany, moveCard, taskMessageRow } from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
 import { parseInterviewRequest } from '../../../lib/interviews';
+import { resolveCompany } from '../../../lib/missing';
 import { publishResumeTasks } from '../../../lib/queue';
 import { toTaskMessage } from '../../../lib/vacancies';
 
@@ -26,6 +27,10 @@ export const prerender = false;
  * the whole application kit. That half is best effort - it never moves the card back and never
  * replaces a letter that is already there - and what it did comes back as the response's `note`,
  * which the board shows above the columns.
+ *
+ * The dialog's **Missing fields** section rides along with the move: a company the scrape
+ * left empty is written to the row *before* the message is built, so the tailoring prompt and
+ * the cover letter stop reading a blank (`resolveCompany` only ever fills one).
  *
  * A card without a stored job description cannot be queued at all: it predates the
  * `description_raw` column, and the worker would refuse a message with no description. The
@@ -73,6 +78,18 @@ export const POST: APIRoute = async ({ request }) => {
   const wanted = tailoringRequest(row.stage, row.status, move.to);
   let queued = 0;
 
+  // The operator filled a field the scrape left empty. The stored value always wins, and the
+  // same value that is written is the one published below, so the task never carries the blank
+  // the operator just replaced.
+  const { company, fill } = resolveCompany(row.company, move.company);
+  if (fill) {
+    try {
+      await fillCompany(move.jobId, fill);
+    } catch (error) {
+      return json({ ok: false, error: `job store unavailable: ${errorMessage(error)}` }, 503);
+    }
+  }
+
   if (wanted !== 'none' && !row.descriptionRaw) {
     return json(
       {
@@ -90,7 +107,7 @@ export const POST: APIRoute = async ({ request }) => {
       {
         external_id: row.externalId,
         title: row.title,
-        company: row.company,
+        company,
         description_raw: row.descriptionRaw ?? '',
         ...(row.sourceUrl ? { source_url: row.sourceUrl } : {}),
       },
@@ -131,6 +148,7 @@ export const POST: APIRoute = async ({ request }) => {
   }
 
   const notes: string[] = [];
+  if (fill) notes.push('Company saved.');
   if (wanted === 'queue') notes.push('Tailoring queued.');
   else if (wanted === 'retry') notes.push('Tailoring retried.');
   const coverNote = coverOutcomeNote(cover);

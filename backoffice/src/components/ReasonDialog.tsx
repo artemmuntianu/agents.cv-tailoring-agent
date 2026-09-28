@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ACTORS } from '../lib/board';
 import { EMPTY_INTERVIEW_DRAFT, draftToRequest } from '../lib/interviews';
+import type { MissingField } from '../lib/missing';
 import { ACTOR_HINT } from '../lib/stages';
 import type { Actor, BoardAction, InterviewDraft, InterviewRequest } from '../lib/types';
 import ActionCombobox from './ActionCombobox';
@@ -30,12 +31,23 @@ interface ReasonDialogProps {
    */
   defaultAction?: string;
   /**
+   * The fields the scrape left empty. Non-empty renders the **Missing fields** section, whose
+   * values travel with the confirm (`onProceed`'s last argument) - this dialog is the one moment
+   * the operator has the card in front of them.
+   */
+  missingFields?: MissingField[];
+  /**
    * True when the target column is **Interviewing**: the dialog then also collects the first
    * interview (date & time + type), which the move inserts in the same transaction. Left empty,
    * nothing is inserted - the card's Interviews section is where an unscheduled one lives.
    */
   interview?: boolean;
-  onProceed: (actor: Actor, action: string, interview: InterviewRequest | null) => void;
+  onProceed: (
+    actor: Actor,
+    action: string,
+    interview: InterviewRequest | null,
+    missing: Record<string, string>,
+  ) => void;
   onCancel: () => void;
 }
 
@@ -61,12 +73,16 @@ export default function ReasonDialog({
   warning,
   defaultActor = 'Candidate',
   defaultAction = '',
+  missingFields = [],
   interview = false,
   onProceed,
   onCancel,
 }: ReasonDialogProps) {
   const [actor, setActor] = useState<Actor>(defaultActor);
   const [action, setAction] = useState(defaultAction);
+  // The Missing fields values, keyed by `MissingField.key`. Nothing is validated here: empty
+  // values are dropped when the request is built (`lib/missing.ts::missingRequest`).
+  const [missing, setMissing] = useState<Record<string, string>>({});
   // The Interview section (a move into Interviewing). An empty draft sends nothing at all.
   const [draft, setDraft] = useState<InterviewDraft>({ ...EMPTY_INTERVIEW_DRAFT });
   const interviewRequest = interview ? draftToRequest(draft) : null;
@@ -92,7 +108,7 @@ export default function ReasonDialog({
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          if (canProceed) onProceed(actor, action, interviewRequest);
+          if (canProceed) onProceed(actor, action, interviewRequest, missing);
         }}
       >
         <h2 className="text-base font-semibold text-slate-900">{title}</h2>
@@ -108,6 +124,38 @@ export default function ReasonDialog({
           <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             {warning}
           </p>
+        )}
+
+        {missingFields.length > 0 && (
+          <section className="mt-4 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+              Missing fields
+            </h3>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-amber-900/80">
+              Not filled by the scrape. Anything you type here is saved on the card by this move,
+              so the tailored CV and the cover letter stop reading a blank.
+            </p>
+            {missingFields.map((field) => (
+              <label
+                key={field.key}
+                className="mt-3 block text-xs font-medium uppercase tracking-wide text-slate-500"
+              >
+                {field.label}
+                <input
+                  value={missing[field.key] ?? ''}
+                  onChange={(event) =>
+                    setMissing((current) => ({ ...current, [field.key]: event.target.value }))
+                  }
+                  placeholder={field.placeholder}
+                  maxLength={field.maxLength}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-900 placeholder:text-slate-400"
+                />
+                <span className="mt-1 block text-[11px] font-normal normal-case tracking-normal text-amber-900/70">
+                  {field.hint}
+                </span>
+              </label>
+            ))}
+          </section>
         )}
 
         <label className="mt-4 block text-xs font-medium uppercase tracking-wide text-slate-500">

@@ -77,7 +77,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/ingest.ts` | Pure ingest decision: new card / duplicate (+ the `submitted` status) |
 | `src/lib/artifacts.ts` | Server-only artifact resolution (root from `ARTIFACTS_DIR`/`OUTPUT_DIR`, traversal-refused) |
 | `src/lib/artifact-link.ts` | Isomorphic `/api/artifacts/...` link builder for the React islands |
-| `src/lib/db.ts` | Server-only pg pool; board reads, one transaction per move, the ingest rows, the interviews, the history corrections, the recorded action and the process-run read |
+| `src/lib/db.ts` | Server-only pg pool; board reads, one transaction per move, the ingest rows, the interviews, the history corrections, the recorded action, the process-run read and the one worker column the board fills (a company the scrape left empty) |
 | `src/lib/board.ts` | Pure helpers: the four request parsers, grouping, the date sort, active/archived counts, history lines |
 | `src/lib/filters.ts` | The toolbar's state and filtering: search, date window, stages, actions, visibility |
 | `src/lib/actions.ts` | The Action combobox's ranking and normalisation (`board_actions` is the data) |
@@ -88,6 +88,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
+| `src/lib/missing.ts` | The *Missing fields* section: which card fields the scrape left empty, the request fragment they become, and the fill-only company rule (`resolveCompany`) |
 | `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
@@ -174,7 +175,15 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   refused with 409 instead of poisoning the DLQ. The same request also asks for the **cover
   letter** (`lib/coverRequest.ts`, best effort: it never rolls the move back and never replaces a
   letter that is already there) - one drop sets up the whole application kit, and the response's
-  `note` says what happened to each half.
+  the whole application kit, and the response's `note` says what happened to each half.
+- **A move can fill a field the scrape left empty** - the dialog's *Missing fields* section
+  (`lib/missing.ts`). The trigger today is `resumes.company`: a listing that hides the employer
+  comes back blank, and both the tailoring prompt and the cover letter read that column. The route
+  writes it with `coalesce(company, '') = ''` in the `WHERE` (`lib/db.ts::fillCompany`), so it can
+  only ever fill a gap and never overwrite what the site gave us, and it writes **before** the
+  message is built - `resolveCompany` returns the value to publish, so nothing reads the row twice
+  and the task never carries the blank the operator just replaced. The route adds `Company saved.`
+  to the note when it did. Not historicised, like the card's detail fields (invariant 28).
 - One message per vacancy, shaped like `agent/contracts.py::ResumeTaskMessage`
   (`user_id` = the **row's** owner, `source` = the site slug, `cv_data` omitted so the
   worker downloads the master CV it validates against `cv.docx`).
@@ -547,6 +556,8 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   context defaults): free text and the `board_actions` catalogue are the only other sources.
 - Hard-code the Action suggestions in the UI: they come from `board_actions`, written by
   the same transaction as the change that used them.
+- Write a *Missing fields* value over a stored one, or historicise it: the dialog only offers
+  what is blank, `fillCompany` only fills a gap, and the value is a card attribute, not a move.
 - Write `Me`/`Them`: the stored vocabulary is `Candidate`/`Company` (invariant 20).
 - Date a card by anything other than `updated_at` in the filters without saying so.
 - Let an archived card be dragged, or let the ingest gateway re-queue one.

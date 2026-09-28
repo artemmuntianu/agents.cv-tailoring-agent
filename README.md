@@ -208,7 +208,9 @@ scout - nothing runs yet), **Prepare** (its sub-state follows the worker's statu
 card here is what queues tailoring), **Applied**, **Negotiating**, **Interviewing** and
 **Offer**. Every move asks for an actor
 (Candidate/Company) and a reason, and both are written to `resume_history` in the same Postgres
-the worker uses (`backoffice/AGENTS.md` documents the contract). The board re-reads the
+the worker uses (`backoffice/AGENTS.md` documents the contract). A card the scrape left without a
+company gets a **Missing fields** section in the move dialog, and what the operator types there is
+stored with the move - only ever into a blank, since the site's own value always wins. The board re-reads the
 database every few seconds (the `● Live` toggle), so worker progress shows up on its
 own.
 

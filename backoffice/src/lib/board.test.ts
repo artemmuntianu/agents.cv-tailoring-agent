@@ -107,6 +107,21 @@ describe('parseMoveRequest (the dialog contract)', () => {
     const parsed = parseMoveRequest({ ...valid, action: 'x'.repeat(MAX_ACTION_LENGTH + 1) });
     expect(parsed.ok).toBe(false);
   });
+
+  it('carries a company the dialog filled in, and only when it says something', () => {
+    // A move without the dialog's Missing fields section is exactly what it always was.
+    expect(parseMoveRequest(valid)).toEqual({ ok: true, value: valid });
+    expect(parseMoveRequest({ ...valid, company: '  Acme   Data ' })).toEqual({
+      ok: true,
+      value: { ...valid, company: 'Acme Data' },
+    });
+    // An input the operator opened and left alone is not a value.
+    expect(parseMoveRequest({ ...valid, company: '   ' })).toEqual({ ok: true, value: valid });
+    expect(parseMoveRequest({ ...valid, company: null })).toEqual({ ok: true, value: valid });
+    // Anything malformed never reaches the database.
+    expect(parseMoveRequest({ ...valid, company: 42 }).ok).toBe(false);
+    expect(parseMoveRequest({ ...valid, company: 'x'.repeat(400) }).ok).toBe(false);
+  });
 });
 
 describe('board grouping', () => {
