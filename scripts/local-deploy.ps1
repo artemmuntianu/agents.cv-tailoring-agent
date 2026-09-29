@@ -95,6 +95,21 @@ Step '4. build the worker image'
 if ($SkipBuild) {
     Warn 'skipped (-SkipBuild)'
 } else {
+    # The image bakes in the licensed Calibri files whenever they sit in deploy\fonts\
+    # (Dockerfile). Warn, never fail: without them the build is still valid, LibreOffice
+    # just renders Calibri Light as DejaVu Sans and the PDF differs from Word (D15).
+    $fontDir = Join-Path $repoRoot 'deploy\fonts'
+    $fontCount = 0
+    if (Test-Path -LiteralPath $fontDir) {
+        $fontCount = (Get-ChildItem -LiteralPath $fontDir -Filter '*.ttf' -ErrorAction SilentlyContinue |
+            Measure-Object).Count
+    }
+    if ($fontCount -eq 0) {
+        Warn 'deploy\fonts\ holds no Calibri files: Calibri Light will render as DejaVu Sans.'
+        Warn 'Run .\scripts\fetch-fonts.ps1 first if the PDF has to match Word.'
+    } else {
+        Ok ("fonts: $fontCount Calibri file(s) will be baked into the image")
+    }
     & docker build -t $Image .
     if ($LASTEXITCODE -ne 0) { Fail 'docker build failed' }
     Ok ("image built: " + $Image)

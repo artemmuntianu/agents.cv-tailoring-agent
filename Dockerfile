@@ -14,6 +14,14 @@ ENV PYTHONUNBUFFERED=1 \
 # substitutes and the rendered PDF (line breaks, page breaks) differs from Word -
 # which changes what the Gemini Vision layout check sees. Carlito/Caladea are
 # metrically identical to Calibri/Cambria, and Liberation matches Arial/Times.
+#
+# Carlito has no *Light* weight, so the CV's heading runs (`asciiTheme="majorHAnsi"`,
+# i.e. Calibri Light) came out in DejaVu Serif - a different design and different
+# metrics. The genuine outlines are baked in below whenever the operator puts them in
+# `deploy/fonts/` - `scripts/fetch-fonts.ps1` copies them out of
+# C:\Windows\Fonts. They are Microsoft-licensed, so that directory is gitignored and
+# `.dockerignore` whitelists it; the image must keep building when it holds nothing but
+# the README, which is what CI does.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
         libreoffice-core \
@@ -24,6 +32,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-crosextra-caladea \
         tini \
     && rm -rf /var/lib/apt/lists/*
+
+# Real Calibri, when the operator supplied it (see the note above). The directory form is
+# deliberate: a `deploy/fonts/*.ttf` glob that matches nothing fails the build, and CI
+# builds this image with no fonts in the context at all.
+COPY deploy/fonts/ /usr/share/fonts/truetype/ms-calibri/
+RUN fc-cache -f
 
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser
 

@@ -32,7 +32,10 @@ On failure it dumps `kubectl describe pods` and the logs.
 It is the only place where the image is proven to ship poppler + LibreOffice and
 to pass the exec probes - keep the offline backend flags, or the smoke test would
 need a broker. (`config.storageBackend=local` is still passed and is inert; no
-template renders it - `CONSTITUTION.md` D1.)
+template renders it - `CONSTITUTION.md` D1.) It also builds the image with
+`deploy/fonts/` empty, because the licensed Calibri files never reach CI: the
+`COPY deploy/fonts/` layer has to stay valid with nothing but the README in the
+context (`CONSTITUTION.md` D15).
 
 ## Rules
 

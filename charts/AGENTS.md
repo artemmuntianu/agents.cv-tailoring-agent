@@ -22,7 +22,7 @@ Read `CONSTITUTION.md` first (sections 2, 3 and 5).
 | `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe - and two more workloads (`cover-deployment.yaml` + `cover-scaledobject.yaml` for `python cover.py` on `resumes.cover`, and `apply-deployment.yaml` + `apply-scaledobject.yaml` for `python apply.py` on `applications.draft`), which share the image, the ConfigMap and the Secret |
 | `cv-tailoring-worker/values.schema.json` | Type/enum guard for the values Helm must accept before anything renders |
 | `deploy/values/dev.yaml` | Local-cluster overrides: `localPostgres` on, dev broker password, `existingSecret: cv-tailoring-secrets`, `/data` mount, 0..3 replicas, and the two scheduled jobs (scout schedule + user id, archiver schedule + refusal policy) |
-| root `Dockerfile` | The image (LibreOffice + poppler + Carlito/Caladea fonts, non-root uid 10001). There is no compose/no-cluster path: the only runtime is the local cluster |
+| root `Dockerfile` | The image (LibreOffice + poppler + Carlito/Caladea fonts, plus the genuine Calibri files whenever `deploy/fonts/` holds them - `CONSTITUTION.md` D15; non-root uid 10001). There is no compose/no-cluster path: the only runtime is the local cluster |
 
 The umbrella vendors all three local charts (`helm dependency update` after any change inside
 one of them - a stale `.tgz` shadows the source, and a *new* dependency needs the lock rebuilt).

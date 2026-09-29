@@ -25,9 +25,13 @@ __pycache__/
 .idea/
 .vscode/
 
-# Deployment definitions are applied by helm/kubectl, not shipped in the image
+# Deployment definitions are applied by helm/kubectl, not shipped in the image.
+# `deploy/*` (not `deploy/`) is deliberate: excluding the directory itself would make the
+# re-include below a no-op, and the worker image has to see the licensed fonts the
+# operator drops into `deploy/fonts/` (Dockerfile, `scripts/fetch-fonts.ps1`, D15).
 charts/
-deploy/
+deploy/*
+!deploy/fonts/
 docs/
 
 # Dev-only files

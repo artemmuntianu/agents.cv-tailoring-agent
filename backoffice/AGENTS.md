@@ -85,10 +85,12 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/filters.ts` | The toolbar's state and filtering: search, date window, stages, actions, visibility |
 | `src/lib/actions.ts` | The Action combobox's ranking and normalisation (`board_actions` is the data) |
 | `src/lib/interviews.ts` | The Interviews section: the four types, `hasReachedInterviewing`, the list sort/format and the interview parsers |
+| `src/lib/interviewAgenda.ts` | The card face's one interview line: the relative stamp (`tomorrow, Fri 11:00 AM` · `2 days ago, Fri 11:00 AM` · `Sep 24, Wed 1:00 AM` past `RELATIVE_DAYS`), the soonest/latest call and the past calls still missing a result |
 | `src/lib/details.ts` | The card's detail fields: the six communication channels, the application URL, the draft/dirty helpers and the details parser |
 | `src/lib/history.ts` | The History section: the four kinds, the states each kind may carry, the per-kind fallback transition, the edit parser and the draft helpers |
 | `src/lib/applyUrl.ts` | The application URL: canonicalisation (`normalizeApplyUrl`), the Details field's parser and the `?url=` lookup's query parser - shared by the form that writes it and the route that matches a page against it |
 | `src/lib/processes.ts` | The Processes page's vocabulary: process labels and hints, run status chips, one-line run summaries, durations, the trigger label |
+| `src/lib/cardMeta.ts` | The card face's reading line: the site slug -> display name, and the change stamp's recency rule (`today` / `yesterday` / `N days ago` up to 9 days, then the plain date) |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
@@ -374,6 +376,31 @@ to that page yet (a normal answer, not a 404).
   the same date the filters window and the sweep use); the header's `↓ Newest / ↑ Oldest` flips
   one column. The order lives in `KanbanBoard` state only: it is a way of reading the board, not
   board state.
+- **The card face dates a card the way the operator reads it** (`lib/cardMeta.ts`). Under the
+  company it shows the site the vacancy came from (`resumes.source`, so `djinni` renders as
+  `Djinni`) and how long ago it changed: `today`, `yesterday`, `9 days ago` up to 9 days, then the
+  date itself (`Sep 28`) - the same `resume_board.updated_at` the column sorts by. A refused card
+  says `refused ...` instead of `updated ...`. The vacancy id and the CV version are **not** on
+  the face: the modal's header and its facts list carry both.
+- **The card face also names the one interview date that decides the day** (`lib/interviewAgenda.ts`,
+  planned in the modal's Interviews section but *read* on the face). A card with interviews - or one
+  that reached Interviewing and has none - carries one line under `source · updated`: a **relative**
+  stamp, violet while it is upcoming (the Interviewing column's own colour) - `📅 today, Mon 9:00 AM`,
+  `📅 tomorrow, Fri 11:00 AM`, `📅 in 9 days, Mon 1:45 PM`, `📅 2 days ago, Fri 11:00 AM`, and past
+  `RELATIVE_DAYS` the date itself, `📅 next Sep 24, Wed 1:00 AM` - plus an amber `✏️ 2 results to
+  write` counter for past calls with no `result`. With nothing upcoming the same line is slate:
+  `📅 yesterday, Thu 3:15 PM`, or `📅 no interview scheduled` for an empty section. The vocabulary is
+  a distance for exactly `RELATIVE_DAYS` days in **both** directions - the same boundary
+  `cardMeta.ts` dates `updated ...` by, so one card never carries two ideas of "old" - always with
+  the weekday and the minute, and never with a year. Four rules are the point: a call belongs to its
+  **day** (the label flips at local midnight, never at the start minute, so a 14:30 call read at
+  14:31 still reads `today` - that is why the face does not use `nextInterview`'s strict `>= now`),
+  only a day that is *over* can owe a result, `next`/`last` is added **only** to the bare-date form
+  (`tomorrow, ...` and `2 days ago, ...` already state their direction; `Sep 24, Wed 1:00 AM` does
+  not), and a refused card says nothing (a call that will not happen must not read as the next thing
+  on the calendar). The line follows the **rows**: a card whose rows were removed stops advertising a
+  call while `hasReachedInterviewing` still decides whether an empty section is honest. Unreadable
+  stamps say so instead of inventing a date.
 - **Interviews are their own section, outside the history.** `resume_interview` (invariant 26):
   the section appears when the history holds a move into Interviewing *or* the card is there now
   (`hasReachedInterviewing`), so it survives a move on to Offer and is absent for a card that
@@ -545,9 +572,11 @@ to that page yet (a normal answer, not a 404).
 - **No undo for a removal** and no recycle bin: the confirm dialog is the guard, and
   re-scraping the page is the only way back.
 - No removal of an active card, and no bulk removal: archive first, one card at a time.
-- **No interview reminders, invitations or calendar export**: an interview is a row in the card
-  and the only reminder is the card itself. The inactivity sweep ignores interviews on purpose -
-  `resume_board.updated_at` is the activity clock, and a scheduled call is not an action.
+- **No interview reminders, invitations or calendar export**: an interview is a row in the card,
+  and the only reminder is the card face - the `📅 next ...` line and its amber results-to-write
+  counter (`lib/interviewAgenda.ts`). Nothing notifies, nothing leaves for a calendar. The
+  inactivity sweep ignores interviews on purpose - `resume_board.updated_at` is the activity clock,
+  and a scheduled call is not an action.
 - **No "run this job now" button** on the Processes page: the CronJob slot is the only timer,
   and a manual run is `kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-archiver ...`
   (`charts/cv-tailoring-archiver`).

@@ -137,8 +137,12 @@ deliberately non-fatal: a database hiccup must not kill work that is progressing
 PDF conversion is the CPU spike of the pipeline, so the image installs
 metric-compatible fonts (Carlito and Caladea for Calibri and Cambria, Liberation
 for Arial and Times) and pre-warms the LibreOffice user profile at build time.
-Without them LibreOffice substitutes fonts silently, and the layout the reviewer
-sees is not the layout Word would produce.
+Carlito has no *Light* weight, though, and the CV's headings ask for Calibri
+Light - those runs came out in DejaVu Serif, a different design and different metrics.
+`scripts\fetch-fonts.ps1` copies the genuine Calibri family out of your Windows
+install into the untracked `deploy\fonts\`, and the build bakes it in
+(`CONSTITUTION.md` D15). Without fonts LibreOffice substitutes silently, and the
+layout the reviewer sees is not the layout Word would produce.
 
 ### Keep infrastructure swappable and the dependency direction one-way
 

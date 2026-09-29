@@ -1,4 +1,7 @@
 import { artifactUrl } from '../lib/artifact-link';
+import { sourceLabel, updatedLabel } from '../lib/cardMeta';
+import { INTERVIEW_FACE_TONES, faceInterview } from '../lib/interviewAgenda';
+import { formatInterviewAt } from '../lib/interviews';
 import { refusalLabel, tailoringFromStatus, tailoringLabel, tailoringMeta } from '../lib/stages';
 import type { BoardCard } from '../lib/types';
 
@@ -14,10 +17,6 @@ interface VacancyCardProps {
   onRemove: (jobId: string) => void;
   /** Record an action on the card **without** moving it (the Add Action dialog). */
   onAddAction: (jobId: string) => void;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
 }
 
 const MIRROR_HINT =
@@ -76,6 +75,14 @@ function ArtifactChip({
  * half opacity at rest, readable on hover, rose accent border, struck-through title, the
  * refusal badge - and **not draggable**, so a refused card can never be moved by
  * accident. `🔄 Restore` is its only action.
+ *
+ * Either state carries the same reading line (`lib/cardMeta.ts`): the site the vacancy came from,
+ * and how long ago it moved. Once the card has interviews it carries one more line
+ * (`lib/interviewAgenda.ts`) - the single date that decides today's plan, written as a distance:
+ * `📅 today, Mon 9:00 AM`, `📅 2 days ago, Fri 11:00 AM`, and past nine days the date itself
+ * (`📅 next Sep 24, Wed 1:00 AM`) - beside an amber `✏️ 2 results to write` counter for calls whose
+ * day has passed unwritten. The vacancy id and the CV version are deliberately **not** on the face -
+ * the modal's header and facts list carry both, and the face is for triage.
  */
 export default function VacancyCard({
   card,
@@ -91,6 +98,7 @@ export default function VacancyCard({
   const lastAction = card.history[card.history.length - 1];
   const tailoring = tailoringFromStatus(card.status);
   const archived = card.archived;
+  const interviewFace = faceInterview(card);
 
   return (
     <article
@@ -199,16 +207,36 @@ export default function VacancyCard({
       )}
 
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
-        <span>#{card.externalId}</span>
-        <span>·</span>
-        <span>{card.cvVersion}</span>
+        <span>{sourceLabel(card.source)}</span>
         <span>·</span>
         <span>
           {archived
-            ? `refused ${formatDate(card.archivedAt ?? card.updatedAt)}`
-            : `updated ${formatDate(card.updatedAt)}`}
+            ? `refused ${updatedLabel(card.archivedAt ?? card.updatedAt)}`
+            : `updated ${updatedLabel(card.updatedAt)}`}
         </span>
       </div>
+
+      {interviewFace && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          <span
+            title={interviewFace.at ? formatInterviewAt(interviewFace.at) : 'No date on this card'}
+            className={`rounded px-1.5 py-0.5 font-medium ring-1 ${
+              INTERVIEW_FACE_TONES[interviewFace.tone]
+            }`}
+          >
+            📅 {interviewFace.label}
+          </span>
+          {interviewFace.resultsToWrite > 0 && (
+            <span
+              title="Past interviews with no result recorded - open the card's Interviews section"
+              className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 ring-1 ring-amber-200"
+            >
+              ✏️ {interviewFace.resultsToWrite}{' '}
+              {interviewFace.resultsToWrite === 1 ? 'result' : 'results'} to write
+            </span>
+          )}
+        </div>
+      )}
 
       {lastAction && !archived && (
         <p className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
