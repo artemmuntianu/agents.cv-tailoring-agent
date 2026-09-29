@@ -6,6 +6,7 @@ quota, dead-lettered when there is nothing to write from.
 """
 
 import tempfile
+from unittest import mock
 
 import cover as cover_worker
 from agent import cover as cover_module
@@ -34,9 +35,22 @@ def job_row(job_id="cover-1", **overrides):
     return row
 
 
+def fake_client(monkeypatch):
+    """Give the worker a throwaway client, with no API key anywhere in sight.
+
+    `run_cover_letter` asks `agent.cover`'s own `get_genai_client` (imported into that module by
+    name) *before* it calls the model call, so patching only `_call_gemini_cover_letter` still
+    builds a real `genai.Client` - which raises "No API key was provided" on CI, where there is no
+    `.env` and no secret. That is how four hermetic tests passed on a developer machine (whose
+    `.env` carries a key) and dead-lettered on every CI run (2026-09-29).
+    """
+    monkeypatch.setattr(cover_module, "get_genai_client", lambda: mock.Mock())
+
+
 def fake_letter(monkeypatch, letter="Hello,\n\nI fit this role.\n\nBest regards,\nJane Doe"):
     """Replace the one Gemini call and record the prompts it was asked with."""
     prompts = []
+    fake_client(monkeypatch)
 
     def call(client, prompt):
         prompts.append(prompt)
@@ -179,6 +193,7 @@ def test_quota_exhaustion_defers_and_keeps_the_request(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         with isolated_config(tmp):
             db_module.get_db().upsert_job(job_row())
+            fake_client(monkeypatch)
 
             def exhausted(client, prompt):
                 raise RetryLater("daily quota", delay_seconds=1800)

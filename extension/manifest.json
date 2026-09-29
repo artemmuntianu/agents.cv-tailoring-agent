@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "CV tailoring vacancy scraper",
+  "version": "0.4.0",
+  "description": "Scrape a vacancy card onto the board, and fill its application form from the board's tailored CV and cover letter.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://djinni.co/*",
+    "https://www.djinni.co/*",
+    "https://jobs.dou.ua/*",
+    "https://dou.ua/*",
+    "https://job-boards.eu.greenhouse.io/*",
+    "https://job-boards.greenhouse.io/*",
+    "https://boards.greenhouse.io/*",
+    "http://localhost:4321/*",
+    "http://127.0.0.1:4321/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://djinni.co/*",
+        "https://www.djinni.co/*",
+        "https://jobs.dou.ua/*",
+        "https://dou.ua/*",
+        "https://job-boards.eu.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*",
+        "https://boards.greenhouse.io/*"
+      ],
+      "js": ["src/inject.js", "src/formfill.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Queue vacancies & fill forms"
+  }
+}

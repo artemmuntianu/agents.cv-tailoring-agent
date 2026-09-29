@@ -83,7 +83,13 @@ and the removal purge (`artifact_purge` + the cascade).
    table standing and hides a create-order bug, which is how `application_profile` referencing a
    not-yet-created `app_users` survived on a fresh database (`CONSTITUTION.md` D14).
 2. A test that touches the graph goes through `fake_gemini`; never call the real
-   API, never shell out to LibreOffice or poppler.
+   API, never shell out to LibreOffice or poppler. The same rule has a second
+   half that CI enforces: **the suite must pass with no `GEMINI_API_KEY` in the
+   environment**. `run_cover_letter` builds its client *before* the model call, so
+   patching `_call_gemini_cover_letter` alone is not enough - patch
+   `cover.get_genai_client` too (`test_cover_letter.py::fake_client`). Four
+   tests that were green on a developer machine (a key in `.env`) dead-lettered
+   on every CI run until 2026-09-29.
 3. Assert on outcomes (`Outcome.ACK` / `RETRY` / `RETRY_LATER` / `DEAD_LETTER`,
    `claimed` / `duplicate` / `owned`), not on log text.
 4. Restore anything you patched on `config`; prefer `isolated_config`.

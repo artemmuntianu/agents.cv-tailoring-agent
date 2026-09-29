@@ -20,6 +20,10 @@ model_state.json
 !**/values.schema.json
 !.github/**/*.json
 !backoffice/**/*.json
+# The MV3 manifest is source, not state: the extension is loaded unpacked from `extension/`
+# and `backoffice/src/lib/inject.test.ts` asserts against it - on CI a missing manifest used to
+# fail that test (the job has no checkout of an ignored file), 2026-09-29.
+!extension/manifest.json
 # The diagram source is a versioned descriptor, not runtime state.
 !docs/diagrams/*.archify.json
 

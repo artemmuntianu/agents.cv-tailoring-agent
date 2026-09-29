@@ -130,7 +130,7 @@ for `fetch` from a service worker without it).
 
 | Path | Owns |
 |---|---|
-| `manifest.json` | MV3 declaration: `activeTab` + `scripting` + `storage`, gateway host permission, popup, service worker, the `content_scripts` entry for the listing page |
+| `manifest.json` | MV3 declaration: `activeTab` + `scripting` + `storage`, gateway host permission, popup, service worker, the `content_scripts` entry for the listing page. **Tracked source** (`.gitignore` negates `*.json` for it): a clone must load unpacked, and `backoffice/src/lib/inject.test.ts` asserts `host_permissions` covers every `content_scripts` match - a manifest that is only on one machine fails that test on CI |
 | `src/extract.js` | `extractVacancies(root)` - the DOM contract (`div[id^="job-item-"]`) |
 | `src/inject.js` | The listing-page content script: the per-card `Scrape`/`Scraped` buttons. **Classic script** (no imports/exports) |
 | `src/formfill.js` | The form filler (a second `content_scripts` entry, also classic): the HITL picker, the deterministic annotator, the snapshot, the applier and the per-site adapters |

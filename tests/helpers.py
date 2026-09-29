@@ -79,7 +79,11 @@ def reset_caches():
 
 @contextlib.contextmanager
 def isolated_config(tmp_dir, cv_data=None):
-    """Point every configurable path/backend at a throwaway directory."""
+    """Point every configurable path/backend at a throwaway directory.
+
+    `GEMINI_API_KEY` is pinned to `None` as well: a hermetic test must behave the same on CI
+    (no key) as on a developer machine (a key in `.env`), so no test may reach a real client.
+    """
     cv_data = cv_data or SAMPLE_CV_DATA
     artifacts = os.path.join(tmp_dir, "artifacts")
     input_dir = os.path.join(artifacts, "input")
@@ -108,6 +112,8 @@ def isolated_config(tmp_dir, cv_data=None):
         "QUEUE_BACKEND": "directory",
         "DB_BACKEND": "local",
         "MODEL_STATE_BACKEND": "file",
+        # No key: a test that would build a real client must fail here, not only on CI.
+        "GEMINI_API_KEY": None,
     }
     saved = {key: getattr(config, key) for key in overrides}
     for key, value in overrides.items():
