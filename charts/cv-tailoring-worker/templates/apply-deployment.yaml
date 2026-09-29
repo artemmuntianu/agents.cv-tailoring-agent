@@ -106,8 +106,9 @@ spec:
             - name: work
               mountPath: /tmp/cvt
             {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
-            # The form prompt is built from files on the artifact volume: the master CV model
-            # (`cv_data.json`) and the candidate facts (`candidate_profile.json`).
+            # The form prompt is built from the artifact volume's master CV model
+            # (`cv_data.json`) and the operator's candidate facts (the `application_profile`
+            # row, read over the DB connection above).
             - name: artifacts
               mountPath: {{ .Values.persistence.mountPath | default "/data" }}
             {{- end }}

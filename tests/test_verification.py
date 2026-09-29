@@ -2,8 +2,8 @@
 
 from unittest import mock
 
+from agent.gemini import _self_healing_generate
 from agent.models import JobRoleExtraction, TextReplacement
-from agent.nodes import _self_healing_generate
 from agent.verification import evaluate_fabrications, verify_replacement_against_cv
 
 SAMPLE_CV = """
@@ -48,6 +48,47 @@ def test_verify_replacement_flags_unlisted_technology():
     assert len(violations) >= 2
     assert any("RUST" in v for v in violations)
     assert any("KUBERNETES" in v for v in violations)
+
+
+def test_ground_truth_admits_a_technology_the_cv_text_does_not_state():
+    """The candidate facts are evidence: Redis is real experience, the CV dump just omits it."""
+    replacements = [
+        TextReplacement(
+            original_text="Databases: MSSQL Server, Postgres, Azure",
+            tailored_text="Databases: MSSQL Server, Postgres, Azure, Redis",
+            reason="the job description asks for caching",
+        )
+    ]
+    filtered = evaluate_fabrications(SAMPLE_CV, replacements, SAMPLE_JD)
+    assert filtered.clean_replacements == []
+    assert any("REDIS" in v for v in filtered.violations)
+
+    admitted = evaluate_fabrications(
+        SAMPLE_CV,
+        replacements,
+        SAMPLE_JD,
+        ground_truth="Redis and RabbitMQ experience: caching with Redis at Tangiblee.",
+    )
+    assert admitted.violations == []
+    assert len(admitted.clean_replacements) == 1
+
+
+def test_ground_truth_still_rejects_an_invented_technology():
+    replacements = [
+        TextReplacement(
+            original_text="Backend: .NET Core, Python, REST APIs, Microservices",
+            tailored_text="Backend: .NET Core, Python, Rust",
+            reason="invented",
+        )
+    ]
+    res = evaluate_fabrications(
+        SAMPLE_CV,
+        replacements,
+        SAMPLE_JD,
+        ground_truth="Redis and RabbitMQ experience: caching with Redis at Tangiblee.",
+    )
+    assert any("RUST" in v for v in res.violations)
+    assert res.clean_replacements == []
 
 
 def test_evaluate_fabrications_zero_lies_percentage():

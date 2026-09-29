@@ -66,7 +66,10 @@ write into the page. Four rules shape it, and all four are about not guessing:
 3. **A missing fact is skipped, never invented.** The prompt may use the vacancy, the candidate
    facts (`application_profile`, edited in the popup) and the CV digest; anything else is
    `skip` + a reason, and the review panel lists it. Nothing is submitted by the extension - not the
-   form, not a consent checkbox, not the site's own template controls.
+   form, not a consent checkbox, not the site's own template controls. The popup sends the *facts*
+   only, which is why `PUT /api/profile` merges `standing_answers`: the recruiter answers loaded by
+   `scripts/seed_profile.py` survive a Save facts click, and the same row grounds the CV and the
+   cover letter too (`CONSTITUTION.md` invariant 31).
 4. **The card is resolved twice, never guessed.** `form/worker.js` asks the page's own vacancy id
    first (`GET /api/vacancies/status`, the same lookup the per-card buttons use), and when that
    finds nothing it asks **which card this page is** (`GET /api/vacancies/link?url=…`) - the

@@ -61,22 +61,29 @@ def extract_tech_keywords(text: str) -> set[str]:
 
 
 def verify_replacement_against_cv(
-    cv_text: str, original_text: str, tailored_text: str, job_description: str = ""
+    cv_text: str, original_text: str, tailored_text: str, job_description: str = "",
+    ground_truth: str = "",
 ) -> list[str]:
     """Check a single replacement for numeric or unlisted tech stack fabrications.
+
+    `ground_truth` is the candidate-facts block (the operator's own profile: availability,
+    years per stack, caching/messaging used, ...). It is admissible evidence about the
+    candidate's real experience, so a technology or a number it states is not a
+    fabrication - while anything stated nowhere is still a violation.
 
     Returns a list of violation description strings (empty if clean).
     """
     violations = []
     norm_cv = _normalize_text(cv_text)
     norm_jd = _normalize_text(job_description)
+    norm_facts = _normalize_text(ground_truth)
 
     # 1. Numeric & Metric Verification: Every number in tailored text MUST exist in the source CV
     orig_numbers = extract_numbers(original_text)
     tailored_numbers = extract_numbers(tailored_text)
 
     for num in tailored_numbers:
-        if num not in orig_numbers and num not in norm_cv:
+        if num not in orig_numbers and num not in norm_cv and num not in norm_facts:
             violations.append(f"Invented or altered metric/number '{num}' in tailored text: '{tailored_text}'")
 
     # 2. Technology & Tool Claim Verification: Every tech claim MUST exist in CV or Job Description
@@ -86,16 +93,26 @@ def verify_replacement_against_cv(
 
     for tech in tailored_tech:
         norm_tech = tech.lower()
-        if norm_tech not in orig_tech and norm_tech not in norm_cv and norm_tech not in jd_tech and norm_tech not in norm_jd:
+        if (
+            norm_tech not in orig_tech
+            and norm_tech not in norm_cv
+            and norm_tech not in jd_tech
+            and norm_tech not in norm_jd
+            and norm_tech not in norm_facts
+        ):
             violations.append(f"Unlisted technology claim '{tech}' found in tailored text (absent from both CV and JD)")
 
     return violations
 
 
 def evaluate_fabrications(
-    cv_text: str, replacements: list, job_description: str = ""
+    cv_text: str, replacements: list, job_description: str = "", ground_truth: str = ""
 ) -> FabricationCheckResult:
     """Evaluate a list of replacement objects or tuples against the master CV text and JD.
+
+    `ground_truth` narrows nothing and widens the admissible sources only (see
+    `verify_replacement_against_cv`): it is the candidate facts the tailoring prompt already
+    carries, so a replacement backed by them must not be filtered out as a lie.
 
     Returns FabricationCheckResult with exact lie_percentage, violations, and clean_replacements.
     """
@@ -117,7 +134,9 @@ def evaluate_fabrications(
         tokens = len(tail_text.split())
         total_tailored_tokens += max(1, tokens)
 
-        item_violations = verify_replacement_against_cv(cv_text, orig_text, tail_text, job_description)
+        item_violations = verify_replacement_against_cv(
+            cv_text, orig_text, tail_text, job_description, ground_truth
+        )
         if item_violations:
             fabricated_count += len(item_violations)
             violations.extend(item_violations)

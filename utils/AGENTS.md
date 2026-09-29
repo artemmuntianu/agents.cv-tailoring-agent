@@ -31,15 +31,17 @@ add it there too.**
 
 | Module | Responsibility | Public surface |
 |---|---|---|
-| `logging_setup.py` | Structured logs (`text`/`json`) + heartbeat file | `get_logger`, `setup_logging`, `ContextLogger.bind`, `write_heartbeat`, `heartbeat_age_seconds`, `utc_now_iso` |
+| `logging_setup.py` | Structured logs (`text`/`json`) + the heartbeat file and the idle heartbeat thread every consumer starts | `get_logger`, `setup_logging`, `ContextLogger.bind`, `write_heartbeat`, `heartbeat_age_seconds`, `start_heartbeat_thread`, `HEARTBEAT_TICK_SECONDS`, `utc_now_iso` |
 | `process_runs.py` | The **internal process ledger**: the job slugs (`feed-parser`, `auto-archiver`), the run statuses, and the `record(...)` context manager both scheduled jobs open one row with - always closed (a `--dry-run` writes nothing, a store that refuses is logged, never fatal), plus `retire_stale` for the rows a killed pod left `running`. Read by the board's Processes window | `FEED_PARSER`, `AUTO_ARCHIVER`, `record`, `close`, `retire_stale`, `RunRecord` |
-| `candidate.py` | The candidate facts an application form is filled from: `FACTS`, `sanitize()` (known keys only, capped), `digest()` for the prompt, and `load(store, user_id)` reading the `application_profile` row - pure, and a missing row is never an error |
+| `candidate.py` | The candidate facts **every prompt** is grounded in (CV tailoring, cover letter, form): `FACTS`, `sanitize()` (known keys only; `MAX_VALUE_CHARS` for a fact, `MAX_ANSWER_CHARS` for a standing answer - a project deep-dive does not fit in a form field), `digest()` for the prompts, and `load(store, user_id)` reading the `application_profile` row - pure, and a missing row is never an error |
 | `messaging.py` | Queue abstraction: `HandlerResult`/`Outcome`, `Delivery`, `DirectoryQueue`, `AmqpQueue`, retry ladder, DLQ. A queue is a **`QueueSpec`** (`task_queue_spec()` / `cover_queue_spec()` / `application_queue_spec()`), and `get_queue(backend, spec)` caches per (backend, queue) - so the two consumers in one process can never share an object. The file backend gives each spec its own directory, or one consumer would eat the other's messages. The AMQP heartbeat comes from `config.AMQP_HEARTBEAT_SECONDS` and must stay **above the longest task** - pika cannot service heartbeats while the graph runs | `get_queue`, `HandlerResult.ack/retry/retry_later/dead_letter`, `RETRY_LADDER_SECONDS` |
 | `db.py` | Job store + claim semantics + schema DDL. `SCHEMA_SQL` is the **only** DDL and also creates the backoffice's tables - `resume_board` (with its archive columns *and* the card's own detail fields - recruiter, the two salaries, a `text[]` of channels), `resume_history` (four kinds, `Candidate`/`Company` actors), `board_actions`, `artifact_purge` (the volume sweep queue) `resume_cover_letter` (the cover worker's on-demand letters), `resume_interview` (the card's interviews - its own record, never historicised) and `app_users` (the backoffice shares this database); `process_runs` is the scheduled jobs' run ledger and `archive_card` is the one board write the Python side owns (the inactivity sweep, invariant 27). Guarded `do $ddl$` blocks upgrade an existing database in place (job-id shape, the source column and the business-key index, the stage vocabulary, archive shape, the actor rename, the kind list) | `get_db`, `job_key`, `new_job_id`, `JOB_FIELDS`, `SCHEMA_SQL`, `ACTIVE_STATUSES`, `upsert_cover_letter`, `get_cover_letter`, `start_process_run`, `finish_process_run`, `list_process_runs`, `retire_stale_process_runs`, `list_inactive_cards`, `archive_card` |
 | `storage.py` | Local artifact IO + per-task materialisation | `get_storage`, `TaskContext`, `LocalStorage`, `output_key_for` |
 | `model_state.py` | Model-availability ledger + fallback ladder | `init_model_state`, `advance_after_failure`, `next_available_model`, `preferred_available` |
 | `retry.py` | Gemini backoff + quota handling | `retry_with_exponential_backoff`, `RetryLater`, `wait_until_midnight_utc` |
-| `docx_mutator.py` | DOCX AST/XML replacements + sync validation | `apply_text_replacements`, `normalize_replacements`, `validate_cv_data_against_docx`, `cv_data_to_text`, `extract_doc_text`, `load_cv_data` |
+| `cv_text.py` | `cv_data.json` as text: loading (never cached), the string normalisers every matcher shares, and the single-line-per-paragraph render - the read-only projects block included | `load_cv_data`, `cv_data_to_text`, `extract_doc_text`, `project_lines`, `normalize_text`, `strip_leading_bullet`, `split_lines` |
+| `cv_replacements.py` | What a proposed replacement must be (ONE clean line) and what it must never touch (the read-only projects block) | `normalize_replacements`, `read_only_lines`, `drop_read_only_replacements` |
+| `docx_mutator.py` | The mechanical DOCX AST surgery: walk (nested tables included), check the model against the document, rewrite one line | `apply_text_replacements`, `validate_cv_data_against_docx`, `iter_all_paragraphs` |
 | `renderer.py` | LibreOffice -> PDF -> PNG | `convert_docx_to_pdf`, `convert_pdf_to_images`, `render_tools_status`, `assert_render_tools_available` |
 
 ## Invariants and gotchas
@@ -65,7 +67,12 @@ add it there too.**
   splits/drops, and `apply_text_replacements()` skips any `original_text` with a newline.
   Matching normalises `\xa0` -> space and en/em dashes -> `-`.
 - **The sync validator is a contract check**, not a convenience:
-  `validate_cv_data_against_docx()` returns the lines it could not find (empty == in sync).
+  `validate_cv_data_against_docx()` returns the lines it could not find (empty == in sync). It is
+  **one-directional** - a section that exists only in the DOCX stays invisible until `cv_data.json`
+  carries it - and it skips label lines (those ending in `:`).
+- **`personal_projects` is context, not copy**: rendered into the CV text so the model can draw on
+  it, and protected by `drop_read_only_replacements()` so no replacement can rewrite it. The
+  `heading` is verbatim (tabs included) because the sync test is tab-preserving.
 - **Renderer hardening**: one LibreOffice user profile per job
   (`-env:UserInstallation=...`), a hard timeout (`CONVERSION_TIMEOUT_SECONDS = 240`),
   and isolated output dirs, so two conversions on one node cannot fight over the

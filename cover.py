@@ -32,9 +32,15 @@ from pydantic import ValidationError
 import config
 from agent.contracts import CoverLetterMessage
 from agent.cover import run_cover_letter
+from utils import candidate as candidate_module
 from utils import db as db_module
-from utils.docx_mutator import load_cv_data
-from utils.logging_setup import get_logger, setup_logging, write_heartbeat
+from utils.cv_text import load_cv_data
+from utils.logging_setup import (
+    get_logger,
+    setup_logging,
+    start_heartbeat_thread,
+    write_heartbeat,
+)
 from utils.messaging import HandlerResult, cover_queue_spec, get_queue
 from utils.retry import RetryLater
 from worker import verify_model_availability
@@ -125,14 +131,17 @@ def handle_delivery(delivery) -> HandlerResult:
                 "could not persist cover-letter status", status=status, error=str(exc)
             )
 
-    # 2. The two inputs: the vacancy's own description (stored by the intake) and the master CV
-    #    model the tailoring prompt is built from.
+    # 2. The three inputs: the vacancy's own description (stored by the intake), the master CV
+    #    model the tailoring prompt is built from, and the candidate facts - the same
+    #    `application_profile` row `apply.py` reads, used as the ground-truth block.
     try:
         cv_data = load_cv_data()
     except Exception as exc:  # noqa: BLE001
         job_log.error("could not read cv_data.json", error=str(exc))
         write(COVER_FAILED, error=str(exc)[:500])
         return HandlerResult.dead_letter(reason=f"cv_data unavailable: {exc}")
+
+    candidate = candidate_module.load(store, row.get("user_id"))
 
     write(COVER_RUNNING)
 
@@ -144,6 +153,7 @@ def handle_delivery(delivery) -> HandlerResult:
             cv_data,
             title=row.get("title") or "",
             company=row.get("company") or "",
+            candidate=candidate,
         )
     except RetryLater as exc:
         job_log.warning("cover letter deferred", reason=exc.reason, delay=exc.delay_seconds)
@@ -215,6 +225,7 @@ def main(argv=None) -> int:
         max_messages = max(0, int(available))
 
     write_heartbeat()
+    start_heartbeat_thread(STOP_EVENT)
     try:
         processed = queue.consume(
             handle_delivery, max_messages=max_messages, stop_event=STOP_EVENT

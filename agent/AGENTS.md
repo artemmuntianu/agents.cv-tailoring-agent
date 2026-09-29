@@ -10,12 +10,18 @@ Read `CONSTITUTION.md` first; this file is the layer-specific detail.
 | File | Owns |
 |---|---|
 | `state.py` | `State` (flat `TypedDict`) + `initial_state()`, which fills every key |
-| `contracts.py` | `ResumeTaskMessage`, `CvData`/`CvHeader`/`CvExperience`, `JobStatus`, `TaskResult` |
+| `contracts.py` | `ResumeTaskMessage`, `CvData`/`CvHeader`/`CvExperience`/`CvProject`, `JobStatus`, `TaskResult` |
 | `models.py` | Pydantic schemas used as Gemini `response_schema` (`JobRoleExtraction`, `TextModificationList`, `LayoutCheckResult`); field validators strip leading bullet markers and enforce the single-line invariant before objects reach the AST mutator |
-| `nodes.py` | The four nodes + `_self_healing_generate` (1-shot schema retry) + `_call_gemini_*` helpers + the tailoring prompt |
+| `job_log.py` | The per-run log/status context: `job_logger(state)` (the bound `job_id`/`external_id`/`attempt` fields) and `set_status()` - a status write is never fatal |
+| `gemini.py` | The plumbing: `client()`, `extract_role()`, `suggest_replacements()`, `evaluate_layout()`, plus `_self_healing_generate` (1-shot schema retry). The only module that builds a client |
+| `tailoring_prompt.py` | The tailoring rules and `build_tailoring_prompt()` - pure, keyword-only, the wording itself |
+| `nodes.py` | `adapt_text` (sync-check, candidate facts, replacements, read-only drop) and `render` (LibreOffice) |
+| `vision.py` | `vision_check` and its layout prompt |
+| `persist.py` | The terminal node: upload the artifacts, write the row's durability fields |
 | `verification.py` | Deterministic 0%-lies check: `evaluate_fabrications()` scans every proposed replacement against the master CV text and the job description for invented numbers/metrics and unlisted technology claims; called inside `adapt_text` before replacements are normalised, with a self-healing fabrication-retry loop |
 | `cover.py` | The cover-letter prompt, its `response_schema` and `run_cover_letter()` - the one Gemini call the board triggers by hand |
-| `application.py` | The application-form prompt, `ApplicationPlan` and `normalize_plan()` - the one Gemini call the extension's *Populate* triggers. It answers with the ids the extension minted, never returns a selector, never carries the generated documents, and drops an id the snapshot does not contain |
+| `application_prompt.py` | The form prompt and `build_prompt()` - the four blocks it sees (vacancy, candidate facts, CV digest, the annotated form) |
+| `application.py` | `ApplicationPlan`, `normalize_plan()` and the one Gemini call the extension's *Populate* triggers. It answers with the ids the extension minted, never returns a selector, never carries the generated documents, and drops an id the snapshot does not contain |
 | `graph.py` | Graph topology, `check_after_adapt`, `should_continue`, `create_graph()` |
 | `pipeline.py` | `run_cv_tailoring()` / `run_task()` - the only entry into the graph |
 | `__init__.py` | Package marker |
@@ -41,7 +47,7 @@ never mutate in place.
 
 | Node | Does | Writes |
 |---|---|---|
-| `adapt_text` | sync-checks `cv_data` vs `cv.docx`, extracts the target role, asks Gemini for replacements, normalises them, applies them to the DOCX | `target_role_title`, `current_cv_text`, `modifications`, `revision_count`; `is_approved=True` + `status_hint=skipped` when nothing applied |
+| `adapt_text` | sync-checks `cv_data` vs `cv.docx`, loads the candidate facts, extracts the target role, asks Gemini for replacements, drops any that target the read-only projects block, applies the rest to the DOCX | `target_role_title`, `current_cv_text`, `modifications`, `revision_count`; `is_approved=True` + `status_hint=skipped` when nothing applied |
 | `render` | DOCX -> PDF -> page PNGs in `temp_dir` (per-job LibreOffice profile) | `image_paths`, `pdf_path` |
 | `vision_check` | sends the page images to Gemini with the layout prompt | `is_approved`, `layout_feedback` |
 | `persist` | uploads PDF + DOCX, computes `duration_ms`, writes the final row | `pdf_url`, `docx_url`, `status_hint` |
@@ -60,7 +66,8 @@ a DB hiccup must not kill a task that is otherwise progressing.
 
 ## Prompt invariants
 
-The adaptation prompt is part of the product, not a comment. Keep all of these:
+The adaptation prompt is part of the product, not a comment - it lives in
+`agent/tailoring_prompt.py` (`build_tailoring_prompt()`, pure and keyword-only). Keep all of these:
 
 1. **Single line per replacement.** `original_text` and `tailored_text` must each be
    exactly one line - a SKILLS label and its value are two separate paragraphs and
@@ -73,12 +80,22 @@ The adaptation prompt is part of the product, not a comment. Keep all of these:
    metrics; never change a real figure.
 5. **Keep count and order** of experience entries and bullets; keep replacements
    roughly the same length as the original.
+6. **PERSONAL PROJECTS is read-only context.** The model sees the block and may back
+   a SUMMARY or SKILLS claim with it, but it must never return one of its lines as
+   `original_text`: `drop_read_only_replacements()` enforces exactly that, so the
+   prompt rule and the code state the same thing.
+7. **The candidate facts are evidence, not document text.** The prompt carries the
+   `application_profile` digest as ground truth (a fact-backed technology or number
+   is admissible, see `agent/verification.py::evaluate_fabrications(ground_truth=...)`)
+   and forbids writing salary, availability, work format, location, contacts or
+   job-search status anywhere in the CV.
 
 ## Adding or changing a node
 
 1. Add the key(s) to `State` **and** to `initial_state()` (nodes may read without
    `KeyError`).
-2. Implement the node in `nodes.py` returning `{**state, ...}`.
+2. Implement the node in its own module (`nodes.py` for the adaptation stage, `vision.py` /
+   `persist.py` for the post-render ones) returning `{**state, ...}`.
 3. Register it in `graph.create_graph()` and wire the edges (use a conditional-edge
    function for branching, like `should_continue`).
 4. If it calls Gemini, decorate with `@retry_with_exponential_backoff` and pass a
@@ -94,8 +111,9 @@ The adaptation prompt is part of the product, not a comment. Keep all of these:
 
 ## Don't
 
-- Call Gemini anywhere except `nodes.py` and `cover.py`, and only through the decorated
-  helpers.
+- Call Gemini anywhere except `agent/gemini.py` (the plumbing) and the module whose prompt owns
+  the call (`agent/tailoring_prompt.py` + `nodes.py`, `agent/cover.py`, `agent/application.py`),
+  and only through the decorated helpers.
 - Bypass `pipeline.run_cv_tailoring()` / `run_task()` from a new entry point.
 - Cache the CV model in a module-level global (this caused a cross-task staleness
   bug; `cv_data` is always an explicit argument).

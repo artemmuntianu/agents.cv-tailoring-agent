@@ -38,4 +38,6 @@ helm upgrade --install ai-agent-worker ./charts/cv-tailoring-worker \
 
 It never receives traffic: it pulls from RabbitMQ. Liveness/readiness are exec
 probes (`python healthcheck.py --mode liveness|readiness`), where readiness
-tracks the heartbeat file updated after every completed task.
+tracks the heartbeat file: written after every completed task *and* periodically
+while the consumer idles (`utils.logging_setup.start_heartbeat_thread`), so a
+worker waiting for work stays Ready.

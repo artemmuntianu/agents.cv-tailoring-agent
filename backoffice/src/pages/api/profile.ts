@@ -30,6 +30,10 @@ export const GET: APIRoute = async ({ locals }) => {
  * (`lib/candidate.ts`): unknown keys are dropped rather than stored, because the document ends up
  * in a Gemini prompt. An empty profile is a legitimate save (the operator may want to clear it); a
  * non-object body is not.
+ *
+ * `standing_answers` is merged rather than replaced: the extension's editor only shows the facts,
+ * so leaving the key out keeps the stored question/answer set (a Save facts click must not wipe
+ * it). Send an explicit `{}` to clear it.
  */
 export const PUT: APIRoute = async ({ request, locals }) => {
   const session = locals.session;

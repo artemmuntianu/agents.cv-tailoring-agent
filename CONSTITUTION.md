@@ -47,6 +47,7 @@ the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
                      ai-agent-worker-cover pod (one Gemini call per letter)
                                      |
                     resume_cover_letter (text) + the master cv_data.json
+                    + the candidate facts (application_profile row)
 
 the extension (a "Populate" click)  --> RabbitMQ (applications.draft)
                                        |  KEDA: queue depth -> replicas (0 -> N -> 0)
@@ -81,11 +82,13 @@ always local (section 5, D1).
 entry points        worker.py · publisher.py · healthcheck.py
       |                     |
       v                     v
-orchestration      agent/   (state, contracts, models, nodes, graph, pipeline)
+orchestration      agent/   (state, contracts, models, tailoring_prompt,
+      |                      application_prompt, gemini, nodes, vision, persist,
+      |                      graph, pipeline)
       |
       v
-adapters/infra     utils/   (messaging, db, storage, model_state, retry,
-      |                      docx_mutator, renderer, logging_setup)
+adapters/infra     utils/   (messaging, db, storage, model_state, retry, cv_text,
+      |                      cv_replacements, docx_mutator, renderer, logging_setup)
       v
 config             config.py   (env parsing only; imports no provider SDK)
 
@@ -121,14 +124,21 @@ automation         .github/workflows/
    vacancy is refused (`outcome=owned`).
 5. **The sync rule.** Every line of `cv_data.json` must exist **verbatim** in the
    master `cv.docx`; `validate_cv_data_against_docx()` enforces it and the task
-   fails rather than mutating the wrong paragraph.
+   fails rather than mutating the wrong paragraph. Two properties are easy to
+   forget: it is **one-directional** (it proves the JSON mirrors the DOCX, not that
+   the DOCX is fully modelled - adding a section to `cv.docx` alone stays green and
+   silently never reaches the prompt, which is how the PERSONAL PROJECTS section
+   went unnoticed), and a line ending in `:` is a label, not data, so it is skipped.
 6. **Replacements are single-line and marker-free.** `normalize_replacements()`
    splits concatenated label+value pairs, drops misaligned lines and no-ops, and
    strips leading bullet characters; `apply_text_replacements()` additionally
    skips any `original_text` containing a newline.
 7. **No fabrication (hard rule).** The adaptation prompt may rephrase and
    re-weight only what is already on the CV - no invented employers, titles,
-   dates, technologies or metrics.
+   dates, technologies or metrics. Two sources count as *already known*: the
+   master CV text and the operator's candidate facts (invariant 31), which
+   `agent/verification.py` accepts through `ground_truth=`; anything stated in
+   neither is still dropped.
 8. **Fail fast on misconfiguration.** `worker.preflight()` checks storage, DB,
    render tools and `MODEL_NAME` (against `models.list()`) before consuming. A
    wrong model id is a non-retryable 400, so it must not reach a task.
@@ -138,9 +148,11 @@ automation         .github/workflows/
     in-flight task finishes and is acked before the process exits.
 11. **State is a flat, fully-populated TypedDict.** `initial_state()` fills every
     key so nodes may read without `KeyError`.
-12. **Gemini calls are decorated.** Every `_call_gemini_*` goes through
-    `retry_with_exponential_backoff` (429/503 backoff, model fallback ladder,
-    daily-quota handling).
+12. **Gemini calls are decorated.** Every call helper in `agent/gemini.py` (the
+    only module that builds a client) goes through `retry_with_exponential_backoff`
+    (429/503 backoff, model fallback ladder, daily-quota handling); the prompts
+    live with their own layers (`agent/tailoring_prompt.py`, `agent/cover.py`,
+    `agent/application.py`).
 13. **Secrets never live in git.** `.env` is gitignored; charts use
     `existingSecret`; `scripts/worker-secret.ps1` creates the Secret.
 14. **`helm lint`/`helm template` are not enough.** Render and validate with
@@ -390,7 +402,7 @@ so that a change which depends on them is a conscious one.
 | D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
 | D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
 | D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
-| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **109 collected, 27 skipped, 82 passed** (`python -m pytest -q`, 2026-09-27; the skips are the `TEST_DATABASE_URL`-gated Postgres tests), plus the backoffice's **156 tests in 15 files** (`npm test`) | **Stale doc** |
+| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **150 collected, 28 skipped, 122 passed** (`python -m pytest`, 2026-09-29, after the module split), plus the backoffice's **250 tests in 24 files** (`npm test`) | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
 | D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
@@ -399,6 +411,8 @@ so that a change which depends on them is a conscious one.
 | D13 | `scripts/archive_not_applicable.sql`, which `scripts/AGENTS.md` described as the written record of the 2026-09-26 spreadsheet import | **The file does not exist and never did**: `git log --all -- scripts/archive_not_applicable.sql` is empty and the path is not tracked in any revision, so that description was prose-only. The import it documented is real - 828 `resume_history` rows carry the `Imported: ` prefix and 121 cards are refused as `Candidate` / `Not applicable` (`resume_board` archive columns, stage untouched) | **Doc fixed 2026-09-27** - `scripts/AGENTS.md` now says the script is absent; re-add one if that import ever has to be replayed |
 | D14 | `utils/db.SCHEMA_SQL` created `application_profile` (which references `app_users (id)`) **before** `app_users` | The script is applied top-down, so a *fresh* database died at `relation "app_users" does not exist` and the documented bootstrap could never work - invisible because every database in use already carried the account table from an earlier boot. The gated Postgres suite hit it as soon as its `store` fixture dropped `app_users` too; that drop list was itself stale (no `resume_application`, `application_profile`, `app_users`), so a run left dependants behind and failed its own teardown with `DependentObjectsStillExist` | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 `SCHEMA_SQL` tables (verified: 28/28 gated tests green on a database built from scratch) |
 | D15 | Fonts inside the container: the rendered PDF vs what Word shows | Carlito is metric-compatible with Calibri, so the **body** wraps and paginates exactly as Word does. It has no *Light* weight, so the master CV's heading runs (`asciiTheme="majorHAnsi"` -> Calibri Light) were rendered in **DejaVu Serif** (Serif Bold for the section headings) - a different design *and* different metrics. Verified 2026-09-29 by rendering `artifacts/input/cv.docx` inside the worker image and reading `pdffonts`, next to an A/B on that same image with the Calibri layer hidden: without it the PDF embeds `DejaVuSerif`, `DejaVuSerif-Bold`, `Carlito-Regular/Bold/Italic`, `OpenSymbol` and `LiberationMono`; with it `Calibri`, `Calibri-Bold`, `Calibri-Italic`, `Calibri-Light`, `OpenSymbol` and `LiberationMono` - Carlito and DejaVu gone entirely. `fc-match 'Calibri Light'` **on its own** reports DejaVu *Sans* (the generic fallback for a name nothing claims), which is not the face the document render picks - never treat that alone as the evidence. `Times New Roman` never appears in the master `document.xml`; only as per-script theme fallbacks, the `NormalWeb` style and a `fontTable` entry, and no serif substitute reaches the PDF | **Mitigated 2026-09-29** - `scripts/fetch-fonts.ps1` copies the genuine (licensed) Calibri family from Windows into the untracked `deploy/fonts/`, which `docker build` installs to `/usr/share/fonts/truetype/ms-calibri/` + `fc-cache -f`, so a locally built image embeds real Calibri/Calibri Light. CI builds the same Dockerfile with that directory empty (README only) and keeps the substitution on purpose - the `COPY` names the directory, not a glob, so a font-less build stays valid. The files are Microsoft-licensed: never committed and never published |
+
+| D16 | `candidate_profile.json`, named in `agent/application.py`, `agent/contracts.py`, the `apply` deployment comment and the extension's popup hint | There is no such file: the candidate facts are the `application_profile` **row** (`utils/candidate.py`, `backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` now exists as the *seed input* of `scripts/seed_profile.py`, which is what made the old wording look plausible | **Doc fixed 2026-09-29** - all four call sites name the row; the file is described as a seed |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -497,9 +511,11 @@ Facts only a real install could reveal. All were fixed in the same change - keep
    default 600). pika cannot service heartbeats while the graph runs, so the old 60s
    heartbeat let the broker drop the connection mid-task and requeue the message -
    the task then restarted from scratch, indefinitely.
-7. **The worker writes a periodic heartbeat while idle**
-   (`worker.start_heartbeat_thread`), so readiness no longer fails after five idle
-   minutes (which also made `helm upgrade --wait` time out).
+7. **Every consumer writes a periodic heartbeat while idle**
+   (`utils.logging_setup.start_heartbeat_thread`), so readiness no longer fails after
+   five idle minutes (which also made `helm upgrade --wait` time out). All three
+   entry points start it: `worker.py`, `cover.py` and `apply.py` - the last two run
+   at `minReplicas: 1`, so they always idle and would otherwise sit at `0/1` forever.
 8. **`helm uninstall` can leave KEDA CRDs behind** - delete them before re-installing.
 9. **One Gemini model = 20 requests/day on the free tier.** A single CV can consume a
    whole model's budget (3 revisions + vision checks per page), so the
@@ -538,6 +554,25 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     reach a card scraped on Djinni/DOU whose Apply button opened the employer's form. Neither
     match stops the flow with "this page is not linked to a card yet" instead of filling a form
     from the wrong vacancy.
+
+30. **`personal_projects` is read-only context.** The projects block is rendered into the CV text
+    (`utils.cv_text.project_lines`) so the model can draw on it - a project stack is *proof*
+    of a technology, and `agent/verification.py` admits those terms - but it may inform the SUMMARY
+    and RELEVANT SKILLS **only**: `drop_read_only_replacements()` discards any replacement whose
+    target is one of its lines, because the headings carry the right-aligned tab run and the
+    `Website:`/`Repo:`/`YT Video` lines carry the URLs. Its `heading` is stored verbatim, tabs
+    included, because invariant 5 is a tab-preserving substring test.
+
+31. **One candidate-facts document grounds every prompt.** `application_profile` (one jsonb row per
+    operator; `utils/candidate.py`, mirrored by `backoffice/src/lib/candidate.ts`) is the half of
+    the candidate that a CV does not carry. The CV tailoring prompt, the cover letter and the form
+    prompt all receive the same rendered digest, and `agent/verification.py` accepts it as an
+    admissible source (`ground_truth=`) so a fact-backed technology or number is not dropped as a
+    fabrication. It is **evidence, never document text**: no prompt may write contacts, salary,
+    availability, work format, location or job-search status into the CV or the letter. Facts cap at
+    `MAX_VALUE_CHARS`, standing answers at `MAX_ANSWER_CHARS` (a project deep-dive does not fit in a
+    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` merges
+    `standing_answers` so a popup save cannot wipe it.
 
 ## 8. When code and prose disagree
 

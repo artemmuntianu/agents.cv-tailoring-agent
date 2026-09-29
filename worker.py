@@ -27,7 +27,12 @@ from agent.contracts import JobStatus, ResumeTaskMessage
 from agent.pipeline import run_task
 from utils import db as db_module
 from utils import storage as storage_module
-from utils.logging_setup import get_logger, setup_logging, write_heartbeat
+from utils.logging_setup import (
+    get_logger,
+    setup_logging,
+    start_heartbeat_thread,
+    write_heartbeat,
+)
 from utils.messaging import HandlerResult, get_queue
 from utils.retry import RetryLater
 
@@ -79,10 +84,10 @@ def verify_model_availability() -> str:
     task would burn its attempts and end up in the DLQ. Authentication and
     transport problems are only warned about (local/dev runs stay usable).
     """
-    from agent.nodes import get_genai_client
+    from agent import gemini
 
     try:
-        client = get_genai_client()
+        client = gemini.client()
         available = {model.name.split("/")[-1] for model in client.models.list()}
     except Exception as exc:  # noqa: BLE001
         log.warning(
@@ -238,26 +243,6 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def start_heartbeat_thread() -> threading.Thread:
-    """Keep the readiness heartbeat fresh while the worker waits for work.
-
-    `healthcheck.py --mode readiness` (the pod's readiness probe) reads this file,
-    and it used to be written only at start-up and after each task - so a worker
-    that idled longer than HEARTBEAT_MAX_AGE_SECONDS reported itself unhealthy
-    (readiness "heartbeat is stale"), which also made a later
-    `helm upgrade --wait` fail with the pod stuck at 0/1.
-    """
-    interval = max(15, config.HEARTBEAT_MAX_AGE_SECONDS // 3)
-
-    def _beat() -> None:
-        while not STOP_EVENT.wait(interval):
-            write_heartbeat()
-
-    thread = threading.Thread(target=_beat, name="heartbeat", daemon=True)
-    thread.start()
-    return thread
-
-
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.queue_backend:
@@ -292,7 +277,7 @@ def main(argv=None) -> int:
         max_messages = max(0, int(available))
 
     write_heartbeat()
-    start_heartbeat_thread()
+    start_heartbeat_thread(STOP_EVENT)
     try:
         processed = queue.consume(
             handle_delivery, max_messages=max_messages, stop_event=STOP_EVENT

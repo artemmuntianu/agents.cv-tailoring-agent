@@ -12,8 +12,10 @@ queue message stays unacked until then.
 from langgraph.graph import END, StateGraph
 
 import config
-from agent.nodes import adapt_text, persist, render, vision_check
+from agent.nodes import adapt_text, render
+from agent.persist import persist
 from agent.state import State
+from agent.vision import vision_check
 from utils.logging_setup import get_logger
 
 log = get_logger(__name__)

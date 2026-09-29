@@ -22,7 +22,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 import config  # noqa: E402
-from agent.nodes import get_genai_client  # noqa: E402
+from agent import gemini  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -31,7 +31,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        client = get_genai_client()
+        client = gemini.client()
         models = list(client.models.list())
     except Exception as exc:  # noqa: BLE001
         print(f"❌ could not list models: {exc}")

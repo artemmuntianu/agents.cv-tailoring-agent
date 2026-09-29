@@ -17,7 +17,7 @@ if REPO_ROOT not in sys.path:
 import config  # noqa: E402
 from utils import db as db_module  # noqa: E402
 from utils import messaging, model_state, storage  # noqa: E402
-from utils.docx_mutator import cv_data_to_text  # noqa: E402
+from utils.cv_text import cv_data_to_text  # noqa: E402
 
 SAMPLE_CV_DATA = {
     "header": {"name": "Jane Doe", "title": "Software Engineer"},
@@ -36,7 +36,39 @@ SAMPLE_CV_DATA = {
             ],
         }
     ],
+    # Read-only context in the tailoring prompt: it may back a SUMMARY/SKILLS claim, but no
+    # replacement may target these lines (`utils.cv_replacements.drop_read_only_replacements`).
+    "personal_projects": [
+        {
+            "heading": "1) Personal Analytics Tool\t\t\t\t[2026]",
+            "description": "Built a self-hosted analytics tool for small teams.",
+            "highlights": [
+                "Shipped a queue-backed ingestion pipeline using RabbitMQ.",
+                "Packaged the service for Kubernetes with a Helm chart.",
+            ],
+            "links": ["Repo: https://example.invalid/analytics"],
+            "stack": "Python, RabbitMQ, Kubernetes, Postgres.",
+        }
+    ],
 }
+
+# The facts row (`application_profile`): ground truth for all three prompts. Redis is the
+# technology the CV text deliberately does *not* mention, which is what the verification tests use.
+SAMPLE_CANDIDATE = {
+    "location": "Portugal",
+    "english_level": "B2 (Upper-Intermediate)",
+    "salary_expectation": "$5,000 / month",
+    "availability": "ASAP - no notice period",
+    "work_rights": "Open to a B2B contract",
+    "standing_answers": {
+        "Redis and RabbitMQ experience": (
+            "Caching with Redis at Tangiblee and queues with RabbitMQ and Azure Service Bus "
+            "in microservice projects."
+        ),
+        "Years of backend experience (C# / .NET Core)": "More than 13 years.",
+    },
+}
+
 
 SAMPLE_JD = """About the Role
 We are looking for a hands-on Platform Engineering Lead.
@@ -68,6 +100,11 @@ def write_docx(path, lines):
 
 def write_master_cv(path, cv_data=None):
     return write_docx(path, docx_lines(cv_data or SAMPLE_CV_DATA))
+
+
+def seed_candidate(user_id, candidate=None):
+    """Write one candidate-facts row into the active store - the path every prompt reads."""
+    return db_module.get_db().upsert_application_profile(user_id, candidate or SAMPLE_CANDIDATE)
 
 
 def reset_caches():
@@ -135,14 +172,22 @@ def list_dir(directory):
 
 
 @contextlib.contextmanager
-def fake_gemini(replacements, role_title="Platform Engineering Lead", layout_ok=True, calls=None):
+def fake_gemini(replacements, role_title="Platform Engineering Lead", layout_ok=True, calls=None,
+                prompts=None):
     """Replace every Gemini call and both external render tools.
 
+    Everything the model-facing modules share is patched at its one definition site
+    (`agent.gemini`: `client`, `extract_role`, `suggest_replacements`, `evaluate_layout`), so the
+    tailoring nodes, the letter and the form prompt are all covered by the same patch. The render
+    tools stay on `agent.nodes`, which is where `render` calls them.
+
     Pass a dict as `calls` to count invocations, e.g. to prove that a duplicate
-    message never re-runs the LLM.
+    message never re-runs the LLM. Pass a list as `prompts` to capture the tailoring
+    prompt itself, e.g. to assert which blocks the model was given.
     """
     from PIL import Image
 
+    from agent import gemini as gemini_module
     from agent import nodes as nodes_module
     from agent.models import LayoutCheckResult, TextModificationList, TextReplacement
 
@@ -160,6 +205,8 @@ def fake_gemini(replacements, role_title="Platform Engineering Lead", layout_ok=
     def adapt(client, prompt):
         if calls is not None:
             calls["adapt"] += 1
+        if prompts is not None:
+            prompts.append(prompt)
         return payload
 
     def vision(client, contents):
@@ -182,10 +229,10 @@ def fake_gemini(replacements, role_title="Platform Engineering Lead", layout_ok=
     layout = LayoutCheckResult(
         is_layout_ok=layout_ok, feedback="clean" if layout_ok else "severe overlap detected"
     )
-    with mock.patch.object(nodes_module, "get_genai_client", lambda: mock.Mock()), \
-            mock.patch.object(nodes_module, "_call_gemini_extract_role", lambda c, jd: role_title), \
-            mock.patch.object(nodes_module, "_call_gemini_text_adaptation", adapt), \
-            mock.patch.object(nodes_module, "_call_gemini_vision_eval", vision), \
+    with mock.patch.object(gemini_module, "client", lambda: mock.Mock()), \
+            mock.patch.object(gemini_module, "extract_role", lambda c, jd: role_title), \
+            mock.patch.object(gemini_module, "suggest_replacements", adapt), \
+            mock.patch.object(gemini_module, "evaluate_layout", vision), \
             mock.patch.object(nodes_module, "convert_docx_to_pdf", fake_render_docx), \
             mock.patch.object(nodes_module, "convert_pdf_to_images", fake_render_pdf):
         yield payload

@@ -10,8 +10,9 @@ from unittest import mock
 
 import cover as cover_worker
 from agent import cover as cover_module
+from agent import gemini as gemini_module
 from agent.contracts import CoverLetterMessage
-from tests.helpers import SAMPLE_CV_DATA, isolated_config
+from tests.helpers import SAMPLE_CANDIDATE, SAMPLE_CV_DATA, SAMPLE_JD, isolated_config
 from utils import db as db_module
 from utils.messaging import Delivery, Outcome, cover_queue_spec, get_queue
 from utils.retry import RetryLater
@@ -38,13 +39,13 @@ def job_row(job_id="cover-1", **overrides):
 def fake_client(monkeypatch):
     """Give the worker a throwaway client, with no API key anywhere in sight.
 
-    `run_cover_letter` asks `agent.cover`'s own `get_genai_client` (imported into that module by
-    name) *before* it calls the model call, so patching only `_call_gemini_cover_letter` still
-    builds a real `genai.Client` - which raises "No API key was provided" on CI, where there is no
-    `.env` and no secret. That is how four hermetic tests passed on a developer machine (whose
-    `.env` carries a key) and dead-lettered on every CI run (2026-09-29).
+    `run_cover_letter` asks `agent.gemini.client()` *before* it calls the model call, so patching
+    only `_call_gemini_cover_letter` still builds a real `genai.Client` - which raises "No API key
+    was provided" on CI, where there is no `.env` and no secret. That is how four hermetic tests
+    passed on a developer machine (whose `.env` carries a key) and dead-lettered on every CI run
+    (2026-09-29).
     """
-    monkeypatch.setattr(cover_module, "get_genai_client", lambda: mock.Mock())
+    monkeypatch.setattr(gemini_module, "client", lambda: mock.Mock())
 
 
 def fake_letter(monkeypatch, letter="Hello,\n\nI fit this role.\n\nBest regards,\nJane Doe"):
@@ -98,6 +99,30 @@ def test_the_digest_omits_facts_the_cv_does_not_have():
     digest = cover_module.cv_digest({"header": {"title": "Senior Software Engineer"}})
     assert "NAME:" not in digest
     assert "HEADLINE: Senior Software Engineer" in digest
+
+
+def test_the_digest_leaves_the_projects_out():
+    """The projects block is tailoring context (SUMMARY/SKILLS), not letter material."""
+    digest = cover_module.cv_digest(SAMPLE_CV_DATA)
+    assert SAMPLE_CV_DATA["personal_projects"][0]["heading"] not in digest
+    assert "PERSONAL PROJECTS" not in digest
+
+
+def test_the_prompt_carries_the_candidate_facts():
+    prompt = cover_module.build_prompt(
+        SAMPLE_JD,
+        SAMPLE_CV_DATA,
+        title="Senior .NET Engineer",
+        company="ACME",
+        candidate=SAMPLE_CANDIDATE,
+    )
+    assert "CANDIDATE FACTS" in prompt
+    assert "ENGLISH LEVEL: B2 (Upper-Intermediate)" in prompt
+    assert "STANDING ANSWER - Redis and RabbitMQ experience" in prompt
+    # Ground truth for experience, never letter material: the prompt says so explicitly.
+    assert "What a letter must never say" in prompt
+    # A fresh operator has no row at all - that is a legitimate state, not an error.
+    assert "(no candidate facts stored)" in cover_module.build_prompt(SAMPLE_JD, SAMPLE_CV_DATA)
 
 
 def test_the_digest_tolerates_a_missing_model_and_a_pydantic_one():

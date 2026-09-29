@@ -5,9 +5,18 @@ import os
 import tempfile
 from unittest import mock
 
+import docx
+
 import config
 import worker
-from tests.helpers import SAMPLE_CV_DATA, fake_gemini, isolated_config, list_dir, sample_task
+from tests.helpers import (
+    SAMPLE_CV_DATA,
+    fake_gemini,
+    isolated_config,
+    list_dir,
+    sample_task,
+    seed_candidate,
+)
 from utils import db as db_module
 from utils.messaging import Delivery, Outcome, get_queue
 from utils.retry import RetryLater
@@ -107,6 +116,47 @@ def test_master_cv_drift_fails_the_task_and_requests_a_retry():
             job = db_module.get_db().get_job("job-848944")
             assert job["status"] == "failed"
             assert "out of sync" in job["error"]
+
+
+def test_projects_are_read_only_and_the_facts_reach_the_prompt():
+    """The master CV gained a PERSONAL PROJECTS section and the operator a facts row.
+
+    Both are now inputs to the tailoring prompt: the facts as ground-truth evidence, the
+    projects as read-only context - a replacement that targets a project line is dropped, so
+    the heading and the bullets come out of the run exactly as they went in.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            seed_candidate("user-1")
+            project = SAMPLE_CV_DATA["personal_projects"][0]
+            payload = sample_task(user_id="user-1", include_cv_data=True)
+
+            prompts = []
+            with fake_gemini(
+                [
+                    (SAMPLE_CV_DATA["summary"], TAILORED_SUMMARY),
+                    (project["heading"], "1) Hacked heading"),
+                    (project["highlights"][0], "Hacked bullet"),
+                ],
+                prompts=prompts,
+            ):
+                result = worker.handle_delivery(Delivery(payload=payload))
+
+            assert result.outcome == Outcome.ACK
+            assert "STANDING ANSWER - Redis and RabbitMQ experience" in prompts[0]
+            assert "PERSONAL PROJECTS:" in prompts[0]
+
+            paragraphs = [
+                paragraph.text
+                for paragraph in docx.Document(
+                    os.path.join(config.OUTPUT_DIR, "848944.docx")
+                ).paragraphs
+            ]
+            assert TAILORED_SUMMARY in paragraphs
+            assert project["heading"] in paragraphs
+            assert project["highlights"][0] in paragraphs
+            assert "Hacked heading" not in paragraphs
+            assert "Hacked bullet" not in paragraphs
 
 
 def test_quota_exhaustion_defers_the_task_instead_of_blocking():

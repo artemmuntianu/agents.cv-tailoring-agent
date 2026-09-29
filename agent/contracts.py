@@ -55,6 +55,24 @@ class CvExperience(BaseModel):
     highlights: list[str] = Field(default_factory=list)
 
 
+class CvProject(BaseModel):
+    """One personal project of the master CV (`personal_projects`).
+
+    `heading` is stored verbatim - it carries the ordinal, the title, the year and the tab run
+    that right-aligns it - because the sync rule is a verbatim (tab-preserving) substring test
+    against the DOCX paragraph. The whole block is context for the SUMMARY/SKILLS rewrites; see
+    `utils.cv_replacements.drop_read_only_replacements`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    heading: str
+    description: str = ""
+    highlights: list[str] = Field(default_factory=list)
+    links: list[str] = Field(default_factory=list)
+    stack: str = ""
+
+
 class CvData(BaseModel):
     """Structured CV knowledge base (`cv_data.json`)."""
 
@@ -64,6 +82,7 @@ class CvData(BaseModel):
     summary: str
     skills: dict[str, str] = Field(default_factory=dict)
     professional_experience: list[CvExperience] = Field(default_factory=list)
+    personal_projects: list[CvProject] = Field(default_factory=list)
 
 
 class ResumeTaskMessage(BaseModel):
@@ -200,7 +219,7 @@ class ApplicationDraftMessage(BaseModel):
     Deliberately carries **no documents**: the cover letter and the tailored PDF are inserted
     locally by the extension, from the board, and this message only asks which elements they
     belong in. The vacancy is read from the database (`resumes.description_raw`) and the candidate
-    facts from `candidate_profile.json`, so a stale copy can never reach the prompt.
+    facts from the `application_profile` row, so a stale copy can never reach the prompt.
     """
 
     model_config = ConfigDict(extra="allow")

@@ -10,11 +10,17 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 
 import config
 
 _CONFIGURED = False
+
+# Floor for the idle heartbeat tick (see `start_heartbeat_thread`): the readiness probe allows
+# HEARTBEAT_MAX_AGE_SECONDS of silence, so a third of that is a comfortable margin - with a floor
+# so a misconfigured (tiny) max-age cannot turn the thread into a busy loop.
+HEARTBEAT_TICK_SECONDS = 15
 
 # LogRecord attributes that are part of the standard record; anything else that
 # was passed via `extra=` is treated as a structured field.
@@ -168,3 +174,32 @@ def heartbeat_age_seconds(path: str | None = None):
     if not os.path.exists(target):
         return None
     return max(0.0, time.time() - os.path.getmtime(target))
+
+
+def start_heartbeat_thread(stop_event=None) -> threading.Thread:
+    """Keep the readiness heartbeat fresh while a consumer waits for work.
+
+    `healthcheck.py --mode readiness` (the pod's readiness probe) reads this file, and it is
+    otherwise written only at start-up and after each task - so a consumer that idles longer than
+    `HEARTBEAT_MAX_AGE_SECONDS` reports itself unhealthy ("heartbeat is stale"). That is not
+    cosmetic: `apply` and `cover` run at `minReplicas: 1`, so they *always* idle, an unready pod
+    makes `helm upgrade --wait` run into its 10-minute timeout, and a deploy fails on a healthy
+    worker (CONSTITUTION invariant 7).
+
+    Every long-lived consumer starts this thread with its own `STOP_EVENT`; the thread is a daemon,
+    so a process that never sets the event still exits.
+    """
+    interval = max(HEARTBEAT_TICK_SECONDS, config.HEARTBEAT_MAX_AGE_SECONDS // 3)
+
+    def _beat() -> None:
+        while True:
+            if stop_event is not None:
+                if stop_event.wait(interval):
+                    return
+            else:
+                time.sleep(interval)
+            write_heartbeat()
+
+    thread = threading.Thread(target=_beat, name="heartbeat", daemon=True)
+    thread.start()
+    return thread

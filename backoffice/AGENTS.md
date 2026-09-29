@@ -240,9 +240,13 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
 * `GET /api/apply/<job_id>?schema=<hash>` is the poll: `completed` (with the plan), `running`,
   `queued`, `failed`, `stale` (the stored plan belongs to a different form - POST again) or `none`.
 * `GET`/`PUT /api/profile` read and write the **candidate facts**: one `application_profile` jsonb
-  row per operator (`lib/candidate.ts` sanitises against the known keys and the caps). A database
-  row rather than a file, because the board runs on the host and the `apply` worker runs in the
-  cluster - the shared Postgres is the only place both can see.
+  row per operator (`lib/candidate.ts` sanitises against the known keys and the caps - the mirror of
+  `utils/candidate.py`, `MAX_VALUE_CHARS` per fact and `MAX_ANSWER_CHARS` per standing answer). A
+  database row rather than a file, because the board runs on the host and the `apply` worker runs in
+  the cluster - the shared Postgres is the only place both can see. `PUT` **merges**
+  `standing_answers`: the popup editor only shows the facts, so a Save facts click must never wipe
+  the question/answer set (send `{}` to clear it deliberately). The same row now grounds the
+  tailoring and cover-letter prompts as well (`CONSTITUTION.md` invariants 30/31).
 * `GET /api/cover/<job_id>` serves the generated letter to the extension, which pastes it into a
   form; the board itself keeps reading it through the card payload.
 

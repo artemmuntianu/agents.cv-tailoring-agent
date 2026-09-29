@@ -1,131 +1,56 @@
-import os
-from datetime import datetime
-from types import SimpleNamespace
+"""The adaptation stage: `adapt_text` and `render`.
 
-from google import genai
-from google.genai import types
-from PIL import Image
+The rest of the graph sits beside this file, one concern per module (the 250-line module rule):
+`agent/tailoring_prompt.py` (the rules), `agent/gemini.py` (the client and the three calls),
+`agent/vision.py` (`vision_check`), `agent/persist.py` and `agent/verification.py` (the 0%-lies
+check that filters what the model proposes). `agent/graph.py` wires them.
+
+`adapt_text` is where the three inputs meet: the master CV model (sync-checked against the DOCX),
+the vacancy, and the operator's candidate facts - evidence the CV text may not spell out.
+"""
+
+import os
 
 import config
+from agent import gemini
 from agent.contracts import JobStatus
-from agent.models import JobRoleExtraction, LayoutCheckResult, TextModificationList
+from agent.job_log import job_logger, set_status
 from agent.state import State
+from agent.tailoring_prompt import build_tailoring_prompt
 from agent.verification import evaluate_fabrications
+from utils import candidate as candidate_module
 from utils import db as db_module
-from utils import storage as storage_module
-from utils.docx_mutator import (
-    apply_text_replacements,
-    extract_doc_text,
-    normalize_replacements,
-    validate_cv_data_against_docx,
-)
+from utils.cv_replacements import drop_read_only_replacements, normalize_replacements
+from utils.cv_text import extract_doc_text, load_cv_data
+from utils.docx_mutator import apply_text_replacements, validate_cv_data_against_docx
 from utils.logging_setup import get_logger
 from utils.renderer import convert_docx_to_pdf, convert_pdf_to_images
-from utils.retry import retry_with_exponential_backoff
 
 log = get_logger(__name__)
 
 
-def _job_log(state: State):
-    return log.bind(
-        job_id=state.get("job_id") or "-",
-        external_id=state.get("external_id") or "-",
-        attempt=state.get("attempt", 0),
-    )
-
-
-def _set_status(state: State, status: str, **extra) -> None:
-    """Persist a status transition so the dashboard can pick it up.
-
-    Never fatal: local CLI runs have no job_id and a DB hiccup must not kill a
-    task that is otherwise making progress.
-    """
-    job_id = state.get("job_id")
-    if not job_id:
-        return
-    try:
-        db_module.get_db().update_job(job_id, status=status, **extra)
-    except Exception as exc:  # noqa: BLE001
-        _job_log(state).warning("could not persist job status", status=status, error=str(exc))
-
-
-def _self_healing_generate(client, model_name, contents, response_schema, temperature=0.0):
-    """Call Gemini with 1-shot self-healing schema retry on JSON/Pydantic validation failure."""
-    try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=response_schema,
-                temperature=temperature,
-            ),
-        )
-        return response_schema.model_validate_json(response.text)
-    except Exception as first_err:  # noqa: BLE001
-        log.warning(
-            "schema validation failed on first attempt; attempting 1-shot self-healing retry",
-            error=str(first_err),
-            schema=response_schema.__name__,
-        )
-        correction_prompt = (
-            f"{contents}\n\nCRITICAL FIX REQUIRED: Your previous response failed JSON schema validation "
-            f"for {response_schema.__name__} with error:\n{first_err}\n"
-            "Please fix the output formatting and return a valid JSON object strictly matching the required schema."
-        )
-        response = client.models.generate_content(
-            model=model_name,
-            contents=correction_prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=response_schema,
-                temperature=temperature,
-            ),
-        )
-        return response_schema.model_validate_json(response.text)
-
-
-@retry_with_exponential_backoff
-def _call_gemini_extract_role(client, job_description: str) -> str:
-    prompt = f"""Extract the exact or primary target role title from this job description.
-Return json matching schema with target_role_title.
-
-JOB DESCRIPTION:
-{job_description}"""
-    res = _self_healing_generate(
-        client, config.MODEL_NAME, prompt, JobRoleExtraction, temperature=0.0
-    )
-    return res.target_role_title.strip()
-
-
-@retry_with_exponential_backoff
-def _call_gemini_text_adaptation(client, prompt):
-    return _self_healing_generate(
-        client, config.MODEL_NAME, prompt, TextModificationList, temperature=0.2
-    )
-
-
-@retry_with_exponential_backoff
-def _call_gemini_vision_eval(client, contents):
-    return _self_healing_generate(
-        client, config.MODEL_NAME, contents, LayoutCheckResult, temperature=0.1
-    )
-
-
-def get_genai_client():
-    if getattr(config, "GEMINI_API_KEY", None):
-        return genai.Client(api_key=config.GEMINI_API_KEY)
-    return genai.Client()
-
-
 def adapt_text(state: State) -> State:
-    job_log = _job_log(state)
+    job_log = job_logger(state)
     job_log.info("node started", node="adapt_text", revision=state["revision_count"] + 1)
-    _set_status(state, JobStatus.PROCESSING)
-    client = get_genai_client()
+    set_status(state, JobStatus.PROCESSING)
+    client = gemini.client()
 
     cv_data = state.get("cv_data") or None
+    # `extract_doc_text()` would load the file itself; loading it here keeps ONE copy, so the
+    # read-only guard below reasons about the very model the prompt was built from.
+    if cv_data is None:
+        cv_data = load_cv_data()
     cv_text = extract_doc_text(cv_data)
+
+    # The candidate facts (the operator's own profile row) are the third input: ground truth
+    # about experience the CV text does not spell out. No user id (a CLI run) or no row is not
+    # an error - the prompt then simply carries an empty facts block.
+    try:
+        candidate_facts = candidate_module.load(db_module.get_db(), state.get("user_id"))
+    except Exception as exc:  # noqa: BLE001 - a missing profile must never fail a run
+        job_log.warning("could not read the candidate facts", error=str(exc))
+        candidate_facts = {}
+    candidate_digest = candidate_module.digest(candidate_facts) if candidate_facts else ""
 
     # Contract check from the architecture doc: cv_data.json must describe the
     # master cv.docx, otherwise AST mutations could target the wrong paragraph.
@@ -140,45 +65,18 @@ def adapt_text(state: State) -> State:
 
     target_role_title = state.get("target_role_title")
     if not target_role_title:
-        target_role_title = _call_gemini_extract_role(client, state["job_description"])
+        target_role_title = gemini.extract_role(client, state["job_description"])
         job_log.info("target role extracted", target_role_title=target_role_title)
 
-    prompt = f"""You are a professional CV tailoring expert optimising a candidate's resume to maximise alignment with a target job description AND to pass Applicant Tracking System (ATS) screening - while NEVER fabricating anything.
+    prompt = build_tailoring_prompt(
+        target_role_title=target_role_title,
+        cv_text=cv_text,
+        job_description=state["job_description"],
+        candidate_digest=candidate_digest,
+        layout_feedback=state.get("layout_feedback") or "",
+    )
 
-You receive the candidate's CURRENT CV TEXT, which contains these sections in order:
-- HEADER (NAME + TITLE)
-- SUMMARY
-- RELEVANT SKILLS (labelled categories - each category label and its skills value are SEPARATE single-line paragraphs)
-- PROFESSIONAL EXPERIENCE (role, company_info, bullet highlights)
-
-TARGET ROLE TITLE FROM JOB DESCRIPTION:
-"{target_role_title}"
-
-MISSION:
-Produce text replacements for EVERY relevant section so the resume surfaces the exact keywords and responsibilities the job description requests. You MUST cover ALL of the following sections; do not skip any that exist in the CV text:
-1. HEADER_TITLE
-2. SUMMARY
-3. SKILLS
-4. PROFESSIONAL_EXPERIENCE (role lines and highlight bullets)
-
-RULES:
-1. NO FABRICATION (HARD RULE): NEVER invent employers, job titles, dates, companies, projects, certifications, technologies, or metrics that are absent from the CURRENT CV TEXT. Only rephrase and re-weight what already exists. Never claim a technology the candidate has not used. Never alter a real figure (e.g. "2B+", "50%", "80%", "2 times", "300+ endpoints") into a different number, and never add a number that is not in the source.
-2. ATS KEYWORD MATCHING: Rephrase so the exact phrases the job description uses surface naturally as scannable tokens (e.g. "Solution Architect", "Azure", ".NET", "REST API design", "MS SQL Server", "architecture artifacts", "C4 / ADR / HLD / LLD", "security (JWT, OAuth2/OIDC, Key Vault, least-privilege)", "AI/LLM concepts (RAG, embeddings, prompt engineering)", "event-driven architecture", "Service Bus / Event Grid", "clean/onion architecture, Repository, CQRS", "Docker / AKS", "observability (Application Insights)"). Only surface a term if it is genuinely backed by the candidate's real experience.
-3. SUMMARY: Rewrite it (3-5 lines) to lead with the target role title and the top 3-5 MUST-HAVE requirements, framed as proven capability. Keep it strictly factual - do not claim deep mastery of something not evidenced on the CV.
-4. SKILLS: Reword the category labels AND each skills value line SEPARATELY - a label and its value are two separate target lines, so rephrase each independently so the job description's keywords become the visible tokens (e.g. Azure services, .NET/C#, REST API design & contracts, MS SQL Server design/tuning, AI & LLM: RAG / embeddings / prompt engineering / agentic orchestration, architecture patterns). Do not add new technologies.
-5. HEADER_TITLE: MUST adapt the title to closely match the target role while preserving the candidate's genuine seniority, e.g. "Senior Solution Architect (.NET / Azure) | AI-Native Engineering Lead". Keep the candidate's NAME unchanged. If the job title differs from the current title, it MUST be adapted.
-6. PROFESSIONAL_EXPERIENCE: Rephrase each highlight using the (Action + Context + Result) formula, front-loading the job description's responsibility keywords (end-to-end solution design, REST API contracts, MS SQL Server schema/performance, Azure cloud architecture, architecture artifacts & clear documentation, communicating trade-offs). Keep every real metric exactly as-is.
-7. Keep each replacement readable and roughly the same length as the original. Do not merge, split, or drop bullets; keep the same count and order of experience entries.
-8. SINGLE-LINE (HARD RULE): original_text and tailored_text must each be EXACTLY ONE line and must NEVER contain a newline ('\n') or carriage return character. Each replacement targets exactly ONE paragraph/line of the DOCX. A SKILLS category label and its skills value are TWO separate single-line paragraphs - if you revise both, return TWO separate replacement entries (one for the label line, one for the value line). NEVER concatenate a category label with its value (or any two lines) into a single multi-line original_text - that can never match the DOCX.
-9. VERBATIM: original_text MUST be an EXACT verbatim single-line string copied from the CURRENT CV TEXT (a full bullet, the header/title line, a SKILLS category label, or a SKILLS value line). reason must state which job-description requirement the change now targets.
-10. BULLET MARKERS (HARD RULE): NEVER include a bullet or list marker character at the start of either original_text or tailored_text - no '•', '-', '*', 'o', '–' or '—'. Microsoft Word renders the list bullets automatically, so a leading marker produces a DOUBLE bullet. Provide ONLY the plain sentence text (e.g. "Led the migration of 50 desktop screens…", never "• Led the migration…"). In the provided CV text, highlight bullets are prefixed with a '•' purely for display in this plain-text dump - IGNORE that marker when you copy original_text and NEVER echo it into tailored_text.
-"""
-    if state.get("layout_feedback"):
-        prompt += f"\nCRITICAL VISUAL FEEDBACK FROM PREVIOUS LAYOUT INSPECTION:\n{state['layout_feedback']}\nAdjust phrases to be more concise to fix page overflow and widow/orphan lines."
-
-    prompt += f"\n\nCURRENT CV TEXT:\n{cv_text}\n\nJOB DESCRIPTION:\n{state['job_description']}"
-
-    mod_result = _call_gemini_text_adaptation(client, prompt)
+    mod_result = gemini.suggest_replacements(client, prompt)
     raw_replacements = [
         (m.original_text, m.tailored_text, getattr(m, "reason", "N/A"))
         for m in mod_result.modifications
@@ -186,7 +84,9 @@ RULES:
 
     # Deterministic Fabrication Verification (0% Lies Check)
     jd_text = state.get("job_description", "")
-    eval_res = evaluate_fabrications(cv_text, raw_replacements, job_description=jd_text)
+    eval_res = evaluate_fabrications(
+        cv_text, raw_replacements, job_description=jd_text, ground_truth=candidate_digest
+    )
     if eval_res.violations:
         job_log.warning(
             "fabrications detected in initial LLM output - requesting self-healing retry",
@@ -199,12 +99,14 @@ RULES:
             + "\n\nFix the replacements above so that NO invented metrics, altered numbers, or unlisted technologies remain. Fabrication count MUST be 0."
         )
         try:
-            retry_result = _call_gemini_text_adaptation(client, retry_prompt)
+            retry_result = gemini.suggest_replacements(client, retry_prompt)
             retry_raw = [
                 (m.original_text, m.tailored_text, getattr(m, "reason", "N/A"))
                 for m in retry_result.modifications
             ]
-            eval_res = evaluate_fabrications(cv_text, retry_raw, job_description=jd_text)
+            eval_res = evaluate_fabrications(
+                cv_text, retry_raw, job_description=jd_text, ground_truth=candidate_digest
+            )
         except Exception as retry_err:  # noqa: BLE001
             job_log.warning("self-healing fabrication retry failed", error=str(retry_err))
 
@@ -225,6 +127,8 @@ RULES:
     # Normalise so the model can never pass a concatenated (multi-line) label+value
     # as a single replacement - those live in separate paragraphs and can never match.
     replacements = normalize_replacements(clean_raw_replacements)
+    # Projects are context, not targets: the prompt states it, this is the enforcement.
+    replacements = drop_read_only_replacements(replacements, cv_data)
 
     applied_count = apply_text_replacements(
         doc_path=state["cv_path"],
@@ -269,8 +173,8 @@ RULES:
 
 
 def render(state: State) -> State:
-    job_log = _job_log(state)
-    _set_status(state, JobStatus.RENDERING)
+    job_log = job_logger(state)
+    set_status(state, JobStatus.RENDERING)
     temp_dir = state.get("temp_dir") or "temp"
     os.makedirs(temp_dir, exist_ok=True)
     pdf_path = os.path.join(temp_dir, "temp_rendered.pdf")
@@ -292,110 +196,4 @@ def render(state: State) -> State:
         **state,
         "image_paths": image_paths,
         "pdf_path": pdf_path,
-    }
-
-
-def vision_check(state: State) -> State:
-    job_log = _job_log(state)
-    _set_status(state, JobStatus.VALIDATING)
-    job_log.info("node started", node="vision_check")
-    client = get_genai_client()
-
-    images = []
-    for path in state["image_paths"]:
-        with Image.open(path) as image:
-            image.load()
-            images.append(image.copy())
-
-    prompt = """Analyze the rendered CV page images for formatting quality and visual layout.
-
-IMPORTANT LAYOUT GUIDELINES:
-* Layout & Page Flow: Accept two-column design with sidebar ending on page 1. Allow natural overflow to page 2 (even partial pages or multi-page entry splits). Never propose margin, font, or spacing tweaks for page fitting.
-* Ignore Design Non-Issues: Do not flag orphan lines, minor overflows, or the intentional overlap between 'AI & Agentic Workflows' and the 'RELEVANT SKILLS' header background bar.
-* Focus & Scope: Flag only severe structural or visual defects. Prioritize content readability, technical accuracy, and structural hierarchy over page count.
-* NEVER try to condense the content to fit comfortably onto a single page.
-
-Return json matching schema with fields:
-- is_layout_ok: boolean
-- feedback: string explanation of layout issues (if any) or confirmation of clean layout.
-"""
-    try:
-        result = _call_gemini_vision_eval(client, [*images, prompt])
-    finally:
-        for image in images:
-            image.close()
-
-    if result.is_layout_ok:
-        job_log.info("visual check passed", feedback=result.feedback)
-    else:
-        job_log.warning("visual check flagged layout issues", feedback=result.feedback)
-
-    return {
-        **state,
-        "is_approved": result.is_layout_ok,
-        "layout_feedback": result.feedback,
-    }
-
-
-def persist(state: State) -> State:
-    """Terminal node: upload artifacts and write the final row.
-
-    The message is only acked after this node returns, so a crash here simply
-    re-delivers the task instead of losing the result.
-    """
-    job_log = _job_log(state)
-    job_log.info("node started", node="persist")
-    _set_status(state, JobStatus.UPLOADING)
-
-    status = state.get("status_hint") or JobStatus.COMPLETED
-    pdf_url = state.get("pdf_url") or ""
-    docx_url = state.get("docx_url") or ""
-
-    if state.get("job_id"):
-        task = SimpleNamespace(
-            job_id=state.get("job_id"),
-            user_id=state.get("user_id") or None,
-            external_id=state.get("external_id") or "cv",
-        )
-        storage = storage_module.get_storage()
-        pdf_path = state.get("pdf_path")
-        if pdf_path and os.path.exists(pdf_path):
-            pdf_url = storage.upload(
-                pdf_path, storage_module.output_key_for(task, ".pdf")
-            )
-        if state.get("output_path") and os.path.exists(state["output_path"]):
-            docx_url = storage.upload(
-                state["output_path"], storage_module.output_key_for(task, ".docx")
-            )
-
-    duration_ms = None
-    if state.get("started_at"):
-        try:
-            started = datetime.fromisoformat(state["started_at"])
-            duration_ms = int((datetime.now(started.tzinfo) - started).total_seconds() * 1000)
-        except Exception:  # noqa: BLE001
-            duration_ms = None
-
-    _set_status(
-        state,
-        status,
-        revision_count=state.get("revision_count"),
-        is_approved=bool(state.get("is_approved")),
-        pdf_url=pdf_url or None,
-        docx_path=docx_url or None,
-        duration_ms=duration_ms,
-    )
-    job_log.info(
-        "job finished",
-        status=status,
-        pdf_url=pdf_url,
-        duration_ms=duration_ms,
-        revisions=state.get("revision_count"),
-    )
-
-    return {
-        **state,
-        "pdf_url": pdf_url,
-        "docx_url": docx_url,
-        "status_hint": status,
     }

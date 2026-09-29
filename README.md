@@ -150,7 +150,7 @@ Provider-specific code sits behind an environment-selected backend and a `get_*(
 factory with a matching `reset_*_cache()` test hook, so call sites never branch on
 the backend. Dependencies run one way (`agent/` -> `utils/` -> `config`),
 configuration is read once in `config.py`, and Gemini-specific code is confined to
-`agent/nodes.py`.
+`agent/gemini.py`.
 
 ### Tests that need no network, no LLM and no LibreOffice
 

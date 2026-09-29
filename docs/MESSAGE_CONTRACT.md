@@ -38,7 +38,8 @@ by the host-side tools below - one payload per vacancy either way:
   "description_raw": "About the Role\nWe are looking for ...",
   "cv_version": "v1",
   "attempt": 0,
-  "cv_data": { "header": {...}, "summary": "...", "skills": {...}, "professional_experience": [...] }
+  "cv_data": { "header": {...}, "summary": "...", "skills": {...},
+               "professional_experience": [...], "personal_projects": [...] }
 }
 ```
 
@@ -65,14 +66,15 @@ and may be `848944-1789668742`, a UUID, or any token matching
 | `external_id` | **yes** | vacancy id; with `user_id` + `source` + `cv_version` it forms the idempotency key |
 | `source` | no | site slug (`djinni`, `dou`, ...); defaults to `djinni`. Two sites number their vacancies independently, so it is half of the vacancy's identity |
 | `description_raw` | **yes** | plain text (HTML already stripped) |
-| `cv_data` | no | inline CV model; when absent the worker downloads `master/cv_data.json` |
+| `cv_data` | no | inline CV model; when absent the worker downloads `master/cv_data.json`. `personal_projects` travels with it and is read-only context (invariant 30) |
 | `cv_version` | no | bump it when the master CV changes to force re-tailoring |
 | `attempt` | no | informational; the authoritative counter lives in Postgres |
 
 **Hard sync rule:** every line of `cv_data` must exist verbatim in the master
 `cv.docx`. The worker verifies this (`validate_cv_data_against_docx`) and fails
 the task with `invalid_master_cv`-style error rather than mutating the wrong
-paragraph.
+paragraph. The check is one-directional (JSON ⊆ DOCX), so a section the DOCX gained
+but the model does not carry is *not* an error - it is simply invisible to the prompt.
 
 ## Cover letters (`resumes.cover`)
 
@@ -88,8 +90,9 @@ backlog and must not wake a tailoring pod:
 | `job_id` | **yes** | the vacancy's row id; the letter is written from that row |
 | `attempt` | no | informational; the authoritative counter is `resume_cover_letter.attempts` |
 
-The payload carries **no** description and no CV: `cover.py` reads `resumes.description_raw` and
-the master `cv_data.json` itself (invariant 24), so a stale copy cannot reach the prompt. The
+The payload carries **no** description and no CV: `cover.py` reads `resumes.description_raw`, the
+master `cv_data.json` and the operator's candidate facts (`application_profile`, invariant 31)
+itself (invariant 24), so a stale copy cannot reach the prompt. The
 outcome is one row of `resume_cover_letter` (`queued` -> `running` -> `completed`/`failed`) -
 the broker semantics (ack / retry / TTL retry / DLQ) are the ones in the table below.
 

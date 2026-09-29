@@ -194,7 +194,9 @@ Do not add a dependency just to answer a reference/dead-code question.
     `python scripts/check_models.py --strict`; the worker also validates at preflight.
 11. **The cv_data <-> cv.docx sync rule is enforced at runtime.** A single
     whitespace mismatch fails the task by design - regenerate `cv_data.json` when
-    the master CV changes.
+    the master CV changes. The check is **one-directional** (JSON ⊆ DOCX): adding a
+    section to `cv.docx` alone stays green and silently never reaches the prompt,
+    which is exactly how the PERSONAL PROJECTS section went unnoticed on 2026-09-29.
 12. **`.env` is gitignored and never staged**, and may still contain now-unused
     Supabase keys (see `CONSTITUTION.md` D9).
 13. **PowerShell 5.1 mangles native arguments and array literals.** `--flag key=(expr)`
@@ -239,6 +241,18 @@ Do not add a dependency just to answer a reference/dead-code question.
     empty string, so the default comes straight back and the connection dies with "server does not
     support SSL, but SSL was required". That is what a `python -m archiver --dry-run` /
     `python -m scout --dry-run` / the gated Postgres tests do, so set the value explicitly.
+19. **A rebuild with the same image tag does not restart anything.** `local-deploy.ps1` builds
+    `cv-tailoring-worker:dev` by default, and a *rebuild* leaves the Deployment's pod template
+    byte-identical - Kubernetes keeps the old pods, so the upgrade reports success while the cluster
+    still runs the previous code (and `helm upgrade --wait` then waits on pods that are not ready for
+    an unrelated reason, timing out after 10 minutes). The script now forces the rollout itself
+    (`kubectl rollout restart`, step 8b), which is also what makes `-SkipBuild` mean "redeploy an
+    existing image". If you invoke `helm upgrade` by hand, pass a fresh `-Image` tag.
+20. **An idle consumer that never writes the heartbeat is `0/1` forever.** The readiness probe
+    reads the heartbeat file, and `apply`/`cover` run at `minReplicas: 1`, so both must start
+    `utils.logging_setup.start_heartbeat_thread` like `worker.py` does - otherwise the pods show
+    `0/1 Running` with `heartbeat is stale (...)` and `helm upgrade --wait` fails
+    (`CONSTITUTION.md` invariant 7, `docs/RUNBOOK.md`).
 
 ## Shell / commands (Windows PowerShell 5.1)
 
@@ -275,7 +289,7 @@ Do not add a dependency just to answer a reference/dead-code question.
 - Log through `utils.logging_setup.get_logger(__name__)` with structured
   `key=value` extras. No `print()` in library code - the one CLI (`publisher.py`,
   the host-side dev gateway) is the deliberate exception.
-- Keep Gemini-specific code in `agent/nodes.py`; the pipeline and adapters stay
+- Keep Gemini-specific code in `agent/gemini.py`; the pipeline and adapters stay
   provider-agnostic.
 - When you change a fact recorded in `CONSTITUTION.md`, update it in the same change.
 

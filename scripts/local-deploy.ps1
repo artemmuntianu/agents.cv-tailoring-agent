@@ -186,6 +186,24 @@ if ($scaledObjectCrdPresent) {
 if ($LASTEXITCODE -ne 0) { Fail 'helm install failed - inspect with: kubectl get pods' }
 Ok 'release deployed'
 
+Step '8b. force the worker rollout'
+# A rebuild with the SAME image tag leaves the pod template identical, so Kubernetes keeps the
+# previous pods running: the upgrade succeeds and silently ships nothing new. That is exactly what
+# happened on 2026-09-29 (the pods stayed 18h old until a fresh tag was passed to `-Image`), so the
+# rollout is forced here - and this is also what makes `-SkipBuild` mean "redeploy an existing
+# image". `rollout restart` follows the deployment's own rolling strategy, and the worker's SIGTERM
+# handler finishes the in-flight task before the pod goes.
+$workerDeployments = @('ai-agent-worker', 'ai-agent-worker-cover', 'ai-agent-worker-apply')
+$restart = Invoke-External 'kubectl' (@('rollout', 'restart') + @($workerDeployments | ForEach-Object { "deployment/$_" }))
+if ($restart.Code -ne 0) { Warn 'could not force the worker rollout - run: kubectl rollout restart deployment/ai-agent-worker' }
+else {
+    foreach ($name in $workerDeployments) {
+        $status = Invoke-External 'kubectl' @('rollout', 'status', "deployment/$name", '--timeout=180s')
+        if ($status.Code -ne 0) { Warn ("$name did not roll out cleanly: " + $status.Text) }
+    }
+    Ok 'workers restarted on the current image'
+}
+
 Step '9. status'
 kubectl get pods,scaledobject
 Say ''

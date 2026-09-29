@@ -26,7 +26,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from datetime import UTC, datetime
 
 import config
-from utils.docx_mutator import load_cv_data
+from utils.cv_text import load_cv_data
 from utils.logging_setup import setup_logging
 from utils.messaging import get_queue
 

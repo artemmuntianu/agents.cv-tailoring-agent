@@ -36,8 +36,13 @@ from agent.application import run_application_draft
 from agent.contracts import ApplicationDraftMessage
 from utils import candidate as candidate_module
 from utils import db as db_module
-from utils.docx_mutator import load_cv_data
-from utils.logging_setup import get_logger, setup_logging, write_heartbeat
+from utils.cv_text import load_cv_data
+from utils.logging_setup import (
+    get_logger,
+    setup_logging,
+    start_heartbeat_thread,
+    write_heartbeat,
+)
 from utils.messaging import HandlerResult, application_queue_spec, get_queue
 from utils.retry import RetryLater
 from worker import verify_model_availability
@@ -231,6 +236,7 @@ def main(argv=None) -> int:
         max_messages = max(0, int(available))
 
     write_heartbeat()
+    start_heartbeat_thread(STOP_EVENT)
     try:
         processed = queue.consume(handle_delivery, max_messages=max_messages, stop_event=STOP_EVENT)
     finally:

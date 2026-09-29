@@ -1,202 +1,22 @@
-"""Low-level DOCX (AST/XML) mutation helpers.
+"""The mechanical half of the document surgery: walk the DOCX, match a line, write it back.
 
-Two long-standing issues are fixed here:
+Nothing here decides *whether* a replacement is allowed. That is `utils.cv_replacements` (one
+clean line, never a read-only projects line) plus `validate_cv_data_against_docx()` below, which
+proves the model describes the document it is about to be applied to.
 
-1. The CV data model used to be read into a *module-level* global at import
-   time. That crashed the process when the file was missing and, worse, served
-   stale data across tasks. `cv_data` is now always an explicit argument (the
-   task carries it, or it is loaded lazily from `CV_DATA_PATH` for CLI runs).
-2. `validate_cv_data_against_docx()` enforces the contract from the architecture
-   doc: every line of `cv_data.json` must exist in the master `cv.docx`, so the
-   AST mutations can never target the wrong paragraph.
+Nested tables are the trap: the master CV keeps its entire first page inside a table in a table,
+so `iter_all_paragraphs()` recurses into cells and `python-docx`'s own `document.paragraphs` is
+never enough on its own.
 """
 
-import json
 import os
 
 import docx
 
-import config
+from utils.cv_text import cv_data_to_text, normalize_text, strip_leading_bullet
 from utils.logging_setup import get_logger
 
 log = get_logger(__name__)
-
-
-def load_cv_data(path=None):
-    """Load the structured CV knowledge base (no module-level caching)."""
-    target = path or config.CV_DATA_PATH
-    with open(target, encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def _as_plain_dict(cv_data):
-    """Accept a pydantic model, a dict, or a JSON string and return a dict.
-
-    The queue payload is validated into `agent.contracts.CvData`, while the CLI
-    loads raw JSON - both must reach the mutator as plain mappings.
-    """
-    if cv_data is None:
-        return None
-    if hasattr(cv_data, "model_dump"):
-        return cv_data.model_dump()
-    if isinstance(cv_data, (str, bytes)):
-        return json.loads(cv_data)
-    return cv_data
-
-
-def cv_data_to_text(cv_data):
-    """Render the structured CV model as the single-line-per-paragraph text the
-    tailoring prompt and the replacement matcher both rely on."""
-    cv_data = _as_plain_dict(cv_data)
-    if not cv_data:
-        raise ValueError("cv_data is required to build the CV text")
-
-    lines = [
-        cv_data["header"]["title"],
-        "\nSUMMARY:",
-        cv_data["summary"],
-        "\nRELEVANT SKILLS:",
-    ]
-    for category, skills in cv_data["skills"].items():
-        lines.append(category)
-        lines.append(skills)
-
-    lines.append("\nPROFESSIONAL EXPERIENCE:")
-    for experience in cv_data["professional_experience"]:
-        lines.append(f"\n{experience['role']}")
-        lines.append(f"{experience['company_info']}")
-        for highlight in experience["highlights"]:
-            lines.append(f"• {highlight}")
-
-    return "\n".join(lines)
-
-
-def get_encoded_cv_text(cv_data=None):
-    """Backwards-compatible accessor used by the CLI path."""
-    return cv_data_to_text(cv_data if cv_data is not None else load_cv_data())
-
-
-def extract_doc_text(cv_data=None, doc_path=None):
-    """Return the prompt-ready CV text.
-
-    Accepts either the new `(cv_data)` / `(cv_data=..., doc_path=...)` form or a
-    bare path string for backwards compatibility.
-    """
-    if isinstance(cv_data, (str, os.PathLike)) and doc_path is None:
-        doc_path = cv_data
-        cv_data = None
-    if cv_data is None:
-        cv_data = load_cv_data()
-    return cv_data_to_text(cv_data)
-
-
-def validate_cv_data_against_docx(cv_data, docx_path):
-    """Verify cv_data lines exist in the master DOCX.
-
-    Returns the list of lines that could NOT be found (empty list == in sync).
-    Callers decide whether that is fatal (cloud) or a warning (local dev).
-    """
-    missing = []
-    try:
-        document = docx.Document(docx_path)
-        haystack = "\n".join(
-            _norm_str(paragraph.text) for paragraph in iter_all_paragraphs(document)
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("could not open master cv for validation", path=docx_path, error=str(exc))
-        return []
-
-    for line in cv_data_to_text(cv_data).split("\n"):
-        candidate = _norm_str(_strip_leading_bullet(line.strip()))
-        if not candidate or candidate.endswith(":") or candidate.startswith("•"):
-            continue
-        if candidate not in haystack:
-            missing.append(line.strip())
-    return missing
-
-
-def _clean_char(character: str) -> str:
-    if character == "\xa0":
-        return " "
-    if character in ("\u2013", "\u2014"):
-        return "-"
-    return character
-
-
-def _norm_str(value: str) -> str:
-    return "".join(_clean_char(character) for character in value)
-
-
-def _strip_leading_bullet(value: str) -> str:
-    """Remove a leading bullet/list marker so Word does not render a double bullet."""
-    for prefix in ("• ", "- ", "* ", "o ", "– ", "— ", "•", "-", "*", "–", "—"):
-        if value.startswith(prefix):
-            return value[len(prefix):].strip()
-    return value
-
-
-def _split_lines(text):
-    """Split a string into its non-empty, whitespace-stripped single lines."""
-    return [
-        line.strip()
-        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        if line.strip()
-    ]
-
-
-def normalize_replacements(items):
-    """
-    Sanitise suggested replacements so no single replacement ever spans more than
-    one paragraph/line of the DOCX.
-
-    The tailoring model sometimes concatenates a SKILLS category label with its
-    value (e.g. "Leadership & Methodology\\nSystem Architecture, ..."). Because a
-    label and its value live in SEPARATE paragraphs in the DOCX, such a
-    concatenated original_text can never be matched. This function splits any
-    multi-line replacement into one clean, single-line (original, tailored,
-    reason) entry per aligned line, drops entries whose line counts do not match,
-    strips leading bullet markers (which Word would render as a double bullet) and
-    drops no-op entries (original == tailored).
-
-    Items may be (original, tailored) or (original, tailored, reason) tuples.
-    """
-    normalized = []
-    for item in items:
-        if len(item) == 3:
-            original_text, tailored_text, reason = item
-        else:
-            original_text, tailored_text = item[:2]
-            reason = "N/A"
-
-        original_text = _strip_leading_bullet(original_text.strip())
-        tailored_text = _strip_leading_bullet(tailored_text.strip())
-
-        original_lines = _split_lines(original_text)
-        tailored_lines = _split_lines(tailored_text)
-
-        # Multi-line (concatenated label + value) replacement: split into pairs.
-        if len(original_lines) > 1 or len(tailored_lines) > 1:
-            if len(original_lines) != len(tailored_lines):
-                log.warning(
-                    "dropping replacement that spans multiple lines and cannot be aligned",
-                    original=original_text,
-                    tailored=tailored_text,
-                )
-                continue
-            for original_line, tailored_line in zip(
-                original_lines, tailored_lines, strict=True
-            ):
-                if original_line and tailored_line and original_line != tailored_line:
-                    normalized.append((original_line, tailored_line, reason))
-            continue
-
-        # Normal single-line replacement.
-        original_line = original_lines[0] if original_lines else original_text
-        tailored_line = tailored_lines[0] if tailored_lines else tailored_text
-        if original_line and tailored_line and original_line != tailored_line:
-            normalized.append((original_line, tailored_line, reason))
-
-    return normalized
 
 
 def iter_all_paragraphs(container, seen=None):
@@ -217,8 +37,33 @@ def iter_all_paragraphs(container, seen=None):
                     yield from iter_all_paragraphs(cell, seen)
 
 
+def validate_cv_data_against_docx(cv_data, docx_path):
+    """Verify cv_data lines exist in the master DOCX.
+
+    Returns the list of lines that could NOT be found (empty list == in sync).
+    Callers decide whether that is fatal (cloud) or a warning (local dev).
+    """
+    missing = []
+    try:
+        document = docx.Document(docx_path)
+        haystack = "\n".join(
+            normalize_text(paragraph.text) for paragraph in iter_all_paragraphs(document)
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not open master cv for validation", path=docx_path, error=str(exc))
+        return []
+
+    for line in cv_data_to_text(cv_data).split("\n"):
+        candidate = normalize_text(strip_leading_bullet(line.strip()))
+        if not candidate or candidate.endswith(":") or candidate.startswith("•"):
+            continue
+        if candidate not in haystack:
+            missing.append(line.strip())
+    return missing
+
+
 def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
-    tailored_text = _strip_leading_bullet(tailored_text)
+    tailored_text = strip_leading_bullet(tailored_text)
     if not original_text or original_text == tailored_text:
         return False
 
@@ -231,8 +76,8 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
         if target_text.startswith(prefix):
             target_text = target_text[len(prefix):].strip()
 
-    norm_full = _norm_str(full_text)
-    norm_target = _norm_str(target_text)
+    norm_full = normalize_text(full_text)
+    norm_target = normalize_text(target_text)
 
     match_start = norm_full.find(norm_target)
     if match_start == -1:
@@ -246,7 +91,7 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
         return True
 
     for run in runs:
-        norm_run = _norm_str(run.text)
+        norm_run = normalize_text(run.text)
         run_start = norm_run.find(norm_target)
         if run_start != -1:
             run_end = run_start + len(norm_target)
@@ -254,7 +99,7 @@ def _replace_text_in_paragraph(paragraph, original_text, tailored_text):
             return True
 
     combined_text = "".join(run.text for run in runs)
-    norm_combined = _norm_str(combined_text)
+    norm_combined = normalize_text(combined_text)
 
     match_start = norm_combined.find(norm_target)
     if match_start == -1:

@@ -14,10 +14,14 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 |---|---|
 | `conftest.py` | Puts the repo root on `sys.path` so pytest runs from any cwd |
 | `helpers.py` | Fixture-free harness: `isolated_config`, `fake_gemini`, `reset_caches`, sample CV/JD builders |
+| `test_candidate_facts.py` | The candidate-facts block: one renderer for the facts + standing answers, the two caps (`MAX_VALUE_CHARS` / `MAX_ANSWER_CHARS`), both stored shapes, and a missing row/user as an empty block rather than an error |
 | `test_contracts.py` | `ResumeTaskMessage` defaults, the `job_id` shape guard, `key()`, `to_job_row()`, `new_job_id()` |
-| `test_cover_letter.py` | The letter prompt (only what the CV states), the digest, and `cover.handle_delivery`: written / duplicate / quota-deferred / dead-lettered, plus the two queues never sharing storage |
+| `test_cover_letter.py` | The letter prompt (only what the CV and the candidate facts state), the digest (projects deliberately excluded), and `cover.handle_delivery`: written / duplicate / quota-deferred / dead-lettered, plus the two queues never sharing storage |
+| `test_cv_replacements.py` | The rules a replacement must satisfy: concatenated label+value splitting, misaligned/duplicate/no-op dropping, and the read-only projects block |
+| `test_cv_text.py` | The CV model as text: every section rendered (projects included), and the legacy path-string call |
 | `test_db_claim.py` | Claim outcomes `claimed` / `duplicate` / `owned` and the re-claim of a failed row (local backend) |
-| `test_docx_mutator.py` | The document surgery that must never regress: normalisation, bullet/no-op dropping, sync validation, master left untouched |
+| `test_docx_mutator.py` | The AST surgery that must never regress: the paragraph rewritten and the master left untouched, and the sync validator detecting drift |
+| `test_heartbeat.py` | The idle heartbeat thread: it refreshes the readiness file with no messages in flight, and it is a daemon that a `STOP_EVENT` ends |
 | `test_messaging.py` | Directory-queue semantics: ack -> `processed`, retry (attempt bump), dead-letter -> `failed`, a crashing handler requeues |
 | `test_model_state.py` | Model ledger: preference order, unavailability TTL, exhaustion -> `None` |
 | `test_scout.py` | The scheduled intake: the feed fixture (escaped HTML, double-escaped entities, the utm link, the apply tail), the title/id parsing, the board-scoped dedupe, "a run queues nothing", the Telegram message, that a run without a feed is an *error*, and the ledger row a run records |
@@ -27,9 +31,10 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `test_retry.py` | `_is_retryable`, daily-quota detection, headless `RetryLater`, backoff |
 | `test_worker_pipeline.py` | End-to-end `worker.handle_delivery` / `worker.main --once`: happy path, duplicate, DLQ, master-CV drift, quota deferral, attempt ceiling |
 
-Expected result where `TEST_DATABASE_URL` is unset (2026-09-29): **132 collected, 104 passed,
-28 skipped**, and the backoffice suite is **213 passed / 21 files** (`npm test`). The superseded
-counts (109/82/27 and 156/15, 2026-09-27; 45/39/6, 2026-09-19) are history.
+Expected result where `TEST_DATABASE_URL` is unset (2026-09-29): **152 collected, 124 passed,
+28 skipped**, and the backoffice suite is **250 passed / 24 files** (`npm test`). The superseded
+counts (150/122/28 and 250/24, 2026-09-29; 132/104/28 and 213/21, 2026-09-29; 109/82/27 and
+156/15, 2026-09-27; 45/39/6, 2026-09-19) are history.
 
 ## Commands
 
@@ -60,18 +65,23 @@ and the removal purge (`artifact_purge` + the cascade).
   **Use it (or `tempfile.TemporaryDirectory()`) in anything that touches
   `config`** - otherwise a run rewrites the tracked `model_state.json` and drops
   files under `artifacts/`.
-- `fake_gemini(replacements, layout_ok=True, calls=None)` patches
-  `_call_gemini_extract_role`, `_call_gemini_text_adaptation`,
-  `_call_gemini_vision_eval`, `get_genai_client`, `convert_docx_to_pdf` and
-  `convert_pdf_to_images`. Pass a dict as `calls` to count LLM invocations -
-  that is how "a duplicate never pays for Gemini twice" is asserted.
+- `fake_gemini(replacements, layout_ok=True, calls=None, prompts=None)` patches the one definition
+  site of every model-facing helper - `agent.gemini.client`, `extract_role`, `suggest_replacements`
+  and `evaluate_layout` - so the tailoring nodes, the letter and the form prompt are all covered by
+  the same patch - plus `convert_docx_to_pdf` / `convert_pdf_to_images` on `agent.nodes`, which is
+  where `render` calls them. Pass a dict as `calls` to count LLM invocations -
+  that is how "a duplicate never pays for Gemini twice" is asserted - and a list as
+  `prompts` to capture the tailoring prompt, which is how "the candidate facts and the
+  read-only projects block reached the model" is asserted.
 - `reset_caches()` calls `db.reset_db_cache()`, `storage.reset_storage_cache()`,
   `messaging.reset_queue_cache()` and `model_state.reset_store_cache()`.
   **A new cached `get_*()` factory in `utils/` must be added here too** (see
   `utils/AGENTS.md`).
-- Builders: `sample_task(...)`, `SAMPLE_CV_DATA`, `SAMPLE_JD`, `docx_lines`,
-  `write_docx`, `write_master_cv`, `list_dir`. Keep helpers fixture-free so they
-  also work from a plain script.
+- Builders: `sample_task(...)`, `SAMPLE_CV_DATA`, `SAMPLE_CANDIDATE`, `SAMPLE_JD`,
+  `docx_lines`, `write_docx`, `write_master_cv`, `seed_candidate`, `list_dir`. Keep
+  helpers fixture-free so they also work from a plain script. `seed_candidate(user_id)`
+  writes the candidate-facts row the three prompts read (Redis is the technology the
+  sample CV deliberately omits, which the verification tests lean on).
 
 ## Rules
 
@@ -87,7 +97,7 @@ and the removal purge (`artifact_purge` + the cascade).
    half that CI enforces: **the suite must pass with no `GEMINI_API_KEY` in the
    environment**. `run_cover_letter` builds its client *before* the model call, so
    patching `_call_gemini_cover_letter` alone is not enough - patch
-   `cover.get_genai_client` too (`test_cover_letter.py::fake_client`). Four
+   `agent.gemini.client` too (`test_cover_letter.py::fake_client`). Four
    tests that were green on a developer machine (a key in `.env`) dead-lettered
    on every CI run until 2026-09-29.
 3. Assert on outcomes (`Outcome.ACK` / `RETRY` / `RETRY_LATER` / `DEAD_LETTER`,

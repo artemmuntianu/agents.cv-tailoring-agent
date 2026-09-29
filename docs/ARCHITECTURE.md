@@ -132,12 +132,12 @@ Queue topology as declared (chart definitions, byte-identical in intent to
 | Doc step | Code |
 |---|---|
 | a) fetch 1 task (`description_raw` + `cv_data.json`) | `worker.handle_delivery` → `utils/storage.prepare_task` |
-| b) LangGraph gap analysis (Gemini) | `agent/nodes.adapt_text` (+ `_call_gemini_extract_role`) |
+| b) LangGraph gap analysis (Gemini) | `agent/nodes.adapt_text` → `agent/tailoring_prompt.build_tailoring_prompt` + `agent/gemini.extract_role` |
 | c) AST/XML mutation of master `cv.docx` | `utils/docx_mutator.apply_text_replacements` |
 | d) render DOCX → PDF → images | `utils/renderer` (LibreOffice + poppler, per-job profile) |
-| e) Vision QA | `agent/nodes.vision_check` (loop ≤ `MAX_REVISIONS`) |
-| f) store the result | `agent/nodes.persist` → `utils.storage.LocalStorage` (the `cv-artifacts` volume) |
-| g) update PostgreSQL state | `agent/nodes.persist` → `utils/db.PostgresDb` |
+| e) Vision QA | `agent/vision.vision_check` (loop ≤ `MAX_REVISIONS`) |
+| f) store the result | `agent/persist.persist` → `utils.storage.LocalStorage` (the `cv-artifacts` volume) |
+| g) update PostgreSQL state | `agent/persist.persist` → `utils/db.PostgresDb` |
 
 The message is acked only after (f) and (g) succeed.
 
@@ -182,7 +182,7 @@ re-queue a card the operator has closed (invariant 19).
 | `AMQP_HEARTBEAT_SECONDS` | 600 s | must exceed the longest task: pika cannot service heartbeats while the graph runs |
 | `MAX_ATTEMPTS` | 3 | poison-message protection before the message is parked in the DLQ |
 | `MAX_REVISIONS` / `RENDER_DPI` | 3 / 70 | vision-check loop budget and the PNG resolution it reads |
-| probes | liveness `--mode liveness`, readiness `--mode readiness` | readiness reads the heartbeat file, which the worker refreshes periodically, so an **idle** worker stays Ready |
+| probes | liveness `--mode liveness`, readiness `--mode readiness` | readiness reads the heartbeat file, which every consumer refreshes periodically (idle included), so an **idle** worker stays Ready |
 
 Provider selection (`QUEUE_BACKEND`, `DB_BACKEND`, `MODEL_STATE_BACKEND`) is what the
 hermetic test suite switches on; the deployed configuration is always

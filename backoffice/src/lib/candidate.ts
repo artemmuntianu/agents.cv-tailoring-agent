@@ -2,15 +2,17 @@ import { createHash } from 'node:crypto';
 import { applicationProfile, saveApplicationProfile } from './db';
 
 /**
- * The candidate facts an application form is filled from - the gateway's half of
- * `utils/candidate.py`.
+ * The candidate facts every prompt is grounded in - the gateway's half of `utils/candidate.py`.
  *
  * `cv_data.json` is the CV's *content* (summary, skills, experience) and carries **no contacts at
  * all**, so the facts a form asks for (name, email, phone, location, salary expectation,
  * availability, work rights, English level, standing answers) live in their own document: one
  * `application_profile` row per operator. That is a database row rather than a file because the
- * board edits it on the host while the `apply` worker reads it in the cluster - two different
- * filesystems, one shared Postgres.
+ * board edits it on the host while the workers read it in the cluster - two different filesystems,
+ * one shared Postgres.
+ *
+ * The CV tailoring prompt, the cover letter and the form prompt all read this block, so it is the
+ * one place a fact about the candidate is maintained.
  *
  * The payload is sanitised against the known keys, because the document ends up in a Gemini prompt
  * and "nothing I can see" has to describe it truthfully.
@@ -39,6 +41,8 @@ export interface CandidateProfile {
 }
 
 export const MAX_VALUE_CHARS = 600;
+/** A *fact* is a form-field value (short); a standing answer is prose, so it caps higher. */
+export const MAX_ANSWER_CHARS = 3000;
 export const MAX_ANSWERS = 40;
 
 /**
@@ -75,12 +79,27 @@ export function sanitizeCandidate(raw: unknown): CandidateProfile {
       const key = String(question).trim().slice(0, MAX_VALUE_CHARS);
       const text =
         typeof answer === 'string' || typeof answer === 'number'
-          ? String(answer).trim().slice(0, MAX_VALUE_CHARS)
+          ? String(answer).trim().slice(0, MAX_ANSWER_CHARS)
           : '';
       if (key && text) profile.standing_answers[key] = text;
     }
   }
   return profile;
+}
+
+/**
+ * The standing answers to store after a save.
+ *
+ * `standing_answers` is the one merged field: the popup's editor only shows the facts, so an
+ * *absent* key means "keep what is already stored" - a click on Save facts must never wipe the
+ * question/answer set - while an explicit `{}` clears it. The facts themselves stay
+ * replace-wholesale, which is what empty inputs in the editor mean.
+ */
+export function mergeStandingAnswers(stored: unknown, incoming: unknown): Record<string, string> {
+  const replace =
+    typeof incoming === 'object' && incoming !== null && !Array.isArray(incoming);
+  return sanitizeCandidate({ facts: {}, standing_answers: replace ? incoming : stored })
+    .standing_answers;
 }
 
 /** One operator's stored facts, or an empty document when nothing has been saved yet. */
@@ -91,12 +110,23 @@ export async function readCandidate(userId: string): Promise<CandidateProfile> {
 
 export async function writeCandidate(userId: string, raw: unknown): Promise<CandidateProfile> {
   const profile = sanitizeCandidate(raw);
+  const incoming =
+    typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).standing_answers
+      : undefined;
+  // The stored row is read first because `standing_answers` merges with it. Deliberately not
+  // `readCandidate()`: that one swallows a DB error, and a failed read must surface as a failed
+  // save (the route answers 503) instead of clearing the answers.
+  const row = await applicationProfile(userId);
+  const stored = sanitizeCandidate(row ? row.facts : null);
+  const answers = mergeStandingAnswers(stored.standing_answers, incoming);
+
   const document: Record<string, unknown> = { ...profile.facts };
-  if (Object.keys(profile.standing_answers).length > 0) {
-    document.standing_answers = profile.standing_answers;
+  if (Object.keys(answers).length > 0) {
+    document.standing_answers = answers;
   }
   await saveApplicationProfile(userId, document);
-  return profile;
+  return { ...profile, standing_answers: answers };
 }
 
 /** The facts' version: the other half of the form hash, so editing them invalidates a draft. */
