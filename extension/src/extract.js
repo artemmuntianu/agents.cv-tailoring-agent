@@ -10,6 +10,10 @@
  * One deliberate divergence from the sketch: the full description lives in
  * `.js-original-text` (the preview in `.js-truncated-text` is cut off), so the former
  * wins and the preview is only a fallback.
+ *
+ * A second page shape is read as one vacancy instead of a card list: Greenhouse's boards render
+ * the vacancy - description included - on the job page itself, so when no card matches, the id
+ * comes from the URL and the text from the page (`greenhouseJobPage`).
  */
 export function extractVacancies(root, options = {}) {
   /** Selectors in priority order - first non-empty match wins. */
@@ -21,6 +25,8 @@ export function extractVacancies(root, options = {}) {
     'section', 'article', 'tr', 'table', 'blockquote', 'pre',
   ];
   const SKIP_TAGS = ['script', 'style', 'noscript', 'template'];
+  /** A single-vacancy job page: `/<board>/jobs/<id>` (Greenhouse, the case at hand). */
+  const JOB_PAGE_URL = /\/jobs\/(\d+)(?:\/|$)/;
 
   /**
    * HTML -> plain text with paragraph breaks preserved. `innerText` is avoided
@@ -79,6 +85,40 @@ export function extractVacancies(root, options = {}) {
     return chosen ? chosen.getAttribute('href') || '' : '';
   }
 
+  /**
+   * A Greenhouse job page, read as one vacancy.
+   *
+   * No card matches there because the whole page *is* the vacancy: the id lives in the URL, the
+   * title in the `h1`, the text in the server-rendered `.job__description`. Returns `null` for
+   * anything that is not one, so a page that merely has no cards still yields nothing.
+   */
+  function greenhouseJobPage(page) {
+    const href = (page.location && page.location.href) || page.baseURI || '';
+    const match = String(href).match(JOB_PAGE_URL);
+    if (!match) return null;
+    if (!page.querySelector('#application-form, .job__description')) return null;
+    const description = pickText(page, ['.job__description.body', '.job__description']);
+    if (!description) return null;
+
+    // The page's own <title> is "Job Application for <role> at <company>" (the EU board's
+    // shape); the board's path segment is the fallback, since it is always there.
+    let company = '';
+    const at = collapse(textOf(page.querySelector('title'))).match(/\bat\s+([^|]+)$/i);
+    if (at) company = at[1].trim();
+    if (!company) {
+      const segment = String(href).split('/')[3] || '';
+      if (segment && !/^jobs?$/i.test(segment)) company = segment;
+    }
+
+    return {
+      external_id: match[1],
+      title: pickText(page, ['h1', '.job__title']),
+      company: company,
+      description_raw: description,
+      source_url: href || null,
+    };
+  }
+
   const max = options.max || 25;
   const doc = root || (typeof document === 'undefined' ? null : document);
   if (!doc) return { vacancies: [], skipped: 0, error: 'no document' };
@@ -118,6 +158,12 @@ export function extractVacancies(root, options = {}) {
       source_url: sourceUrl || null,
     };
     vacancies.push(vacancy);
+  }
+
+  // A card list that came up empty may still be a job page a board rendered on its own.
+  if (vacancies.length === 0) {
+    const single = greenhouseJobPage(doc);
+    if (single) return { vacancies: [single], skipped: 0, error: null };
   }
 
   return { vacancies: vacancies, skipped: skipped, error: null };

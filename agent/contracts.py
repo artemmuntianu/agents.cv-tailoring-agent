@@ -86,7 +86,7 @@ class ResumeTaskMessage(BaseModel):
         default="djinni",
         pattern=r"^[a-z0-9][a-z0-9-]{1,31}$",
         description=(
-            "Slug of the site the vacancy came from ('djinni', 'dou'). Part of the "
+            "Slug of the site the vacancy came from ('djinni', 'dou', 'greenhouse'). Part of the "
             "idempotency key: two sites number their vacancies independently."
         ),
     )

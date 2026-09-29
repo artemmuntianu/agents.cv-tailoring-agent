@@ -54,8 +54,12 @@ The rules below are the contract, not style advice:
   * "cover_letter" - the candidate's cover letter belongs here. Return **no** value: the board
                     already holds the letter and the extension pastes it in untouched.
   * "resume_file" - the candidate's tailored CV document belongs here. Return **no** value: the
-                    extension attaches the generated PDF.
+                    extension attaches the generated PDF. Exactly one field can be the resume:
+                    when two upload controls carry the same label, the form's own ids and the
+                    section headings in the html block say which of them is the CV.
   * "skip"        - leave this field to the candidate; `reason` says why in a few words.
+- A field whose kind is `combobox` is a JavaScript dropdown (react-select and friends), not a
+  text input, and the extension does not type into it: always "skip" with reason "dropdown".
 - Use ONLY facts stated in the vacancy, the candidate block or the CV block. If a question needs a
   fact that is not there, return "skip" with reason "no fact for this" - never invent an employer,
   a technology, a number, a date or a language level.
@@ -64,7 +68,9 @@ The rules below are the contract, not style advice:
 - Always leave consent, terms and privacy checkboxes and "save as template"-style controls to the
   candidate: "skip" with reason "consent" or "site preference".
 - A field the form pre-fills itself (a salary the site already holds, a CV it already selected) is
-  "skip" unless a candidate fact contradicts it, and then say so in `note`.
+  "skip" unless a candidate fact contradicts it, and then say so in `note`. A field marked
+  `hidden` is usually that kind - but a hidden *file* field is the upload control behind a styled
+  dropzone, and that one is where the tailored document belongs.
 - Keep every answer short and concrete: two sentences at most, plain text, no markdown, no bullet
   characters, no placeholders such as [Company]. A yes/no answer is one word.
 - Mention in `note` anything the candidate must check by hand (a required field you skipped, a

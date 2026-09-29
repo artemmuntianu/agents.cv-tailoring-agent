@@ -12,7 +12,8 @@
  *               host (`chrome.storage.local.formRecipes`).
  *   snapshot  - annotate every fillable control with a deterministic `data-cvt-id` (f1, f2, ... in
  *               DOM order), collect a compact field list, hand back the trimmed subtree. The worker
- *               posts that to the board, where it becomes a Gemini prompt.
+ *               posts that to the board, where it becomes a Gemini prompt. A control a script owns
+ *               (`role="combobox"`) is reported as its own kind, never as a text field.
  *   apply     - take the plan that comes back (keyed by those ids) plus the documents the worker
  *               fetched, and write them into the page. It never submits anything.
  *   adapter   - per-site steps for widgets a plain `input[type=file]` cannot express (Djinni's CV
@@ -90,8 +91,27 @@
     const tag = element.tagName;
     if (tag === 'TEXTAREA') return 'textarea';
     if (tag === 'SELECT') return 'select';
+    // A dropdown a script owns (react-select and friends) is an `<input>` that only looks like a
+    // text field: typing into it shows a value the widget drops on its next render. Its own kind
+    // is what tells the model to leave it alone and the applier to refuse it.
+    const role = (element.getAttribute('role') || '').toLowerCase();
+    const popup = (element.getAttribute('aria-haspopup') || '').toLowerCase();
+    if (role === 'combobox' || popup === 'listbox') return 'combobox';
     const type = (element.getAttribute('type') || 'text').toLowerCase();
     return type === 'text' ? 'text' : type;
+  }
+
+  /**
+   * TomSelect's *generated* control: the unnamed `<input>` it adds inside its own wrapper.
+   *
+   * The widget's real control is the `<select>` it hides, and that one stays annotated (it keeps
+   * its `name`, and the applier writes into it). Only the search box the widget invented from its
+   * own id - `#tomselect-1-ts-control`, which nobody submits - is excluded.
+   */
+  function widgetControl(element) {
+    if (element.tagName !== 'INPUT') return false;
+    if (element.getAttribute('name')) return false;
+    return Boolean(element.closest('.ts-wrapper'));
   }
 
   function isFillable(element) {
@@ -101,12 +121,36 @@
     if (element.disabled || element.readOnly) return false;
     const type = (element.getAttribute('type') || '').toLowerCase();
     if (SKIP_TYPES.has(type)) return false;
-    // A control with no `name` is not submitted by the browser - which is exactly how TomSelect's
-    // synthetic search box (`#tomselect-1-ts-control`, no name) stays out of the list while the
-    // real `<select>` behind it is still annotated.
+    // What identifies a control: `name` (the browser submits it) *or* `id` (a form a script
+    // drives keeps the value in JS state - Greenhouse's `first_name`/`email`/`question_*` carry
+    // no name at all, so keying on `name` alone left that whole form invisible).
     const named = Boolean(element.getAttribute('name'));
-    if (!named && type !== 'file' && tag !== 'SELECT' && tag !== 'TEXTAREA') return false;
+    const hasId = Boolean(element.getAttribute('id'));
+    if (!named && !hasId && type !== 'file' && tag !== 'SELECT' && tag !== 'TEXTAREA') return false;
+    if (widgetControl(element)) return false;
+    // A widget's plumbing, not a field: a state mirror or a `required` marker the site keeps out
+    // of the tab order (react-select renders one next to every dropdown). Only unnamed inputs are
+    // judged this way - the hidden `<select>` behind a widget *is* fillable.
+    if (!named && tag === 'INPUT') {
+      if (element.getAttribute('aria-hidden') === 'true') return false;
+      if (element.getAttribute('tabindex') === '-1') return false;
+    }
     return true;
+  }
+
+  /**
+   * Whether the page says this control must be filled.
+   *
+   * The `required` attribute is not the only way to say it: a React form marks it with
+   * `aria-required` - on the input, or on the group around it (Greenhouse's upload group is
+   * `role="group" aria-required="true"` while the file input itself carries nothing).
+   */
+  function isRequired(element) {
+    if (element.required) return true;
+    if (element.getAttribute('aria-required') === 'true') return true;
+    const group = element.closest('[aria-required="true"]');
+    if (!group) return false;
+    return group.tagName === 'FIELDSET' || group.getAttribute('role') === 'group';
   }
 
   function optionsOf(element) {
@@ -124,7 +168,27 @@
    * label points at an id that does not exist (`for="answer_boolean_3"` while the inputs are
    * `answer_boolean_3_yes` / `_no`), so the group question has to come from the container.
    */
+  /** The text of the elements an `aria-labelledby`/`aria-describedby` id list points at. */
+  function labelledByText(ids) {
+    return oneLine(
+      String(ids || '')
+        .split(/\s+/)
+        .map((id) => {
+          const node = document.getElementById(id);
+          return node ? node.textContent : '';
+        })
+        .join(' '),
+    );
+  }
+
   function questionFor(element) {
+    // A group the site labelled itself outranks the control's own `<label for>`: that label is
+    // often the wording of the *button* that opens the control (Greenhouse's upload group labels
+    // its file input "Attach" and names the group "Resume/CV").
+    const group = element.closest('[role="group"][aria-labelledby], fieldset[aria-labelledby]');
+    const groupText = group ? labelledByText(group.getAttribute('aria-labelledby')) : '';
+    if (groupText) return groupText;
+
     const explicit = labelTextFor(element);
     if (explicit) return explicit;
 
@@ -133,14 +197,7 @@
 
     const labelledBy = element.getAttribute('aria-labelledby');
     if (labelledBy) {
-      const text = labelledBy
-        .split(/\s+/)
-        .map((id) => {
-          const node = document.getElementById(id);
-          return node ? node.textContent : '';
-        })
-        .join(' ');
-      const joined = oneLine(text);
+      const joined = labelledByText(labelledBy);
       if (joined) return joined;
     }
 
@@ -354,7 +411,8 @@
         const id = groups.get(name);
         records.get(id).elements.push(control);
         records.get(id).field.options.push(optionLabelOf(control));
-        records.get(id).field.required = records.get(id).field.required || Boolean(control.required);
+        records.get(id).field.required =
+          records.get(id).field.required || isRequired(control);
         control.setAttribute(MARK, id);
         continue;
       }
@@ -369,7 +427,7 @@
         label: questionFor(control),
         name,
         placeholder: oneLine(control.getAttribute('placeholder')),
-        required: Boolean(control.required),
+        required: isRequired(control),
         options: grouped ? [optionLabelOf(control)] : optionsOf(control),
         hidden: isHidden(control),
       };
@@ -639,6 +697,20 @@
         return;
       }
       const element = record.elements[0];
+
+      // A JS dropdown looks like a text input and is not one: writing into it shows a value the
+      // widget ignores on its next render. The snapshot already gave it its own kind, so a plan
+      // that still asks for text there is refused instead of half-applied and believed.
+      if (
+        record.field.kind === 'combobox' &&
+        (item.action === 'answer' || item.action === 'select')
+      ) {
+        report.skipped.push({
+          label,
+          reason: 'a JavaScript dropdown the extension does not drive - pick it yourself',
+        });
+        return;
+      }
 
       if (item.action === 'answer') {
         setValue(element, item.value);

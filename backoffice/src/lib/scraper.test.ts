@@ -14,6 +14,16 @@ const CARD_HTML = readFileSync(
   fileURLToPath(new URL('./fixtures/djinni-listing.html', import.meta.url)),
   'utf8',
 );
+/** A board that has no listing cards: the job page itself carries the whole vacancy. */
+const JOB_PAGE_HTML = readFileSync(
+  fileURLToPath(new URL('./fixtures/greenhouse-job.html', import.meta.url)),
+  'utf8',
+);
+const GREENHOUSE_URL = 'https://job-boards.eu.greenhouse.io/growe/jobs/4987494101';
+
+function jobPage(html: string, url: string = GREENHOUSE_URL): Document {
+  return new JSDOM(html, { url }).window.document;
+}
 
 function page(html: string): Document {
   return new JSDOM(html, { url: 'https://djinni.co/jobs/?primary_keyword=Python' }).window.document;
@@ -82,5 +92,44 @@ describe('vacancy scraper', () => {
       skipped: 0,
       error: null,
     });
+  });
+});
+
+describe('vacancy scraper: a board that renders the vacancy on the job page', () => {
+  /**
+   * Greenhouse's boards have no cards at all - the job page *is* the vacancy. The id comes from
+   * the URL (`/jobs/<id>`, the same shape the gateway derives from a pasted link) and the text
+   * from the page, which is why one vacancy comes out of it instead of a card list.
+   */
+  it('reads the job page as a single vacancy', () => {
+    const result = extractVacancies(jobPage(JOB_PAGE_HTML));
+    expect(result.error).toBeNull();
+    expect(result.skipped).toBe(0);
+    expect(result.vacancies).toHaveLength(1);
+
+    const job = result.vacancies[0];
+    expect(job.external_id).toBe('4987494101');
+    expect(job.title).toBe('Senior .NET Engineer');
+    expect(job.company).toBe('GROWE');
+    expect(job.source_url).toBe(GREENHOUSE_URL);
+    expect(job.description_raw).toContain('microservices in a production environment');
+    expect(job.description_raw).toContain('Terraform');
+    expect(job.description_raw).not.toContain('<p>');
+  });
+
+  it('falls back to the board when the page title names no company', () => {
+    const html = JOB_PAGE_HTML.replace(' at GROWE</title>', ' | Greenhouse</title>');
+    expect(extractVacancies(jobPage(html)).vacancies[0].company).toBe('growe');
+  });
+
+  it('leaves a board page alone when the URL names no job', () => {
+    const board = jobPage(JOB_PAGE_HTML, 'https://job-boards.eu.greenhouse.io/growe');
+    expect(extractVacancies(board).vacancies).toEqual([]);
+    expect(extractVacancies(board).skipped).toBe(0);
+  });
+
+  it('does not turn an unrelated page into a vacancy', () => {
+    // The same selectors, under a URL with no `/jobs/<id>`: this stays a card list.
+    expect(extractVacancies(page(JOB_PAGE_HTML)).vacancies).toEqual([]);
   });
 });
