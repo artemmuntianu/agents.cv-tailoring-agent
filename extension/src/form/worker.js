@@ -6,11 +6,16 @@ import { mergePlan, neededDocuments, publicFields } from './plan.js';
  *
  * It lives in its own module (not in `background.js`) because it is a complete flow - snapshot,
  * draft on the board, poll, fetch the two documents, apply - and `background.js` is already where
- * three other flows meet. Its extension-level helpers (`settings`, `cardStatus`, `sourceForUrl`)
+ * three other flows meet. Its extension-level helpers (`settings`, `cardStatus`, `cardForUrl`)
  * are injected, so this file owns no global state.
  *
- * Two rules shape the flow:
+ * Three rules shape the flow:
  *
+ * * the **card is resolved twice, in order**. The page's own vacancy id answers "was this vacancy
+ *   scraped from this site?", and when that fails the page URL is matched against the cards'
+ *   application URLs - the only way to reach a DOU/Djinni card whose Apply button opened the
+ *   employer's own ATS form. Neither match means the page belongs to no card, and the flow stops
+ *   rather than filling a form from a guess.
  * * the **snapshot hash** is the cache key. The board stores a plan per `(job_id, hash)`, so
  *   re-filling the same rendered form costs no Gemini call, while a changed form re-drafts.
  * * the generated **documents never leave the browser**: only the plan travels through the queue,
@@ -20,7 +25,7 @@ const POLL_INTERVAL_MS = 2500;
 const POLL_DEADLINE_MS = 120000;
 const DEFAULT_GATEWAY = 'http://localhost:4321';
 
-export function createFormWorker({ settings, cardStatus }) {
+export function createFormWorker({ settings, cardStatus, cardForUrl }) {
   // -- progress --------------------------------------------------------------- //
 
   /**
@@ -271,20 +276,32 @@ export function createFormWorker({ settings, cardStatus }) {
     }
 
     setPhase('board');
+    // Two ways to the same card, in this order: the page's own vacancy id (the vacancy was
+    // scraped *from* this site), or the page URL against the cards' application URLs - the only
+    // way to reach a card scraped on Djinni/DOU whose Apply button opened the employer's form.
     const externalId = externalIdFromUrl(url);
-    if (!externalId) {
-      return {
-        ok: false,
-        error: 'this page has no vacancy id in its URL - open the vacancy itself',
-      };
+    let jobId = '';
+    let linkedBy = '';
+    if (externalId) {
+      const status = await cardStatus({ externalIds: [externalId] }, url);
+      const known = status.ok && status.known ? status.known[externalId] : null;
+      jobId = (known && known.jobId) || '';
+      if (jobId) linkedBy = 'id';
     }
-    const status = await cardStatus({ externalIds: [externalId] }, url);
-    const known = status.ok && status.known ? status.known[externalId] : null;
-    const jobId = known && known.jobId;
+    if (!jobId) {
+      const link = await cardForUrl(url);
+      const card = link.ok && link.card ? link.card : null;
+      if (card && card.jobId) {
+        jobId = card.jobId;
+        linkedBy = 'url';
+      }
+    }
     if (!jobId) {
       return {
         ok: false,
-        error: 'this vacancy is not on the board yet - scrape it and tailor it first',
+        error:
+          'this page is not linked to a card yet - open the vacancy on the board and put this ' +
+          "page's URL in its Application URL field",
       };
     }
 
@@ -329,6 +346,8 @@ export function createFormWorker({ settings, cardStatus }) {
       ...applied,
       ok: true,
       jobId,
+      // Which lookup answered: the page's own vacancy id, or the card's application URL.
+      linkedBy,
       schemaHash,
       planStatus: planned.body.status,
       coverStatus: cover ? (cover.ok ? cover.status : 'unavailable') : 'not needed',

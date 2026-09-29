@@ -85,8 +85,12 @@ Sign in, open the vacancy, click the site's own **Apply** so the form is on the 
 
 1. **Pick the form** (once per site): the page turns into crosshair mode - click the form itself.
    Djinni: the dialog Apply opens (`form#apply_form`). DOU: the area that appears below Apply.
-   Escape cancels. Optional but recommended: **Pin the letter field** and **Pin the resume field**,
-   the two places the generated documents must land, chosen by you rather than by the model.
+   Greenhouse: the whole form the job page renders inline (`#application-form`) - and there its two
+   steps are yours: click the site's own **Enter manually** on the Cover Letter control first (no
+   letter field exists before that), then pin it, and pin the resume to the hidden upload field
+   behind **Attach**. Escape cancels. Optional but recommended: **Pin the letter field** and
+   **Pin the resume field**, the two places the generated documents must land, chosen by you rather
+   than by the model.
 2. Fill in **Candidate facts** (once): name, contacts, salary expectation, availability, work
    rights, English level. They live in the board's `application_profile` row for your account, which
    is what the worker reads, so they survive a browser reset.
@@ -99,23 +103,43 @@ Sign in, open the vacancy, click the site's own **Apply** so the form is on the 
    waiting rather than as a hang.
 4. **Read the report, then submit the site's own form.** The extension never submits anything.
 
-It says no, on purpose, when: the vacancy is not on the board yet (scrape and tailor it first), no
-cover letter has been generated (the report says so - generate one on the card), the tailored PDF is
-not on the board's machine (`storage-files.ps1 -Action download`, or point `OUTPUT_DIR` at the
-cluster volume), or the form was re-rendered since the snapshot (run Populate again: the new form
-gets a new hash and a fresh draft).
+It says no, on purpose, when: the vacancy is not on the board yet (scrape and tailor it first), the
+application page is not linked to a card (open the vacancy on the board and paste this page's URL
+into its **Application URL** - see below), no cover letter has been generated (the report says so -
+generate one on the card), the tailored PDF is not on the board's machine
+(`storage-files.ps1 -Action download`, or point `OUTPUT_DIR` at the cluster volume), or the form was
+re-rendered since the snapshot (run Populate again: the new form gets a new hash and a fresh draft).
+
+**When Apply opens another site.** Many DOU/Djinni vacancies hand the application over to the
+employer's own ATS: the Apply button opens `job-boards.eu.greenhouse.io/<board>/jobs/<id>` in a new
+tab. That page has no vacancy id the board knows - the card is still `dou`/`351812` - so the
+filler asks the board *which card this page is* and matches the URL against the cards' own
+**Application URL**. Paste the page's address into the card's **Details -> Application URL** in the
+board once (the tracking tail is dropped on save, so `?gh_src=…` never matters) and Populate works
+there from then on; the popup confirms with *Matched this page by Application URL*. The ATS host
+must be in `host_permissions`/`content_scripts` for the filler to be on the page at all.
 
 Manual checklist after a change to `formfill.js` or `form/`: pick on both sites; populate a Djinni
 form (answers + letter + PDF + report); populate a DOU form (letter + file); press Escape mid-pick;
 run Populate twice on the same page (the second run reuses the draft, no second Gemini call); reload
-the page mid-draft (the old snapshot is refused as stale rather than filled).
+the page mid-draft (the old snapshot is refused as stale rather than filled); paste an ATS page URL
+into a card's Application URL and populate from that page (the card is found by URL, and it is
+*not* found once the field is cleared again).
 
 ## Notes
 
 - `host_permissions` covers **both sides**: the gateway origin (`localhost:4321` /
-  `127.0.0.1:4321` - change it in `manifest.json` if you move the gateway) and `djinni.co`,
-  which the per-card button needs in order to inject the scraper into the tab it was clicked
-  in. Dropping either one shows up as a button that answers `Retry scrape`.
+  `127.0.0.1:4321` - change it in `manifest.json` if you move the gateway) and the vacancy sites
+  (`djinni.co`, `jobs.dou.ua`/`dou.ua`, and the three `greenhouse.io` boards), which the per-card
+  button needs in order to inject the scraper into the tab it was clicked in. Dropping either one
+  shows up as a button that answers `Retry scrape`.
+- **Greenhouse is read one job at a time.** Its boards have no listing cards - the job page itself
+  *is* the vacancy - so **Scrape & queue this page** queues exactly that job; discovery across a
+  whole board is the scheduled `scout` job's business. Two things on its apply form stay yours: the
+  Cover Letter field only exists after the site's own *Enter manually* is clicked, and the form's
+  dropdowns are React widgets the extension does not type into - it lists them in the report.
+- A change to `manifest.json` (a new host, a new permission, a version bump) is only visible after
+  the extension is reloaded on `chrome://extensions`.
 - Cards without an id or without description text are skipped and reported; nothing is
   invented.
 - At most 25 cards per click (the gateway rejects larger batches).

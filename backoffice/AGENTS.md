@@ -28,7 +28,9 @@ cp .env.example .env      # then edit: DATABASE_URL, BACKOFFICE_JWT_SECRET, RABB
 node scripts/user.mjs add --email me@example.com --password=secret --name=Me --admin
 npm run dev               # http://localhost:4321 -> sign in
 
-npm test           # vitest: auth, board + archive, filters, actions, interviews, details, history lines, run log, ingest, artifacts, scraper (jsdom)
+npm test           # vitest: auth, board + archive, filters, actions, interviews, details + the
+                   # application URL, history lines, run log, ingest, artifacts, scraper and the
+                   # form filler (jsdom), and the filler's page->card resolution (fake chrome/fetch)
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -61,13 +63,14 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
 | `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the card's `➕ Add action`): a `move` history row with `from_state = to_state` |
 | `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, never a history row |
-| `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels) - the whole set in one write, never a history row |
+| `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels, the application URL) - the whole set in one write, never a history row |
 | `src/pages/api/board/history/[id].ts` | `PATCH` one history line (date, actor, wording, kind, both states) · `DELETE` one - the audit trail's only corrective write, and it touches nothing else (invariant 29) |
 | `src/pages/api/processes.ts` | `GET` the internal jobs' run history (`process_runs`) for the Processes page |
 | `src/pages/api/board/actions.ts` | `GET` the Action vocabulary (`board_actions`) |
 | `src/pages/api/admin/vocabulary.ts`, `src/pages/api/admin/actions.ts` | Admin-only: read every vocabulary · add / reword / remove an Action |
 | `src/pages/api/vacancies/batch.ts` | `POST` a scraped batch -> the cards + one AMQP message per vacancy |
 | `src/pages/api/vacancies/status.ts` | `GET` "has the board got this vacancy?" for the extension's injected per-card buttons |
+| `src/pages/api/vacancies/link.ts` | `GET` "which card is this page?" - the application-form filler's lookup by page URL against the cards' own `apply_url` |
 | `src/pages/api/artifacts/[jobId].ts` | `GET` the tailored PDF/DOCX (`?format=docx`), streamed from the artifact root |
 | `src/pages/api/auth/{login,token,logout,me}.ts` | Cookie login, bearer token (extension), logout, who-am-I |
 | `src/lib/auth.ts` | scrypt password hashing + HS256 session tokens + cookie/bearer extraction |
@@ -82,8 +85,9 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/filters.ts` | The toolbar's state and filtering: search, date window, stages, actions, visibility |
 | `src/lib/actions.ts` | The Action combobox's ranking and normalisation (`board_actions` is the data) |
 | `src/lib/interviews.ts` | The Interviews section: the four types, `hasReachedInterviewing`, the list sort/format and the interview parsers |
-| `src/lib/details.ts` | The card's detail fields: the six communication channels, the draft/dirty helpers and the details parser |
+| `src/lib/details.ts` | The card's detail fields: the six communication channels, the application URL, the draft/dirty helpers and the details parser |
 | `src/lib/history.ts` | The History section: the four kinds, the states each kind may carry, the per-kind fallback transition, the edit parser and the draft helpers |
+| `src/lib/applyUrl.ts` | The application URL: canonicalisation (`normalizeApplyUrl`), the Details field's parser and the `?url=` lookup's query parser - shared by the form that writes it and the route that matches a page against it |
 | `src/lib/processes.ts` | The Processes page's vocabulary: process labels and hints, run status chips, one-line run summaries, durations, the trigger label |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
@@ -259,6 +263,27 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   without it the route is a 401. Not signed in is a *normal* extension state, so the buttons
   simply stay `Scrape` until the popup signs in.
 
+## Page -> card lookup (the extension's *Populate*)
+
+`GET /api/vacancies/link?url=https://job-boards.eu.greenhouse.io/growe/jobs/4987494101` answers
+the filler's other question: **which card is this page?** - `{ ok, card }` with
+`{ jobId, externalId, source, status, archived }`, or `card: null` when no card has been linked
+to that page yet (a normal answer, not a 404).
+
+- It exists because a vacancy and the page that finishes its application can be two different
+  URLs: a DOU/Djinni card whose Apply button opens the employer's ATS posting keeps
+  `source`/`external_id` of the *site it was scraped from*, so the status lookup above can never
+  find it. The connection is the card's own **application URL** (invariant 28).
+- Both sides of the comparison are canonicalised by `lib/applyUrl.ts::normalizeApplyUrl`, the
+  same function the Details form stores with, so a `?gh_src=…` tracking tail or a trailing slash
+  does not decide the match. The URL is the whole query - nothing else is matched, and a page
+  with no link gets no card.
+- The read is `findCardByApplyUrl`: **board-scoped** and newest-first, like the status lookup
+  (any account's card is a card the operator can see; when two cards were linked to the same
+  posting the most recently touched one wins). `archived` travels with the answer so the applier
+  can say the card was closed rather than fill it.
+- A missing or non-http(s) `url` is a 400, so a malformed page never reaches the database.
+
 ## Artifact links
 
 - **`resumes.pdf_url` / `resumes.docx_path` are storage paths, not URLs**
@@ -359,12 +384,17 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   `scripts/backfill_interviews.sql` (the sheet had dates but no times, so those rows are at
   midnight - the pencil in the section is the way to fix one).
 - **The card carries its own detail fields.** `resume_board.recruiter`, `salary_offered`,
-  `salary_desired` and `communication_channels` (a `text[]` with a six-value CHECK) are edited in
-  the card's **Details** block and saved as one set: an emptied input clears the field (NULL, never
-  `''`), `updated_at` moves - so typing a recruiter counts as activity for the date window *and*
-  for the inactivity sweep - and **no** `resume_history` row is written (invariant 28). The
-  channels are a code + DB-CHECK vocabulary like the Actors and the interview types, not operator
-  data, so they are not editable from `/admin`.
+  `salary_desired`, `communication_channels` (a `text[]` with a six-value CHECK) and `apply_url`
+  (the page the application is finished on, http(s) only) are edited in the card's **Details**
+  block and saved as one set: an emptied input clears the field (NULL, never `''`), `updated_at`
+  moves - so typing a recruiter counts as activity for the date window *and* for the inactivity
+  sweep - and **no** `resume_history` row is written (invariant 28). The channels are a code +
+  DB-CHECK vocabulary like the Actors and the interview types, not operator data, so they are not
+  editable from `/admin`. The application URL is the one field the operator cannot leave to the
+  scraper: the redirect only exists after the Apply click, which is why the card stores it and the
+  extension's *Populate* reads it back through `GET /api/vacancies/link` (the section above). It is
+  canonicalised on save (`lib/applyUrl.ts`), and the card modal offers it as *Open the application
+  page* next to *Open the vacancy posting*.
 - **The History at the bottom of the card is correctable, and correcting it is not activity.**
   Every line carries *✏️ Edit* and *✕ Remove*. The edit rewrites the **whole** line
   (`PATCH /api/board/history/<id>`: date, actor, wording, kind and both states), because a
@@ -531,6 +561,10 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
 - **No server-side paging or sorting for the run log** (the newest 100 rows, `GET /api/processes`),
   and no filtering by process or status.
 - Not deployed in-cluster yet (`CONSTITUTION.md` D11) - run it against port-forwards.
+- **No automatic link between a card and the page its Apply button lands on**: the operator pastes
+  the ATS URL into the card's *Application URL* (see `extension/AGENTS.md`), because the redirect
+  exists only after the click. The lookup that uses it (`GET /api/vacancies/link`) matches that one
+  field and nothing else - no fuzzy host/path matching, no "closest" card.
 
 ## Don't
 
@@ -541,6 +575,10 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
 - Give the `➕ Add action` dialog a column to choose: an action that moves a card is a move, and
   the retry/tailoring rules belong to `/api/board/move` alone.
 - Duplicate the DDL here: extend `utils/db.py::SCHEMA_SQL` and its gated test instead.
+- Store an application URL anywhere but `resume_board.apply_url`, or compare a page against it with
+  a second implementation: the Details form (`lib/details.ts`) and the lookup
+  (`GET /api/vacancies/link`) must both go through `lib/applyUrl.ts`, and a page that matches
+  nothing must stay unmatched rather than fall back to a "closest" card.
 - Add a signup route, or a way to set a password from the UI.
 - Write to `resumes.status`, or delete rows the worker owns. The *move* path never
   touches that column at all; the ingest path may only create rows as

@@ -76,7 +76,11 @@ producer is the host-side smoke test.
   `content_scripts` entry on the listing page, where it injects a `Scrape` button into
   every card footer (a card the board already has shows `Scraped`, a link to
   `/?card=<job_id>`), and it asks `GET /api/vacancies/status` before rendering that state. It sends the page's site slug (`source`), so the board can tell djinni's 848944 from
-  DOU's 848944;
+  DOU's 848944. When the operator asks it to **fill** an application form (`Populate`, see
+  `extension/README.md`), it resolves the page to a card twice: the page's own vacancy id first,
+  then the card's own **application URL** (`GET /api/vacancies/link?url=…` →
+  `resume_board.apply_url`), which is how a DOU/Djinni vacancy that hands off to the employer's
+  Greenhouse page still finds its card;
 * `publisher.py` (driven by `scripts/send-test-job.ps1`) publishes a single job from
   the host, which is what a smoke test needs.
 
@@ -143,6 +147,7 @@ The message is acked only after (f) and (g) succeed.
 |---|---|
 | scrape the listing page | `extension/` (`div[id^="job-item-"]`, injected function; per-card `Scrape` buttons from `src/inject.js`) |
 | has the board got it already? | `GET /api/vacancies/status` → `findExistingVacancies` (board scope) |
+| which card is this application page? (only on *Populate*) | `GET /api/vacancies/link?url=…` → `findCardByApplyUrl` (board scope, `resume_board.apply_url`, canonicalised by `backoffice/src/lib/applyUrl.ts`) |
 | authenticate, validate the whole batch | `POST /api/vacancies/batch` → `backoffice/src/lib/vacancies.ts` (pure) |
 | **create the board card** | `resumes` row, `status='submitted'` → `backoffice/src/lib/ingest.ts` |
 | *(nothing is queued yet - the card waits in Scraped)* | — |

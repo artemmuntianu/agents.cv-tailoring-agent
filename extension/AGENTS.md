@@ -16,11 +16,40 @@ It has two entry points, and both end in the same gateway call:
 Read `CONSTITUTION.md` first. The batch contract it must satisfy is documented in
 `backoffice/AGENTS.md`; the worker that consumes the result is `agent/AGENTS.md`.
 
+## Greenhouse boards (a third page shape)
+
+`job-boards.greenhouse.io`, its EU twin `job-boards.eu.greenhouse.io` and the older
+`boards.greenhouse.io` behave unlike the two Ukrainian sites, in both halves of the extension:
+
+- **A job page *is* the vacancy.** There is no listing markup to read, so `extractVacancies` falls
+  back to `greenhouseJobPage`: the id comes from the URL (`/<board>/jobs/<id>`, the same shape the
+  gateway derives from a pasted link), the title from the `h1`, the company from the `<title>`'s
+  "... at <company>" (falling back to the board's path segment) and the text from
+  `.job__description`. `sourceForUrl` answers `greenhouse`, which is a legal `resumes.source` slug.
+- **Its application form carries no `name` attribute anywhere** and drives four react-select
+  dropdowns, which is why the annotator keys on `id` as well and gives a `role="combobox"` a kind
+  of its own (the rules below). The labels are real (`label[for]`) - except on the two upload
+  controls, whose own label is the hidden text of the *button* ("Attach"): the question lives on
+  the enclosing `role="group" aria-labelledby="upload-label-<field>"`, which `questionFor` reads
+  before the control's own label.
+- **The resume goes through `assignFile` on a plain `input[type=file]`** - Greenhouse has none of
+  Djinni's custom-widget ceremony. The button is only what the operator clicks; the hidden input
+  behind it (`#resume`, `class="visually-hidden"`) takes the File list and fires the two events,
+  and pinning it (`Pin the resume field`) is what points the run at it unambiguously.
+- **The cover letter is a two-step the operator does by hand.** The form shows no letter field
+  until the site's own "Enter manually" is clicked, so the letter is pasted into the textarea that
+  reveals - pin it (`#cover_letter_text`) once it is on the page. Nothing in the extension clicks
+  that toggle: a hidden control is never the run's to touch.
+- **Discovery stays `scout`'s job.** The extension only inherits the batch contract
+  (`source: "greenhouse"`, id = the numeric job id) for a page the operator queued by hand; a
+  board-wide feed is a parser module in `scout/parsers/` plus its URL in `SCOUT_FEEDS`, not a
+  scraper here.
+
 ## The form filler (`Populate`)
 
 The second half of the extension: on a vacancy page it fills the application form from what the
 board already knows. The click sequence is `Populate` in the popup -> snapshot -> board -> plan ->
-write into the page. Three rules shape it, and all three are about not guessing:
+write into the page. Four rules shape it, and all four are about not guessing:
 
 1. **The form is picked, never guessed.** `Pick the form` puts the page into a crosshair mode: the
    operator clicks the form (Djinni's dialog, DOU's area below Apply) and the selector is stored per
@@ -38,12 +67,31 @@ write into the page. Three rules shape it, and all three are about not guessing:
    facts (`application_profile`, edited in the popup) and the CV digest; anything else is
    `skip` + a reason, and the review panel lists it. Nothing is submitted by the extension - not the
    form, not a consent checkbox, not the site's own template controls.
+4. **The card is resolved twice, never guessed.** `form/worker.js` asks the page's own vacancy id
+   first (`GET /api/vacancies/status`, the same lookup the per-card buttons use), and when that
+   finds nothing it asks **which card this page is** (`GET /api/vacancies/link?url=…`) - the
+   lookup that matches the page URL against the cards' own **application URL**
+   (`resume_board.apply_url`, set on the card in the board's Details block: a DOU/Djinni vacancy
+   whose Apply button opens the employer's ATS page keeps `dou`/`351812` as its identity, so
+   nothing on the board carries that Greenhouse job number). Neither match stops the run with
+   *"this page is not linked to a card yet"* - the popup then says `Matched this page by
+   Application URL` when the second lookup answered, because there is nothing else that would tell
+   the operator the connection worked. The lookup needs no manifest change (the ATS host has to be
+   in `host_permissions`/`content_scripts` already, or there is no filler on the page at all), and
+   nothing is written to the page before a card is known.
 
 Constraints worth knowing: the site's submit button is never clicked; `input[type=hidden]`,
 `password` and disabled fields are not annotated at all; a radio/checkbox group is one field with N
-options (the site's own labels, e.g. `Так`/`Ні`); controls without a `name` are skipped (which is how
-TomSelect's synthetic search box stays out); the snapshot is hashed by the board, so re-Populating
-the same rendered form costs no Gemini call while a changed form (or newly saved candidate facts)
+options (the site's own labels, e.g. `Так`/`Ні`); a control is identified by its `name` **or** its
+`id` - a React form keeps the value in JS state and renders no `name`, which is how Greenhouse's
+whole application was invisible to the first version of this rule - and only the box a widget
+generates for itself is dropped (TomSelect's unnamed `#tomselect-1-ts-control` inside its own
+`.ts-wrapper`, never the `<select>` it hides, which keeps its `name` and stays annotatable);
+`required` counts whether it is the attribute or `aria-required`, on the control or on the group
+around it; a control a script owns (`role="combobox"`, react-select and friends) is reported as
+kind `combobox`, and the applier **refuses** to type into it instead of putting a value into a box
+that would drop it on its next render; the snapshot is hashed by the board, so re-Populating the
+same rendered form costs no Gemini call while a changed form (or newly saved candidate facts)
 re-drafts.
 
 **One click is not one step.** A fill can take a minute - KEDA scaling a queue pod from zero, one
@@ -89,7 +137,7 @@ for `fetch` from a service worker without it).
 | `src/form/plan.js` | Pure plan plumbing: the pins overriding the model, which documents a plan needs, and the popup's report |
 | `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply, recording the phase of each step |
 | `src/form/phases.js` | The progress vocabulary: the step list and the one-line label the popup ticks through while a fill runs (pure, unit tested) |
-| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `profileGet`, `profilePut`, `phase`) |
+| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the page->card lookup (`cardForUrl`), the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `profileGet`, `profilePut`, `phase`) |
 | `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome |
 | `README.md` | The same load-and-use steps as above, for an operator |
 
@@ -179,20 +227,31 @@ vitest, with jsdom:
 
 ```sh
 cd backoffice; npm test
-#   src/lib/scraper.test.ts   <- extract.js,            fixture djinni-listing.html
+#   src/lib/scraper.test.ts   <- extract.js,            fixtures djinni-listing.html,
+#                                                       greenhouse-job.html
 #   src/lib/inject.test.ts    <- inject.js, window.eval, fixture djinni-card-footer.html
+#   src/lib/formfill.test.ts  <- formfill.js (eval too), fixture greenhouse-application-form.html
+#   src/lib/form-worker.test.ts <- form/worker.js with a fake chrome + fetch: which card a page
+#                                 resolves to (its own vacancy id, else its Application URL)
 ```
 
 `inject.test.ts` loads the content script exactly as the browser does (`window.eval` inside a
 jsdom page with a fake `chrome.runtime`), so the DOM hooks, every state, the click → message →
 `Scraped` link flow and the htmx re-injection are asserted against the live card markup.
+`formfill.test.ts` does the same for the filler: the real Greenhouse form is annotated and a plan
+is applied to it, so the identity rule, the combobox refusal and both pin paths are pinned by
+tests rather than by the manual checklist above (jsdom does no layout, so that file never reads
+`field.hidden`).
 
-The fixtures are trimmed copies of what the site actually renders (the listing sample from the
-design document, and the pasted card footer), so a change to the selectors has to face the
-markup they were written against. There is no test harness for `background.js`/`popup.js`:
+The fixtures are copies of what the sites actually render (the listing sample from the design
+document, the pasted card footer, and Greenhouse's job page with the real `#application-form`), so
+a change to the selectors *or* to the annotator's rules has to face the markup they were written
+against. There is no test harness for `background.js`/`popup.js`:
 they are thin glue over `chrome.*` APIs, and their outcome is verified end-to-end (popup or
-button -> gateway -> queue depth -> board). Their syntax and import graph are still checked,
-with the esbuild that ships in `backoffice/node_modules`:
+button -> gateway -> queue depth -> board) - their syntax and import graph are still checked,
+with the esbuild that ships in `backoffice/node_modules`. `form/worker.js` sits between them and
+*is* covered (`form-worker.test.ts` fakes `chrome.tabs`/`chrome.storage` and `fetch`), because the
+one rule that must never drift there is which card a page belongs to:
 
 ```sh
 cd backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browser --format=esm --outdir=$env:TEMP/ext-check
@@ -200,9 +259,15 @@ cd backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browser --f
 
 ## Deliberately missing (it is a POC)
 
-- One site profile only (Djinni's markup). Another site needs its own selectors, not a
-  generic "config-driven" engine.
+- Two page shapes, not two engines: Djinni's/DOU's card markup and Greenhouse's job page. A third
+  site needs its own selectors - never a generic "config-driven" engine.
 - No pagination/infinite-scroll walking: it scrapes what is rendered on the page.
+- **No automatic capture of where the Apply button lands.** The redirect only appears *after* the
+  click (a new tab, a different host), so the connection is the operator's: paste the ATS URL into
+  the card's *Application URL* and Populate works there from then on. A `tabs.onUpdated` +
+  `openerTabId` listener could fill that in by itself, but an MV3 service worker is asleep most of
+  the time and a wrong guess would link a card to the wrong posting - the manual field is the
+  honest POC answer, and the lookup it feeds is already host-agnostic.
 - Buttons follow the cards: every Djinni page that renders one gets them (`https://djinni.co/*`),
   a page that renders none gets nothing. The scope is the whole host on purpose - the
   dashboard (`/my/dashboard/subs`) lists vacancies with the same card markup as `/jobs`, and a
@@ -225,5 +290,7 @@ cd backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browser --f
   script) or give it a second copy of the scraping selectors - it asks the worker, which runs
   `extractVacancies`.
 - Drop `djinni.co` from `host_permissions` (or from `content_scripts.matches`): one makes the
-  buttons not appear, the other makes every click fail with a permission error.
+  buttons not appear, the other makes every click fail with a permission error. The `greenhouse.io`
+  patterns are the same trap in reverse: without a `content_scripts.matches` entry the filler is
+  never injected, and without the host permission the popup cannot read the page at all.
 - Loosen the payload shape the gateway validates (see `backoffice/src/lib/vacancies.ts`).

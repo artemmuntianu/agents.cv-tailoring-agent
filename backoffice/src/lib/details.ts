@@ -5,14 +5,18 @@ import type {
   DetailsRequest,
   VacancyDetails,
 } from './types';
+import { normalizeApplyUrl, parseApplyUrl, type ParseResult } from './applyUrl';
 
 /**
- * The card's own detail fields: the recruiter, the two salaries, and the communication channels.
+ * The card's own detail fields: the recruiter, the two salaries, the communication channels and
+ * the URL the application is finished on.
  *
  * The channels are a code + DB-CHECK vocabulary exactly like the Actors, the columns and the
  * interview types - the six places this job search actually happens, two of which are the sites
- * the intake scrapes. Everything else here is free text with one length cap, and the whole
- * module is pure, so the form, the route and the tests share one definition of "valid".
+ * the intake scrapes. Everything else here is free text with one length cap, except the
+ * application URL, whose shape lives in `lib/applyUrl.ts` because the lookup route
+ * (`GET /api/vacancies/link`) has to read it the same way this form writes it. The whole module
+ * is pure, so the form, the route and the tests share one definition of "valid".
  */
 
 export const COMMUNICATION_CHANNELS: CommunicationChannel[] = [
@@ -36,19 +40,20 @@ export const CHANNEL_HINT: Record<CommunicationChannel, string> = {
 /** Longest value the database accepts (`resume_board_details_shape`). */
 export const MAX_DETAIL_LENGTH = 200;
 
-/** The four fields as the form holds them: strings, never null. */
+/** The five fields as the form holds them: strings, never null. */
 export const EMPTY_DETAILS_DRAFT: DetailsDraft = {
   recruiter: '',
   salaryOffered: '',
   salaryDesired: '',
   communicationChannels: [],
+  applyUrl: '',
 };
 
 export function isCommunicationChannel(value: unknown): value is CommunicationChannel {
   return typeof value === 'string' && (COMMUNICATION_CHANNELS as string[]).includes(value);
 }
 
-export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+export type { ParseResult };
 
 function asObject(body: unknown): ParseResult<Record<string, unknown>> {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -103,7 +108,7 @@ export function parseChannels(raw: unknown): ParseResult<CommunicationChannel[]>
  * Validate a `POST /api/board/details` body - the card's Details form.
  *
  * Every field is optional in the body and `null`/`''` means "clear it", so the form can send all
- * four at once without a diff: the route replaces the row's details with exactly this.
+ * five at once without a diff: the route replaces the row's details with exactly this.
  */
 export function parseDetailsRequest(body: unknown): ParseResult<DetailsRequest> {
   const object = asObject(body);
@@ -121,6 +126,8 @@ export function parseDetailsRequest(body: unknown): ParseResult<DetailsRequest> 
   if (!salaryDesired.ok) return salaryDesired;
   const channels = parseChannels(raw.communicationChannels);
   if (!channels.ok) return channels;
+  const applyUrl = parseApplyUrl(raw.applyUrl);
+  if (!applyUrl.ok) return applyUrl;
 
   return {
     ok: true,
@@ -130,6 +137,7 @@ export function parseDetailsRequest(body: unknown): ParseResult<DetailsRequest> 
       salaryOffered: salaryOffered.value,
       salaryDesired: salaryDesired.value,
       communicationChannels: channels.value,
+      applyUrl: applyUrl.value,
     },
   };
 }
@@ -147,6 +155,7 @@ export function draftFromDetails(details: VacancyDetails): DetailsDraft {
     salaryOffered: details.salaryOffered ?? '',
     salaryDesired: details.salaryDesired ?? '',
     communicationChannels: [...details.communicationChannels],
+    applyUrl: details.applyUrl ?? '',
   };
 }
 
@@ -166,12 +175,13 @@ export function draftToRequest(jobId: string, draft: DetailsDraft): DetailsReque
   return parsed.value;
 }
 
-/** Two details are equal when all four fields are - the Save button's dirty check. */
+/** Two details are equal when all five fields are - the Save button's dirty check. */
 export function detailsEqual(a: VacancyDetails, b: VacancyDetails): boolean {
   return (
     (a.recruiter ?? '') === (b.recruiter ?? '') &&
     (a.salaryOffered ?? '') === (b.salaryOffered ?? '') &&
     (a.salaryDesired ?? '') === (b.salaryDesired ?? '') &&
+    (a.applyUrl ?? '') === (b.applyUrl ?? '') &&
     a.communicationChannels.length === b.communicationChannels.length &&
     a.communicationChannels.every((channel, index) => b.communicationChannels[index] === channel)
   );
@@ -180,8 +190,9 @@ export function detailsEqual(a: VacancyDetails, b: VacancyDetails): boolean {
 /**
  * Whether the form holds something the card does not - the Save button's dirty check.
  *
- * The draft is normalised the same way the request is (`''` -> null, whitespace collapsed), so
- * typing a trailing space does not look like a change.
+ * The draft is normalised the same way the request is (`''` -> null, whitespace collapsed, an
+ * application URL canonicalised), so typing a trailing space - or pasting the same ATS link with
+ * its `?gh_src=…` tail - does not look like a change.
  */
 export function detailsChanged(draft: DetailsDraft, current: VacancyDetails): boolean {
   return !detailsEqual(
@@ -190,6 +201,7 @@ export function detailsChanged(draft: DetailsDraft, current: VacancyDetails): bo
       salaryOffered: normalizeText(draft.salaryOffered),
       salaryDesired: normalizeText(draft.salaryDesired),
       communicationChannels: draft.communicationChannels,
+      applyUrl: normalizeApplyUrl(draft.applyUrl),
     },
     current,
   );

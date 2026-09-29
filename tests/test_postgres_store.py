@@ -30,9 +30,10 @@ def store():
     with db.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_interview, process_runs, "
+                "drop table if exists resume_interview, process_runs, resume_application, "
                 "resume_cover_letter, resume_history, resume_board, resumes, "
-                "board_actions, artifact_purge, model_availability, app_settings"
+                "application_profile, app_users, board_actions, artifact_purge, "
+                "model_availability, app_settings"
             )
         conn.commit()
     db._schema_ready = False
@@ -41,9 +42,10 @@ def store():
     with db.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_interview, process_runs, "
+                "drop table if exists resume_interview, process_runs, resume_application, "
                 "resume_cover_letter, resume_history, resume_board, resumes, "
-                "board_actions, artifact_purge, model_availability, app_settings"
+                "application_profile, app_users, board_actions, artifact_purge, "
+                "model_availability, app_settings"
             )
         conn.commit()
 
@@ -618,9 +620,10 @@ def test_a_legacy_database_is_migrated_to_the_source_and_scraped_vocabulary(stor
     with store.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "drop table if exists resume_interview, process_runs, "
+                "drop table if exists resume_interview, process_runs, resume_application, "
                 "resume_cover_letter, resume_history, resume_board, resumes, "
-                "board_actions, artifact_purge, model_availability, app_settings"
+                "application_profile, app_users, board_actions, artifact_purge, "
+                "model_availability, app_settings"
             )
             cur.execute(
                 """
@@ -848,8 +851,9 @@ def test_an_interview_never_writes_a_history_row(store):
 
 
 def test_the_cards_own_detail_fields_are_bounded_and_vocabulary_checked(store):
-    """`recruiter` / `salary_offered` / `salary_desired` / `communication_channels`: free text
-    with a length cap, and a channel list that may only hold the six values the card offers."""
+    """`recruiter` / `salary_offered` / `salary_desired` / `communication_channels` /
+    `apply_url`: free text with a length cap, a channel list that may only hold the six values
+    the card offers, and an application URL that must be http(s)."""
     import psycopg
 
     job_id = _seed_card(store, "details-1")
@@ -858,30 +862,42 @@ def test_the_cards_own_detail_fields_are_bounded_and_vocabulary_checked(store):
         with conn.cursor() as cur:
             cur.execute(
                 "update resume_board set recruiter = %s, salary_offered = %s,"
-                " salary_desired = %s, communication_channels = %s where job_id = %s",
-                ("Mariia Melenchuk", "$5,000", "6000 EUR", ["Email", "Dou", "Djinni"], job_id),
+                " salary_desired = %s, communication_channels = %s, apply_url = %s"
+                " where job_id = %s",
+                (
+                    "Mariia Melenchuk",
+                    "$5,000",
+                    "6000 EUR",
+                    ["Email", "Dou", "Djinni"],
+                    "https://job-boards.eu.greenhouse.io/growe/jobs/4987494101",
+                    job_id,
+                ),
             )
             cur.execute(
-                "select recruiter, salary_offered, salary_desired, communication_channels"
-                " from resume_board where job_id = %s",
+                "select recruiter, salary_offered, salary_desired, communication_channels,"
+                " apply_url from resume_board where job_id = %s",
                 (job_id,),
             )
             row = cur.fetchone()
             assert row["recruiter"] == "Mariia Melenchuk"
             assert row["communication_channels"] == ["Email", "Dou", "Djinni"]
+            assert row["apply_url"] == "https://job-boards.eu.greenhouse.io/growe/jobs/4987494101"
             # Every field is optional: NULL clears it, and an empty list is a real value.
             cur.execute(
                 "update resume_board set recruiter = null, salary_offered = null,"
-                " salary_desired = null, communication_channels = '{}' where job_id = %s",
+                " salary_desired = null, communication_channels = '{}', apply_url = null"
+                " where job_id = %s",
                 (job_id,),
             )
             cur.execute(
-                "select recruiter, communication_channels from resume_board where job_id = %s",
+                "select recruiter, communication_channels, apply_url from resume_board"
+                " where job_id = %s",
                 (job_id,),
             )
             cleared = cur.fetchone()
             assert cleared["recruiter"] is None
             assert cleared["communication_channels"] == []
+            assert cleared["apply_url"] is None
         conn.commit()
 
     rejected = [
@@ -897,6 +913,14 @@ def test_the_cards_own_detail_fields_are_bounded_and_vocabulary_checked(store):
         ("update resume_board set recruiter = repeat('x', 201) where job_id = %s", (job_id,)),
         ("update resume_board set salary_offered = repeat('x', 201) where job_id = %s", (job_id,)),
         ("update resume_board set salary_desired = repeat('x', 201) where job_id = %s", (job_id,)),
+        # The application URL is the one detail with a *shape*: it is a link the board opens and
+        # the extension matches a page against, so only http(s) can be stored.
+        ("update resume_board set apply_url = 'javascript:alert(1)' where job_id = %s", (job_id,)),
+        ("update resume_board set apply_url = 'djinni.co/jobs/848944' where job_id = %s", (job_id,)),
+        ("update resume_board set apply_url = 'https://example.com/a b' where job_id = %s",
+         (job_id,)),
+        ("update resume_board set apply_url = 'https://' || repeat('x', 1000) where job_id = %s",
+         (job_id,)),
     ]
     with store.connection() as conn:
         with conn.cursor() as cur:
@@ -905,6 +929,54 @@ def test_the_cards_own_detail_fields_are_bounded_and_vocabulary_checked(store):
                     cur.execute(statement, params)
                 conn.rollback()
         conn.commit()
+
+
+def test_the_details_constraint_is_widened_for_the_application_url(store):
+    """A database created before 2026-09-29 carries the four-field version of
+    `resume_board_details_shape`, and the guard creates the check only `if not exists` - so
+    `apply_url` would stay unguarded forever unless `ensure_schema()` rebuilds it.
+    """
+    import psycopg
+
+    from utils.db import PostgresDb
+
+    job_id = _seed_card(store, "details-url-1")
+
+    # The old shape, on a table that already has the column (an earlier boot added it): exactly
+    # the state a live cluster was in when the field shipped.
+    with store.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("alter table resume_board drop constraint resume_board_details_shape")
+            cur.execute(
+                "alter table resume_board add constraint resume_board_details_shape"
+                " check (recruiter is null or char_length(recruiter) between 1 and 200)"
+            )
+        conn.commit()
+
+    widened = PostgresDb(dsn=os.environ["TEST_DATABASE_URL"])
+    widened.ensure_schema()
+
+    with widened.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select pg_get_constraintdef(oid) as definition from pg_constraint"
+                " where conname = 'resume_board_details_shape'"
+            )
+            definition = cur.fetchone()["definition"]
+            assert "apply_url" in definition, "the rebuilt CHECK guards the new column"
+            assert "communication_channels" in definition, "and keeps what it guarded before"
+            cur.execute(
+                "update resume_board set apply_url = %s where job_id = %s",
+                ("https://job-boards.eu.greenhouse.io/growe/jobs/4987494101", job_id),
+            )
+        conn.commit()
+
+    with widened.connection() as conn:
+        with conn.cursor() as cur:
+            with pytest.raises(psycopg.errors.CheckViolation):
+                cur.execute(
+                    "update resume_board set apply_url = 'not-a-url' where job_id = %s", (job_id,)
+                )
 
 
 def test_the_process_ledger_round_trips_with_its_counters(store):

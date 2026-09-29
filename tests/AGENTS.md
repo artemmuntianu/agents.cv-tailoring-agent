@@ -21,15 +21,15 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `test_messaging.py` | Directory-queue semantics: ack -> `processed`, retry (attempt bump), dead-letter -> `failed`, a crashing handler requeues |
 | `test_model_state.py` | Model ledger: preference order, unavailability TTL, exhaustion -> `None` |
 | `test_scout.py` | The scheduled intake: the feed fixture (escaped HTML, double-escaped entities, the utm link, the apply tail), the title/id parsing, the board-scoped dedupe, "a run queues nothing", the Telegram message, that a run without a feed is an *error*, and the ledger row a run records |
-| `test_postgres_store.py` | **Real** Postgres: schema bootstrap, the shape CHECK, claim SQL, the shared ledger. Skipped unless `TEST_DATABASE_URL` is set |
+| `test_postgres_store.py` | **Real** Postgres: schema bootstrap from an empty database (all 13 tables, in dependency order), the shape CHECK, `resume_board`'s detail CHECK including the http(s)-only `apply_url` and its guard-first widening, claim SQL, the shared ledger. Skipped unless `TEST_DATABASE_URL` is set |
 | `test_process_runs.py` | The run ledger: a run is always closed (a `return` inside the block, a crash -> `failed` and the error propagates), `--dry-run` records nothing, a store that refuses to open a row is not fatal, and the next run retires a killed one as `aborted` |
 | `test_archiver.py` | The inactivity sweep, hermetically with an injected `FakeBoard`: which columns/window/actor/reason reach the query, a partial sweep's exit code, `--dry-run` writes nothing, the JSON backend refuses to run, and a typo in the config fails the run loudly |
 | `test_retry.py` | `_is_retryable`, daily-quota detection, headless `RetryLater`, backoff |
 | `test_worker_pipeline.py` | End-to-end `worker.handle_delivery` / `worker.main --once`: happy path, duplicate, DLQ, master-CV drift, quota deferral, attempt ceiling |
 
-Expected result where `TEST_DATABASE_URL` is unset (2026-09-27): **109 collected, 82 passed,
-27 skipped**, and the backoffice suite is **156 passed / 15 files** (`npm test`).
-**45 collected, 39 passed, 6 skipped** (`python -m pytest -q`, 2026-09-19).
+Expected result where `TEST_DATABASE_URL` is unset (2026-09-29): **132 collected, 104 passed,
+28 skipped**, and the backoffice suite is **213 passed / 21 files** (`npm test`). The superseded
+counts (109/82/27 and 156/15, 2026-09-27; 45/39/6, 2026-09-19) are history.
 
 ## Commands
 
@@ -40,14 +40,15 @@ make test-postgres             # or:
 TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt python -m pytest -q tests/test_postgres_store.py
 ```
 
-The 27 Postgres-gated tests need a database: point them at the cluster's own Postgres
+The 28 Postgres-gated tests need a database: point them at the cluster's own Postgres
 through a port-forward (`kubectl port-forward svc/postgres 5432:5432`), or let CI
-provide one as a service container (`.github/AGENTS.md`). They cover the worker's claim
+provide one as a service container (`.github/AGENTS.md`). **Use a throwaway database, never the
+one the worker owns** - the `store` fixture *drops* its tables. They cover the worker's claim
 semantics (including the ingest row the gateway pre-creates), the board's tables
-(`resume_board` with its archive columns, `resume_history` with the `Candidate`/`Company`
-actor vocabulary and the four kinds), the backoffice's `app_users`, the Action catalogue's
-admin writes and its catalogue-only read (`board_actions`) and the removal purge
-(`artifact_purge` + the cascade).
+(`resume_board` with its archive columns and the operator's own detail fields, `resume_history`
+with the `Candidate`/`Company` actor vocabulary and the four kinds), the backoffice's
+`app_users`, the Action catalogue's admin writes and its catalogue-only read (`board_actions`)
+and the removal purge (`artifact_purge` + the cascade).
 
 ## The harness contract (`helpers.py`)
 
@@ -77,7 +78,10 @@ admin writes and its catalogue-only read (`board_actions`) and the removal purge
 1. A test that needs Postgres must be gated by
    `pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"))`, must drop the tables
    it uses in a fixture (before *and* after) and must never run against a
-   database it does not own.
+   database it does not own. The `store` fixture must list **every** table `SCHEMA_SQL` creates:
+   a missing one either fails the teardown (`DependentObjectsStillExist`) or - worse - leaves a
+   table standing and hides a create-order bug, which is how `application_profile` referencing a
+   not-yet-created `app_users` survived on a fresh database (`CONSTITUTION.md` D14).
 2. A test that touches the graph goes through `fake_gemini`; never call the real
    API, never shell out to LibreOffice or poppler.
 3. Assert on outcomes (`Outcome.ACK` / `RETRY` / `RETRY_LATER` / `DEAD_LETTER`,

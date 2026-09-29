@@ -491,6 +491,12 @@ create table if not exists resume_board (
     salary_offered         text,
     salary_desired         text,
     communication_channels text[],
+    -- Where the application actually happens, when that is not the posting itself: a Djinni or
+    -- DOU card whose Apply button lands on the employer's own ATS page (a Greenhouse board)
+    -- keeps that landing URL here, so the extension's Populate can find the card from the page
+    -- it is standing on. Only the operator can know it - the redirect appears after the click -
+    -- so it is board state like the fields above, never a scraped column (2026-09-29).
+    apply_url              text,
     updated_at      timestamptz not null default now()
 );
 
@@ -504,6 +510,10 @@ alter table resume_board add column if not exists recruiter text;
 alter table resume_board add column if not exists salary_offered text;
 alter table resume_board add column if not exists salary_desired text;
 alter table resume_board add column if not exists communication_channels text[];
+
+-- ... and the application URL that joins a scraped card to the page its Apply button lands on
+-- (2026-09-29).
+alter table resume_board add column if not exists apply_url text;
 
 -- The source + Scraped rework (2026-09-26): `source` joins the business key, the job
 -- description becomes durable, and the board's intake column is `scraped` while the former
@@ -583,6 +593,26 @@ create table if not exists resume_application (
     updated_at  timestamptz not null default now()
 );
 
+-- Backoffice accounts. There is NO public signup: an administrator provisions
+-- users out of band (`backoffice/scripts/user.mjs`) exactly like the design's
+-- "manual provisioning" rule; the UI only ever authenticates.
+--
+-- Created here, *before* the tables that reference it, because a fresh database is bootstrapped
+-- by running this script once from the top. The historical order had it after its dependant
+-- (`application_profile`), so a brand-new database died with `relation "app_users" does not
+-- exist` - invisible while every database in use already carried the table from an earlier boot
+-- (CONSTITUTION.md D14, fixed 2026-09-29).
+create table if not exists app_users (
+    id            text primary key,
+    email         text not null unique,
+    display_name  text,
+    password_hash text not null,
+    is_admin      boolean not null default false,
+    is_active     boolean not null default true,
+    created_at    timestamptz not null default now(),
+    last_login_at timestamptz
+);
+
 -- The candidate facts an application form is filled from (name, contacts, salary expectation,
 -- availability, work rights, standing answers). One JSON document per operator, held in the
 -- database rather than a file on purpose: the board edits it on the host and the `apply` worker
@@ -660,19 +690,9 @@ create table if not exists artifact_purge (
     queued_at   timestamptz not null default now()
 );
 
--- Backoffice accounts. There is NO public signup: an administrator provisions
--- users out of band (`backoffice/scripts/user.mjs`) exactly like the design's
--- "manual provisioning" rule; the UI only ever authenticates.
-create table if not exists app_users (
-    id            text primary key,
-    email         text not null unique,
-    display_name  text,
-    password_hash text not null,
-    is_admin      boolean not null default false,
-    is_active     boolean not null default true,
-    created_at    timestamptz not null default now(),
-    last_login_at timestamptz
-);
+-- (`app_users` is created further up, before `application_profile`: that table references it,
+-- so creating the account table first is what lets a fresh database be bootstrapped at all -
+-- CONSTITUTION.md D14.)
 
 -- The internal process run ledger: one row per run of a scheduled job (the RSS intake,
 -- the inactivity archiver), written by the job itself and read by the board's Processes
@@ -760,9 +780,22 @@ end $ddl$;
 -- the channels are a vocabulary (the six the multi-select offers: two of them are the job sites
 -- the intake scrapes). A NULL *element* is rejected too: `arr <@ known` is NULL for such an
 -- array, and a CHECK is satisfied by NULL, so the containment is wrapped in `coalesce(..., false)`.
+-- The application URL (2026-09-29) is the one field with a shape beyond a length cap: http(s)
+-- only, because both the board's link and the extension's lookup assume it. A database created
+-- before it carries the four-field version of this constraint, so the guard below drops that one
+-- and re-creates it with `apply_url` - the same guard-first rebuild the business-key index uses.
 do $ddl$
+declare
+    definition text;
 begin
-    if not exists (select 1 from pg_constraint where conname = 'resume_board_details_shape') then
+    select pg_get_constraintdef(oid) into definition
+      from pg_constraint
+     where conname = 'resume_board_details_shape';
+    if definition is not null and position('apply_url' in definition) = 0 then
+        alter table resume_board drop constraint resume_board_details_shape;
+        definition := null;
+    end if;
+    if definition is null then
         alter table resume_board
             add constraint resume_board_details_shape
             check (
@@ -773,6 +806,9 @@ begin
                      or coalesce(communication_channels <@ array['Email', 'LinkedIn', 'WhatsApp',
                                                                   'Telegram', 'Dou', 'Djinni'],
                                  false))
+                and (apply_url is null
+                     or (char_length(apply_url) between 8 and 1000
+                         and apply_url ~ '^https?://[^[:space:]]+$'))
             );
     end if;
 end $ddl$;

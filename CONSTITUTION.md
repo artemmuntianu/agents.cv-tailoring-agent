@@ -331,17 +331,31 @@ automation         .github/workflows/
     makes a slot missed while the cluster was down run as soon as it is back.
 
 28. **The card's detail fields are board state, and editing one is activity.** The
-    `recruiter`, `salary_offered`, `salary_desired` and `communication_channels` columns on
-    `resume_board` are the operator's own notes on a vacancy: free text with a 200-character cap,
-    and the channels one of six values (`Email`, `LinkedIn`, `WhatsApp`, `Telegram`, `Dou`,
-    `Djinni` - a DB CHECK, i.e. code + constraint like the Actors and the interview types, never
-    an admin-editable catalogue). The card's **Details** form writes all four in one
+    `recruiter`, `salary_offered`, `salary_desired`, `communication_channels` and `apply_url`
+    columns on `resume_board` are the operator's own notes on a vacancy: free text with a
+    200-character cap, the channels one of six values (`Email`, `LinkedIn`, `WhatsApp`,
+    `Telegram`, `Dou`, `Djinni` - a DB CHECK, i.e. code + constraint like the Actors and the
+    interview types, never an admin-editable catalogue), and the application URL an http(s) URL
+    capped at 1000 characters. The card's **Details** form writes all five in one
     `POST /api/board/details`, an emptied input clears the field (the row stores NULL, never `''`),
     and the write bumps `resume_board.updated_at` - which is the point: typing a recruiter is
     operator activity, so the date window surfaces the card and the inactivity sweep (invariant 27)
     leaves it alone for another ten days. It writes **no** `resume_history` row, exactly like an
     interview edit (invariant 26): these are card attributes, not funnel transitions, and History
     is where the moves live.
+
+    `apply_url` is the newest of them and the only one that is *not* free text: it is **where the
+    Apply button actually lands** when that is not the posting itself - a DOU or Djinni card whose
+    Apply opens the employer's own ATS page (`job-boards.eu.greenhouse.io/growe/jobs/4987494101`).
+    It lives on `resume_board` rather than `resumes` on purpose: only the click reveals the
+    redirect, so it is operator data, not something a scrape can know. Both sides go through
+    `backoffice/src/lib/applyUrl.ts::normalizeApplyUrl` - written by the Details form, read by
+    `GET /api/vacancies/link` - which drops the fragment and the query string (`?gh_src=…` is not
+    part of the vacancy's identity) and lower-cases the host, so a stored URL can actually match
+    the page it came from. The DB CHECK (`resume_board_details_shape`) admits only `http(s)://…`,
+    and the constraint is **widened guard-first** in `SCHEMA_SQL`: it is created `if not exists`,
+    so a database that already had the four-field version is rebuilt rather than silently left
+    unguarded (`tests/test_postgres_store.py::test_the_details_constraint_is_widened_for_the_application_url`).
 
 29. **The audit trail is correctable by hand, and correcting it is not activity.** A
     `resume_history` line is written by a dialog or a job; the board's **History** section lets the
@@ -383,6 +397,7 @@ so that a change which depends on them is a conscious one.
 | D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), its `GET /api/vacancies/status?external_ids=...` answers "already on the board?" for the extension's injected per-card buttons (the same lookup, board-scoped), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI. A refused card can also be **removed for good** (invariant 22): the row, its board state, its whole history and its artifacts - with whatever the board cannot reach queued in `artifact_purge` for `scripts/storage-files.ps1 -Action purge` | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
 | D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`, and `scout/` parses in-process rather than through that queue) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box (it scrapes before the gateway; and its loading `content_scripts` entry injects a `Scrape`/`Scraped` button into every listing card, the `Scraped` link deep-linking to `/?card=<job_id>` on the board) |
 | D13 | `scripts/archive_not_applicable.sql`, which `scripts/AGENTS.md` described as the written record of the 2026-09-26 spreadsheet import | **The file does not exist and never did**: `git log --all -- scripts/archive_not_applicable.sql` is empty and the path is not tracked in any revision, so that description was prose-only. The import it documented is real - 828 `resume_history` rows carry the `Imported: ` prefix and 121 cards are refused as `Candidate` / `Not applicable` (`resume_board` archive columns, stage untouched) | **Doc fixed 2026-09-27** - `scripts/AGENTS.md` now says the script is absent; re-add one if that import ever has to be replayed |
+| D14 | `utils/db.SCHEMA_SQL` created `application_profile` (which references `app_users (id)`) **before** `app_users` | The script is applied top-down, so a *fresh* database died at `relation "app_users" does not exist` and the documented bootstrap could never work - invisible because every database in use already carried the account table from an earlier boot. The gated Postgres suite hit it as soon as its `store` fixture dropped `app_users` too; that drop list was itself stale (no `resume_application`, `application_profile`, `app_users`), so a run left dependants behind and failed its own teardown with `DependentObjectsStillExist` | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 `SCHEMA_SQL` tables (verified: 28/28 gated tests green on a database built from scratch) |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -515,7 +530,13 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     `skip` + a reason for the review panel. The snapshot's hash is the cache key, so re-filling the
     same rendered form costs no Gemini call while a changed form re-drafts; the extension never
     clicks submit, a consent checkbox or a site preference control, and never touches a
-    `hidden`/`password`/disabled field.
+    `hidden`/`password`/disabled field. **Which card a page belongs to is resolved twice, and
+    never guessed**: the page's own vacancy id first (`GET /api/vacancies/status`, the lookup the
+    injected buttons use), and when that finds nothing, the page URL against the cards' own
+    application URLs (`GET /api/vacancies/link`, invariant 28's `apply_url`) - the only way to
+    reach a card scraped on Djinni/DOU whose Apply button opened the employer's form. Neither
+    match stops the flow with "this page is not linked to a card yet" instead of filling a form
+    from the wrong vacancy.
 
 ## 8. When code and prose disagree
 

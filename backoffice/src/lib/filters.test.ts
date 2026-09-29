@@ -47,6 +47,7 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
       salaryOffered: null,
       salaryDesired: null,
       communicationChannels: [],
+      applyUrl: null,
     },
     interviews: [],
     ...overrides,

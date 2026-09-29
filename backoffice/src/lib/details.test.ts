@@ -4,6 +4,7 @@ import {
   EMPTY_DETAILS_DRAFT,
   MAX_DETAIL_LENGTH,
   describeChannels,
+  detailsChanged,
   detailsEqual,
   draftFromDetails,
   draftToRequest,
@@ -46,6 +47,7 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
       salaryOffered: null,
       salaryDesired: null,
       communicationChannels: [],
+      applyUrl: null,
     },
     interviews: [],
     ...overrides,
@@ -57,6 +59,7 @@ const details = (overrides: Partial<VacancyDetails> = {}): VacancyDetails => ({
   salaryOffered: null,
   salaryDesired: null,
   communicationChannels: [],
+  applyUrl: null,
   ...overrides,
 });
 
@@ -101,13 +104,14 @@ describe('the communication channel vocabulary', () => {
 
 
 describe('parseDetailsRequest (the card Details form)', () => {
-  it('accepts all four fields and trims the text', () => {
+  it('accepts all five fields and trims the text', () => {
     const parsed = parseDetailsRequest({
       jobId: '374001-1',
       recruiter: '  Mariia   Melenchuk ',
       salaryOffered: '$5,000',
       salaryDesired: '6000 EUR',
       communicationChannels: ['Email', 'Dou'],
+      applyUrl: '  https://job-boards.eu.greenhouse.io/growe/jobs/4987494101/?gh_src=abc  ',
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
@@ -117,6 +121,7 @@ describe('parseDetailsRequest (the card Details form)', () => {
       salaryOffered: '$5,000',
       salaryDesired: '6000 EUR',
       communicationChannels: ['Email', 'Dou'],
+      applyUrl: 'https://job-boards.eu.greenhouse.io/growe/jobs/4987494101',
     });
   });
 
@@ -127,6 +132,7 @@ describe('parseDetailsRequest (the card Details form)', () => {
       salaryOffered: '',
       salaryDesired: null,
       communicationChannels: [],
+      applyUrl: '  ',
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
@@ -134,6 +140,7 @@ describe('parseDetailsRequest (the card Details form)', () => {
     expect(parsed.value.salaryOffered).toBeNull();
     expect(parsed.value.salaryDesired).toBeNull();
     expect(parsed.value.communicationChannels).toEqual([]);
+    expect(parsed.value.applyUrl).toBeNull();
   });
 
   it('requires a job id and refuses unknown channels, long text and non-text values', () => {
@@ -146,6 +153,14 @@ describe('parseDetailsRequest (the card Details form)', () => {
       parseDetailsRequest({ jobId: 'a-1', recruiter: 'x'.repeat(MAX_DETAIL_LENGTH + 1) }).ok,
     ).toBe(false);
     expect(parseDetailsRequest({ jobId: 'a-1', salaryOffered: 5000 }).ok).toBe(false);
+    // The application URL is the one detail with a shape, not just a cap: it is a link the
+    // board opens and the extension matches a page against.
+    expect(parseDetailsRequest({ jobId: 'a-1', applyUrl: 'djinni.co/jobs/848944' }).ok).toBe(
+      false,
+    );
+    expect(
+      parseDetailsRequest({ jobId: 'a-1', applyUrl: `https://x.dev/${'y'.repeat(1000)}` }).ok,
+    ).toBe(false);
   });
 
   it('keeps a value at exactly the cap', () => {
@@ -164,20 +179,29 @@ describe('the draft the form holds', () => {
       salaryOffered: '',
       salaryDesired: '',
       communicationChannels: [],
+      applyUrl: '',
     });
     expect(draftFromDetails(details())).toEqual(EMPTY_DETAILS_DRAFT);
     expect(
-      draftFromDetails(details({ recruiter: 'R', communicationChannels: ['Email'] })),
+      draftFromDetails(
+        details({
+          recruiter: 'R',
+          communicationChannels: ['Email'],
+          applyUrl: 'https://example.com/jobs/1',
+        }),
+      ),
     ).toEqual({
       recruiter: 'R',
       salaryOffered: '',
       salaryDesired: '',
       communicationChannels: ['Email'],
+      applyUrl: 'https://example.com/jobs/1',
     });
   });
 
   it('reads a card into the form', () => {
     expect(draftFromDetails(card().details).recruiter).toBe('');
+    expect(draftFromDetails(card().details).applyUrl).toBe('');
   });
 
   it('turns a draft into the request, normalising as it goes', () => {
@@ -187,6 +211,7 @@ describe('the draft the form holds', () => {
         salaryOffered: '$5,000',
         salaryDesired: '   ',
         communicationChannels: ['Djinni'],
+        applyUrl: 'https://Job-Boards.EU.Greenhouse.IO/growe/jobs/4987494101/',
       }),
     ).toEqual({
       jobId: '374001-1',
@@ -194,6 +219,7 @@ describe('the draft the form holds', () => {
       salaryOffered: '$5,000',
       salaryDesired: null,
       communicationChannels: ['Djinni'],
+      applyUrl: 'https://job-boards.eu.greenhouse.io/growe/jobs/4987494101',
     });
   });
 
@@ -203,22 +229,39 @@ describe('the draft the form holds', () => {
       salaryOffered: '',
       salaryDesired: '6000 EUR',
       communicationChannels: ['Email', 'Dou'] as ('Email' | 'Dou')[],
+      applyUrl: 'https://example.com/jobs/1?src=x',
     };
     const request = draftToRequest('374001-1', draft);
     // The form resets from the *request* after a save, so the dirty check must come out false.
     const reset = draftFromDetails(request);
     expect(detailsEqual(draftToRequest('374001-1', reset), request)).toBe(true);
+    // ... and the canonical URL is what the card now holds, not the pasted one.
+    expect(request.applyUrl).toBe('https://example.com/jobs/1');
   });
 });
 
 describe('the dirty check', () => {
-  it('is true for any of the four fields', () => {
+  it('is true for any of the five fields', () => {
     const base = details();
     expect(detailsEqual(base, details())).toBe(true);
     expect(detailsEqual(base, details({ recruiter: 'R' }))).toBe(false);
     expect(detailsEqual(base, details({ salaryOffered: '$5' }))).toBe(false);
     expect(detailsEqual(base, details({ salaryDesired: '$6' }))).toBe(false);
     expect(detailsEqual(base, details({ communicationChannels: ['Email'] }))).toBe(false);
+    expect(detailsEqual(base, details({ applyUrl: 'https://example.com/jobs/1' }))).toBe(false);
+  });
+
+  it('does not call a re-pasted application URL a change', () => {
+    const stored = details({ applyUrl: 'https://example.com/jobs/1' });
+    expect(
+      detailsChanged({ ...EMPTY_DETAILS_DRAFT, applyUrl: 'https://example.com/jobs/1?src=x' }, stored),
+    ).toBe(false);
+    expect(
+      detailsChanged({
+        ...EMPTY_DETAILS_DRAFT,
+        applyUrl: 'https://example.com/jobs/2',
+      }, stored),
+    ).toBe(true);
   });
 
   it('compares the channel list positionally (the vocabulary order is canonical)', () => {

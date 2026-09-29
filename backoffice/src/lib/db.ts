@@ -68,6 +68,7 @@ interface CardRow {
   salary_offered: string | null;
   salary_desired: string | null;
   communication_channels: string[] | null;
+  apply_url: string | null;
   cover_status: string | null;
   cover_text: string | null;
   cover_error: string | null;
@@ -158,7 +159,7 @@ const CARD_SELECT = `
          (r.description_raw is not null) as has_description,
          coalesce(b.stage, 'scraped') as stage,
          b.archived_at, b.archived_actor, b.archived_reason,
-         b.recruiter, b.salary_offered, b.salary_desired, b.communication_channels,
+         b.recruiter, b.salary_offered, b.salary_desired, b.communication_channels, b.apply_url,
          c.status as cover_status, c.text as cover_text, c.error as cover_error,
          c.model as cover_model, c.updated_at as cover_updated_at
     from resumes r
@@ -229,6 +230,7 @@ function toCard(
       salaryOffered: row.salary_offered,
       salaryDesired: row.salary_desired,
       communicationChannels: (row.communication_channels ?? []).filter(isCommunicationChannel),
+      applyUrl: row.apply_url,
     },
     // The worker stored these paths; whether *this* board can serve them depends on its
     // artifact root (a mirror, in dev) - so the UI never offers a link that would 404.
@@ -412,9 +414,10 @@ export async function appendAction(request: ActionRequest): Promise<BoardCard | 
 }
 
 /**
- * Save the card's own details - the recruiter, the two salaries and the channels.
+ * Save the card's own details - the recruiter, the two salaries, the channels and the
+ * application URL.
  *
- * The four fields are replaced as a set (the form sends all of them, so there is no diff to
+ * The five fields are replaced as a set (the form sends all of them, so there is no diff to
  * merge) and `updated_at` moves with them: typing a recruiter **is** operator activity, so the
  * card surfaces in the date window and the inactivity sweep leaves it alone for another ten
  * days. No `resume_history` row - like the interviews, these are card attributes rather than a
@@ -438,13 +441,14 @@ export async function updateDetails(request: DetailsRequest): Promise<BoardCard 
     await client.query(
       `insert into resume_board
           (job_id, stage, recruiter, salary_offered, salary_desired, communication_channels,
-           updated_at)
-       values ($1, 'scraped', $2, $3, $4, $5, now())
+           apply_url, updated_at)
+       values ($1, 'scraped', $2, $3, $4, $5, $6, now())
        on conflict (job_id) do update
           set recruiter = excluded.recruiter,
               salary_offered = excluded.salary_offered,
               salary_desired = excluded.salary_desired,
               communication_channels = excluded.communication_channels,
+              apply_url = excluded.apply_url,
               updated_at = now()`,
       [
         request.jobId,
@@ -452,6 +456,7 @@ export async function updateDetails(request: DetailsRequest): Promise<BoardCard 
         request.salaryOffered,
         request.salaryDesired,
         request.communicationChannels,
+        request.applyUrl,
       ],
     );
     await client.query('commit');
@@ -845,6 +850,56 @@ export async function findExistingVacancies(
     });
   }
   return found;
+}
+
+/**
+ * The card whose **application URL** is this page - "which vacancy am I filling in?".
+ *
+ * A page the extension is standing on cannot always be looked up by its own vacancy id: a DOU or
+ * Djinni card whose Apply button opens the employer's own ATS posting
+ * (`job-boards.eu.greenhouse.io/growe/jobs/4987494101`) has no row keyed on that board's number,
+ * because `source`/`external_id` still say `dou`/`351812`. What joins the two is
+ * `resume_board.apply_url`, which is why the board stores the redirect target at all.
+ *
+ * The lookup is board-scoped and newest-first, for the same reasons as
+ * `findExistingVacancies`: any account's card is a card the operator can see, and when two cards
+ * have been linked to the same posting the most recently touched one is the live one. `archived`
+ * travels with the answer so the applier can tell the operator the card was closed.
+ */
+export interface ApplyUrlMatch {
+  jobId: string;
+  externalId: string;
+  source: string;
+  status: string;
+  archived: boolean;
+}
+
+export async function findCardByApplyUrl(applyUrl: string): Promise<ApplyUrlMatch | null> {
+  const rows = await pool().query<{
+    job_id: string;
+    external_id: string;
+    source: string;
+    status: string;
+    archived_at: Date | string | null;
+  }>(
+    `select r.job_id, r.external_id, r.source, r.status, b.archived_at
+       from resume_board b
+       join resumes r on r.job_id = b.job_id
+      where b.apply_url = $1
+      order by b.updated_at desc
+      limit 1`,
+    [applyUrl],
+  );
+
+  const row = rows.rows[0];
+  if (!row) return null;
+  return {
+    jobId: row.job_id,
+    externalId: row.external_id,
+    source: row.source,
+    status: row.status,
+    archived: row.archived_at !== null,
+  };
 }
 
 /**

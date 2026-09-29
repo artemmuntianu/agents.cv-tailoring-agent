@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MAX_APPLY_URL_LENGTH } from '../lib/applyUrl';
 import { artifactUrl, storedPathName } from '../lib/artifact-link';
 import { historyLine } from '../lib/board';
 import { coverBlockedReason, coverState, coverStateLabel } from '../lib/cover';
@@ -379,6 +380,16 @@ export default function VacancyModal({
                 Open the vacancy posting
               </a>
             )}
+            {card.details.applyUrl && (
+              <a
+                href={card.details.applyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50"
+              >
+                Open the application page
+              </a>
+            )}
             {card.pdfUrl && card.artifactAvailability.pdf && (
               <a
                 href={artifactUrl(card.jobId)}
@@ -495,6 +506,22 @@ export default function VacancyModal({
             </label>
 
             <div className="block text-xs font-medium uppercase tracking-wide text-slate-500 sm:col-span-3">
+              Application URL
+              <input
+                value={detailsDraft.applyUrl}
+                onChange={(event) => editDetails({ applyUrl: event.target.value })}
+                maxLength={MAX_APPLY_URL_LENGTH}
+                placeholder="https://job-boards.eu.greenhouse.io/growe/jobs/4987494101"
+                className={`${DETAIL_INPUT} font-normal normal-case`}
+              />
+              <span className="mt-1 block text-[11px] font-normal normal-case leading-relaxed text-slate-400">
+                Where <em>Apply</em> actually lands, when that is not the posting itself. The
+                browser extension finds this card from that page, so <em>Populate</em> works on the
+                employer&rsquo;s own form. The query string and fragment are dropped on save.
+              </span>
+            </div>
+
+            <div className="block text-xs font-medium uppercase tracking-wide text-slate-500 sm:col-span-3">
               Communication channel
               <ChannelSelect
                 value={detailsDraft.communicationChannels}
@@ -540,8 +567,9 @@ export default function VacancyModal({
 
           <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
             The recruiter's name, what the employer offers and what you ask for are free text.
-            Communication channels are the six the board knows; saving any of this counts as
-            activity, so the auto-archiver leaves the card alone.
+            Communication channels are the six the board knows. The application URL is the page the
+            extension's <em>Populate</em> looks this card up by - it must be http(s), and saving any
+            of this counts as activity, so the auto-archiver leaves the card alone.
           </p>
         </section>
 

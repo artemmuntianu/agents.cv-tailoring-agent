@@ -18,7 +18,7 @@ const DEFAULT_GATEWAY = 'http://localhost:4321';
  * The form-filler flow lives in `form/worker.js`; it borrows this worker's two helpers, so both
  * halves of the extension agree on the session and on how a page matches a board card.
  */
-const formWorker = createFormWorker({ settings, cardStatus });
+const formWorker = createFormWorker({ settings, cardStatus, cardForUrl });
 const POLL_INTERVAL_MS = 2500;
 const POLL_DEADLINE_MS = 120000;
 
@@ -35,6 +35,9 @@ function sourceForUrl(url) {
     const host = new URL(String(url || '')).hostname.toLowerCase();
     if (host === 'djinni.co' || host.endsWith('.djinni.co')) return 'djinni';
     if (host === 'dou.ua' || host.endsWith('.dou.ua')) return 'dou';
+    // Greenhouse's boards render the vacancy and its form inline, so the whole site is one id
+    // space - and the slug is the one `scout` would have to use for a feed of it.
+    if (host === 'greenhouse.io' || host.endsWith('.greenhouse.io')) return 'greenhouse';
     return 'other';
   } catch {
     return 'other';
@@ -103,6 +106,33 @@ async function cardStatus(message, tabUrl) {
   const response = await fetch(
     `${gateway}/api/vacancies/status?external_ids=${encodeURIComponent(ids.join(','))}` +
       `&source=${encodeURIComponent(source)}`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const body = await response
+    .json()
+    .catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
+  if (response.status === 401) await chrome.storage.local.remove(['token', 'user']);
+  return { ...body, gateway };
+}
+
+/**
+ * "Which card is this page?" - asked by the form filler with the URL of the page it is standing
+ * on, and answered from the cards' own application URLs (`resume_board.apply_url`).
+ *
+ * The per-card lookup above cannot answer this one: a DOU or Djinni card whose Apply button opens
+ * the employer's ATS posting keeps `source`/`external_id` of the *site it was scraped from*, so
+ * nothing on that board is keyed on the ATS vacancy number. `null` is a normal answer - it means
+ * no card has been linked to this page yet.
+ */
+async function cardForUrl(pageUrl) {
+  const { gateway, token } = await settings();
+  if (!token) return { ok: false, error: 'not signed in' };
+
+  const wanted = String(pageUrl || '').trim();
+  if (!wanted) return { ok: false, error: 'no page url' };
+
+  const response = await fetch(
+    `${gateway}/api/vacancies/link?url=${encodeURIComponent(wanted)}`,
     { headers: { authorization: `Bearer ${token}` } },
   );
   const body = await response

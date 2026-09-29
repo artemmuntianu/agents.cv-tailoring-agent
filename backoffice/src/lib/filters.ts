@@ -132,6 +132,7 @@ export function matchesQuery(card: BoardCard, rawQuery: string): boolean {
     card.company,
     card.externalId,
     card.sourceUrl ?? '',
+    card.details.applyUrl ?? '',
     card.archivedReason ?? '',
   ].some((field) => field.toLowerCase().includes(query));
 }

@@ -185,9 +185,12 @@ async function populate() {
       return status('Populate failed.', 'error');
     }
     const bits = response.planBits || {};
+    // Where the card came from matters when the page was not its own source site: a DOU/Djinni
+    // card reached through the employer's form is matched by its Application URL.
+    const via = response.linkedBy === 'url' ? ' Matched this page by Application URL.' : '';
     status(
       `Draft from ${bits.model || 'the model'} (${bits.decided || 0} fields decided, ` +
-        `${bits.undecided || 0} left). Cover letter: ${response.coverStatus}. Resume: ${response.fileStatus}.`,
+        `${bits.undecided || 0} left). Cover letter: ${response.coverStatus}. Resume: ${response.fileStatus}.${via}`,
       'ok',
     );
     report(describeReport(response));

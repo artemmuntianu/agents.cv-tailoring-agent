@@ -252,10 +252,12 @@ export type CommunicationChannel =
 
 /**
  * The details the operator maintains on the card itself (`resume_board`): who the recruiter is,
- * what the employer offers, what the operator asks for, and where the conversation happens.
+ * what the employer offers, what the operator asks for, where the conversation happens, and the
+ * page the application itself is finished on.
  *
- * Free text except the channels (a fixed vocabulary). An empty value is `null`, never `''` -
- * the DB CHECK rejects an empty string, and the form is what turns a cleared input into null.
+ * Free text except the channels (a fixed vocabulary) and the application URL (http(s) only,
+ * canonicalised by `lib/applyUrl.ts`). An empty value is `null`, never `''` - the DB CHECK
+ * rejects an empty string, and the form is what turns a cleared input into null.
  * Deliberately **not** historicised: these are card attributes, not funnel transitions.
  */
 export interface VacancyDetails {
@@ -264,6 +266,12 @@ export interface VacancyDetails {
   salaryDesired: string | null;
   /** Empty = nobody said where; the array never carries NULL elements. */
   communicationChannels: CommunicationChannel[];
+  /**
+   * Where Apply actually lands, when that is not the posting itself (a DOU/Djinni card that
+   * opens the employer's Greenhouse page). It is what lets the extension's `Populate` recognise
+   * that page as this card - see `lib/applyUrl.ts` and `GET /api/vacancies/link`.
+   */
+  applyUrl: string | null;
 }
 
 /** What the card's Details form holds while it is being edited (inputs are always strings). */
@@ -272,6 +280,7 @@ export interface DetailsDraft {
   salaryOffered: string;
   salaryDesired: string;
   communicationChannels: CommunicationChannel[];
+  applyUrl: string;
 }
 
 /** What the Details form sends; the API validates it before touching the database. */
