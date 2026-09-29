@@ -28,6 +28,7 @@ param(
     [switch]$All,
     [switch]$Smoke,
     [string]$SmokeName = 'smoke_test',
+    [string]$UserId = '',
     [string]$Namespace = 'default',
     [string]$Release = 'cv-tailoring',
     [string]$Secret = 'rabbitmq-credentials',
@@ -120,6 +121,12 @@ if ($Smoke) {
     $jdPaths = @($smokePath)
 }
 
+# `--user-id` selects the operator whose candidate facts ground the prompt: without it the worker
+# has no profile row to read, so the CANDIDATE FACTS block is empty (and the owner is also half of
+# the idempotency key, so it is what makes a repeated run a fresh task rather than a duplicate).
+$userFlag = @()
+if ($UserId) { $userFlag = @('--user-id', $UserId) }
+
 if ($DryRun) {
     Say ''
     Say 'DRY RUN - nothing was changed. This is what a real run would do:'
@@ -129,7 +136,9 @@ if ($DryRun) {
     Say ('  4. read rabbitmq-username/password from Secret ' + $Secret +
         ' -> amqp://<user>:<password>@localhost:' + $LocalPort + '/%2F')
     Say '  5. $env:QUEUE_BACKEND=amqp  and  $env:RABBITMQ_URL=<that url>'
-    foreach ($jobPath in $jdPaths) { Say ('  6. python publisher.py --jd ' + $jobPath) }
+    foreach ($jobPath in $jdPaths) {
+        Say ('  6. python publisher.py --jd ' + $jobPath + ' ' + ($userFlag -join ' '))
+    }
     Say '  7. restore the previous session env, stop the port-forward'
     exit 0
 }
@@ -209,7 +218,7 @@ try {
     $env:QUEUE_BACKEND = 'amqp'
     $env:RABBITMQ_URL = $brokerUrl
 
-    $publisherArgs = @('publisher.py')
+    $publisherArgs = @('publisher.py') + $userFlag
     if ($All) {
         $publisherArgs += '--all'
     }
