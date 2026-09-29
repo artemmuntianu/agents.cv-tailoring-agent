@@ -11,8 +11,9 @@ Read `CONSTITUTION.md` first; this file is the layer-specific detail.
 |---|---|
 | `state.py` | `State` (flat `TypedDict`) + `initial_state()`, which fills every key |
 | `contracts.py` | `ResumeTaskMessage`, `CvData`/`CvHeader`/`CvExperience`, `JobStatus`, `TaskResult` |
-| `models.py` | Pydantic schemas used as Gemini `response_schema` (`JobRoleExtraction`, `TextModificationList`, `LayoutCheckResult`) |
-| `nodes.py` | The four nodes + the three `_call_gemini_*` functions + the tailoring prompt |
+| `models.py` | Pydantic schemas used as Gemini `response_schema` (`JobRoleExtraction`, `TextModificationList`, `LayoutCheckResult`); field validators strip leading bullet markers and enforce the single-line invariant before objects reach the AST mutator |
+| `nodes.py` | The four nodes + `_self_healing_generate` (1-shot schema retry) + `_call_gemini_*` helpers + the tailoring prompt |
+| `verification.py` | Deterministic 0%-lies check: `evaluate_fabrications()` scans every proposed replacement against the master CV text and the job description for invented numbers/metrics and unlisted technology claims; called inside `adapt_text` before replacements are normalised, with a self-healing fabrication-retry loop |
 | `cover.py` | The cover-letter prompt, its `response_schema` and `run_cover_letter()` - the one Gemini call the board triggers by hand |
 | `application.py` | The application-form prompt, `ApplicationPlan` and `normalize_plan()` - the one Gemini call the extension's *Populate* triggers. It answers with the ids the extension minted, never returns a selector, never carries the generated documents, and drops an id the snapshot does not contain |
 | `graph.py` | Graph topology, `check_after_adapt`, `should_continue`, `create_graph()` |

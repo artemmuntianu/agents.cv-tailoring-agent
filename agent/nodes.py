@@ -10,6 +10,7 @@ import config
 from agent.contracts import JobStatus
 from agent.models import JobRoleExtraction, LayoutCheckResult, TextModificationList
 from agent.state import State
+from agent.verification import evaluate_fabrications
 from utils import db as db_module
 from utils import storage as storage_module
 from utils.docx_mutator import (
@@ -48,6 +49,42 @@ def _set_status(state: State, status: str, **extra) -> None:
         _job_log(state).warning("could not persist job status", status=status, error=str(exc))
 
 
+def _self_healing_generate(client, model_name, contents, response_schema, temperature=0.0):
+    """Call Gemini with 1-shot self-healing schema retry on JSON/Pydantic validation failure."""
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=response_schema,
+                temperature=temperature,
+            ),
+        )
+        return response_schema.model_validate_json(response.text)
+    except Exception as first_err:  # noqa: BLE001
+        log.warning(
+            "schema validation failed on first attempt; attempting 1-shot self-healing retry",
+            error=str(first_err),
+            schema=response_schema.__name__,
+        )
+        correction_prompt = (
+            f"{contents}\n\nCRITICAL FIX REQUIRED: Your previous response failed JSON schema validation "
+            f"for {response_schema.__name__} with error:\n{first_err}\n"
+            "Please fix the output formatting and return a valid JSON object strictly matching the required schema."
+        )
+        response = client.models.generate_content(
+            model=model_name,
+            contents=correction_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=response_schema,
+                temperature=temperature,
+            ),
+        )
+        return response_schema.model_validate_json(response.text)
+
+
 @retry_with_exponential_backoff
 def _call_gemini_extract_role(client, job_description: str) -> str:
     prompt = f"""Extract the exact or primary target role title from this job description.
@@ -55,45 +92,24 @@ Return json matching schema with target_role_title.
 
 JOB DESCRIPTION:
 {job_description}"""
-    response = client.models.generate_content(
-        model=config.MODEL_NAME,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=JobRoleExtraction,
-            temperature=0.0,
-        ),
+    res = _self_healing_generate(
+        client, config.MODEL_NAME, prompt, JobRoleExtraction, temperature=0.0
     )
-    res = JobRoleExtraction.model_validate_json(response.text)
     return res.target_role_title.strip()
 
 
 @retry_with_exponential_backoff
 def _call_gemini_text_adaptation(client, prompt):
-    response = client.models.generate_content(
-        model=config.MODEL_NAME,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=TextModificationList,
-            temperature=0.2,
-        ),
+    return _self_healing_generate(
+        client, config.MODEL_NAME, prompt, TextModificationList, temperature=0.2
     )
-    return TextModificationList.model_validate_json(response.text)
 
 
 @retry_with_exponential_backoff
 def _call_gemini_vision_eval(client, contents):
-    response = client.models.generate_content(
-        model=config.MODEL_NAME,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=LayoutCheckResult,
-            temperature=0.1,
-        ),
+    return _self_healing_generate(
+        client, config.MODEL_NAME, contents, LayoutCheckResult, temperature=0.1
     )
-    return LayoutCheckResult.model_validate_json(response.text)
 
 
 def get_genai_client():
@@ -167,9 +183,48 @@ RULES:
         (m.original_text, m.tailored_text, getattr(m, "reason", "N/A"))
         for m in mod_result.modifications
     ]
+
+    # Deterministic Fabrication Verification (0% Lies Check)
+    jd_text = state.get("job_description", "")
+    eval_res = evaluate_fabrications(cv_text, raw_replacements, job_description=jd_text)
+    if eval_res.violations:
+        job_log.warning(
+            "fabrications detected in initial LLM output - requesting self-healing retry",
+            lie_percentage=eval_res.lie_percentage,
+            violations=eval_res.violations,
+        )
+        retry_prompt = prompt + (
+            "\n\nCRITICAL DETERMINISTIC VERIFICATION DETECTED FABRICATIONS ('LIES') (Rule 4 violation):\n"
+            + "\n".join(f"- {v}" for v in eval_res.violations)
+            + "\n\nFix the replacements above so that NO invented metrics, altered numbers, or unlisted technologies remain. Fabrication count MUST be 0."
+        )
+        try:
+            retry_result = _call_gemini_text_adaptation(client, retry_prompt)
+            retry_raw = [
+                (m.original_text, m.tailored_text, getattr(m, "reason", "N/A"))
+                for m in retry_result.modifications
+            ]
+            eval_res = evaluate_fabrications(cv_text, retry_raw, job_description=jd_text)
+        except Exception as retry_err:  # noqa: BLE001
+            job_log.warning("self-healing fabrication retry failed", error=str(retry_err))
+
+    # Strict Guarantee: Filter out any remaining replacements that contain fabrications (0% lies)
+    clean_raw_replacements = [
+        (item.original_text, item.tailored_text, getattr(item, "reason", "N/A"))
+        if hasattr(item, "original_text")
+        else item
+        for item in eval_res.clean_replacements
+    ]
+    job_log.info(
+        "deterministic fabrication verification complete",
+        initial_lies=len(eval_res.violations),
+        final_lie_percentage=0.0 if not eval_res.violations else eval_res.lie_percentage,
+        retained_replacements=len(clean_raw_replacements),
+    )
+
     # Normalise so the model can never pass a concatenated (multi-line) label+value
     # as a single replacement - those live in separate paragraphs and can never match.
-    replacements = normalize_replacements(raw_replacements)
+    replacements = normalize_replacements(clean_raw_replacements)
 
     applied_count = apply_text_replacements(
         doc_path=state["cv_path"],
