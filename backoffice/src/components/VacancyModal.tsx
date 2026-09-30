@@ -1,8 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MAX_APPLY_URL_LENGTH } from '../lib/applyUrl';
 import { artifactUrl, storedPathName } from '../lib/artifact-link';
 import { historyLine } from '../lib/board';
 import { coverBlockedReason, coverState, coverStateLabel } from '../lib/cover';
+import {
+  MAX_DOCX_UPLOAD_BYTES,
+  RENDER_STATE_CHIP,
+  RENDER_STATE_LABEL,
+  fileRejection,
+  renderState,
+} from '../lib/docxUpload';
 import {
   MAX_DETAIL_LENGTH,
   detailsChanged,
@@ -42,6 +49,12 @@ interface VacancyModalProps {
   onRemove?: (jobId: string) => void;
   /** Ask the `resumes.cover` worker for a letter; the poll brings it back. */
   onGenerateCover?: (jobId: string) => Promise<void>;
+  /**
+   * Upload the deliverable the operator edited by hand (`POST /api/board/docx/<job_id>`).
+   * Offered only for a card that has a tailored DOCX, and the render comes back through the
+   * same 5s poll as everything else.
+   */
+  onUploadDocx?: (jobId: string, file: File) => Promise<void>;
   /**
    * The Interviews section's three writes. Every one of them re-reads the card, and none of
    * them writes a history row: the list in the section *is* the interview history
@@ -127,6 +140,7 @@ export default function VacancyModal({
   onRestore,
   onRemove,
   onGenerateCover,
+  onUploadDocx,
   onAddInterview,
   onEditInterview,
   onRemoveInterview,
@@ -168,6 +182,44 @@ export default function VacancyModal({
 
   const cover = coverState(card.coverLetter);
   const coverBlocked = coverBlockedReason(card.hasDescription);
+
+  // The *Update docx* upload: the chosen file, the message a refused upload produced, and whether
+  // the request is in flight. The outcome itself comes from the card payload (`card.docxUpdate`),
+  // so the 5s poll shows the render landing without a push channel.
+  const [docxFile, setDocxFile] = useState<File | null>(null);
+  const [docxMessage, setDocxMessage] = useState<string | null>(null);
+  const [docxBusy, setDocxBusy] = useState(false);
+  const docxInput = useRef<HTMLInputElement | null>(null);
+  const docxUpdate = card.docxUpdate;
+  const docxState = renderState(docxUpdate);
+
+  async function uploadDocx() {
+    if (!onUploadDocx || !docxFile || docxBusy) return;
+    setDocxMessage(null);
+    setDocxBusy(true);
+    try {
+      await onUploadDocx(card.jobId, docxFile);
+      setDocxFile(null);
+    } catch (cause) {
+      setDocxMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDocxBusy(false);
+      if (docxInput.current) docxInput.current.value = '';
+    }
+  }
+
+  function chooseDocx(file: File | null) {
+    setDocxMessage(null);
+    if (!file) {
+      setDocxFile(null);
+      return;
+    }
+    // The same rules the route enforces, checked before the upload so the operator hears about a
+    // wrong file in a millisecond instead of after a megabyte of it travelled.
+    const rejection = fileRejection(file.name, file.size);
+    setDocxFile(rejection ? null : file);
+    if (rejection) setDocxMessage(rejection);
+  }
 
   async function copyLetter() {
     const text = card.coverLetter?.text;
@@ -576,6 +628,80 @@ export default function VacancyModal({
         {/* Cover letter: application material, so it is offered for *any* card - any column,
             archived or not. The row it reads is written by the cover worker, and asking for one
             goes to its own queue (`resumes.cover`), never to the tailoring workers. */}
+        {/* *Update docx* - the workflow the operator asked for: download the tailored DOCX,
+            verify it, fix what the model could not, upload it back, and the PDF follows. Offered
+            only when the card has a deliverable (`docxPath`), which is the same condition the
+            route enforces. The bytes are stored in Postgres and rendered by `resumes.rerender`;
+            the outcome arrives through the card payload. */}
+        {card.docxPath && onUploadDocx && (
+          <section className="border-t border-slate-200 px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Update docx
+                </h3>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${RENDER_STATE_CHIP[docxState]}`}
+                >
+                  {RENDER_STATE_LABEL[docxState]}
+                </span>
+                {docxUpdate?.filename && (
+                  <span className="text-[11px] text-slate-400">{docxUpdate.filename}</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  ref={docxInput}
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(event) => chooseDocx(event.target.files?.[0] ?? null)}
+                />
+                <button
+                  type="button"
+                  onClick={() => docxInput.current?.click()}
+                  className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Update docx
+                </button>
+                {docxFile && (
+                  <button
+                    type="button"
+                    onClick={() => void uploadDocx()}
+                    disabled={docxBusy || docxState === 'running'}
+                    className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  >
+                    {docxBusy ? 'Uploading…' : 'Regenerate PDF'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <p className="mt-2 text-xs text-slate-500">
+              Download the DOCX above, fix whatever the model could not, and upload it back: the
+              board keeps the file and rebuilds this card&rsquo;s PDF from it, so both links keep
+              pointing at the current pair.
+              {docxFile && (
+                <>
+                  {' '}
+                  Chosen: <strong>{docxFile.name}</strong> ({Math.max(1, Math.round(docxFile.size / 1024))}{' '}
+                  KB).
+                </>
+              )}
+            </p>
+            {docxMessage && <p className="mt-2 text-xs text-rose-700">{docxMessage}</p>}
+            {docxState === 'failed' && docxUpdate?.error && (
+              <p className="mt-2 text-xs text-rose-700">{docxUpdate.error}</p>
+            )}
+            {docxState === 'completed' && docxUpdate?.updatedAt && (
+              <p className="mt-2 text-xs text-emerald-700">
+                Re-rendered from {docxUpdate.filename ?? 'the uploaded DOCX'} on{' '}
+                {formatDateTime(docxUpdate.updatedAt)}.
+              </p>
+            )}
+          </section>
+        )}
+
         <section className="border-t border-slate-200 px-6 py-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">

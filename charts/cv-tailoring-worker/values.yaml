@@ -156,6 +156,22 @@ apply:
   # Empty = inherit the worker's `resources` above.
   resources: {}
 
+# The hand-edited-deliverable worker: the same image and configuration, a different entry point
+# (`rerender.py`) and a different queue. The board's *Update docx* button stores the DOCX the
+# operator edited and this workload renders it back into the card's PDF, so it is the only
+# consumer that needs the tailoring worker's own heavy tool - LibreOffice - and the only one that
+# writes artifacts rather than a text column.
+rerender:
+  enabled: true
+  # Warm, like the other two click-driven workers: the operator is watching the modal when a
+  # conversion starts.
+  minReplicaCount: 1
+  # Seconds of CPU each, and a burst is as rare as the operator's clicks.
+  maxReplicaCount: 3
+  queueName: resumes.rerender
+  # Empty = inherit the worker's `resources` above.
+  resources: {}
+
 keda:
   enabled: true
   minReplicaCount: 0

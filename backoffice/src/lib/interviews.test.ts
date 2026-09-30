@@ -39,6 +39,7 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
     archived: false,
     artifactAvailability: { pdf: false, docx: false },
     coverLetter: null,
+    docxUpdate: null,
     hasDescription: true,
     history: [],
     details: {

@@ -145,11 +145,14 @@ export default function App({ session }: AppProps) {
     let failure: string | null = null;
     let payload: Record<string, unknown> | null = null;
     setNote(null);
+    // An upload is the one body that is *not* JSON: `FormData` must go out untouched so the
+    // browser writes the multipart boundary itself (`POST /api/board/docx/<id>`).
+    const upload = typeof FormData !== 'undefined' && body instanceof FormData;
     try {
       const response = await fetch(path, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        ...(upload ? {} : { headers: { 'content-type': 'application/json' } }),
+        body: upload ? (body as FormData) : JSON.stringify(body),
       });
       const parsed = (await response.json()) as { ok: boolean; error?: string } & Record<
         string,
@@ -172,6 +175,19 @@ export default function App({ session }: AppProps) {
    */
   async function generateCover(jobId: string) {
     await mutate(`/api/cover/${encodeURIComponent(jobId)}`, {});
+  }
+
+  /**
+   * *Update docx*: the deliverable the operator edited by hand, uploaded as multipart.
+   *
+   * The route stores the bytes and asks `resumes.rerender` for a new PDF, so the board's own
+   * artifact links point at the same pair as before - and the card payload (the 5s poll) is how
+   * the modal shows the render landing.
+   */
+  async function uploadDocx(jobId: string, file: File) {
+    const form = new FormData();
+    form.append('file', file);
+    await mutate(`/api/board/docx/${encodeURIComponent(jobId)}`, form);
   }
 
   /**
@@ -499,6 +515,7 @@ export default function App({ session }: AppProps) {
           setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
         }}
         onGenerateCover={generateCover}
+        onUploadDocx={uploadDocx}
         onAddInterview={addInterview}
         onEditInterview={editInterview}
         onRemoveInterview={removeInterview}

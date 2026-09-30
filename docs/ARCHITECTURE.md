@@ -123,6 +123,8 @@ Queue topology as declared (chart definitions, byte-identical in intent to
 | `resumes.generate.retry.{60,300,900,1800,3600}s` | durable queues | `x-message-ttl=<rung>`, `x-dead-letter-exchange=""` → straight back to `resumes.generate` |
 | `resumes.cover` | durable queue | `x-dead-letter-exchange=resumes.cover.dlx`, `x-dead-letter-routing-key=resumes.cover.dlq` - cover letters (asked for on demand, or alongside a move into Prepare), consumed by `cover.py` |
 | `resumes.cover.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape as the tailoring set: a letter failure never lands in the tailoring DLQ |
+| `resumes.rerender` | durable queue | `x-dead-letter-exchange=resumes.rerender.dlx`, `x-dead-letter-routing-key=resumes.rerender.dlq` - the hand-edited deliverable uploaded through the board's *Update docx* button, consumed by `rerender.py` (the only consumer that renders: it rebuilds the card's PDF with LibreOffice) |
+| `resumes.rerender.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape again: a poison upload cannot bury a letter, a form or a tailored CV |
 | `applications.draft` | durable queue | `x-dead-letter-exchange=applications.draft.dlx`, `x-dead-letter-routing-key=applications.draft.dlq` - the extension's application forms, consumed by `apply.py` |
 | `applications.draft.dlx` / `.dlq` / `.retry.*` | exchange + queues | the same shape again: a poison form never buries a letter or a tailored CV |
 | `vacancies.parse`, `applications.submit` | durable queues | declared, unused today |

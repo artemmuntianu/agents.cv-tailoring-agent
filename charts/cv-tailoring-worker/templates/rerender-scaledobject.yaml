@@ -1,0 +1,44 @@
+{{- if and .Values.keda.enabled .Values.rerender.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "cv-tailoring-worker.fullname" . }}-rerender
+  labels:
+    {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+    cv-tailoring.io/workload: rerender
+spec:
+  scaleTargetRef:
+    name: {{ include "cv-tailoring-worker.fullname" . }}-rerender
+  # Kept warm for the same reason as the apply worker: a render is asked for by a click, and
+  # LibreOffice's cold start is the most visible part of that wait.
+  minReplicaCount: {{ .Values.rerender.minReplicaCount }}
+  # A conversion is seconds of CPU in the same image as the tailoring worker, and a burst is
+  # as rare as the operator's clicks: a low ceiling keeps the node honest.
+  maxReplicaCount: {{ .Values.rerender.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  {{- if .Values.keda.fallback.enabled }}
+  fallback:
+    failureThreshold: {{ .Values.keda.fallback.failureThreshold }}
+    replicas: {{ .Values.keda.fallback.replicas }}
+  {{- end }}
+  {{- with .Values.keda.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+  triggers:
+    - type: rabbitmq
+      metadata:
+        # Same reasoning as the worker's ScaledObject: `protocol: http` reads the management
+        # API, whose count includes unacknowledged messages - with `amqp` KEDA would scale the
+        # pod down while it is still rendering.
+        protocol: {{ .Values.keda.protocol | quote }}
+        queueName: {{ .Values.rerender.queueName | quote }}
+        mode: {{ .Values.keda.mode | quote }}
+        value: {{ .Values.keda.queueLength | quote }}
+        activationValue: {{ .Values.keda.activationQueueLength | quote }}
+      authenticationRef:
+        name: {{ include "cv-tailoring-worker.fullname" . }}-rabbitmq
+{{- end }}

@@ -94,6 +94,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
+| `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the five states the modal shows) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
 | `src/lib/missing.ts` | The *Missing fields* section: which card fields the scrape left empty, the request fragment they become, and the fill-only company rule (`resolveCompany`) |
 | `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
@@ -224,6 +225,31 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   `CARD_SELECT`) and the existing 5s poll: no push channel, no second request. `lib/cover.ts`
   decides what the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and it is
   unit tested, so the component stays a rendering layer.
+
+## Hand-edited deliverables (`POST /api/board/docx/<job_id>`)
+
+The card modal's *Update docx* button: the workflow is **download the tailored DOCX, verify it,
+edit what the model could not, upload it back**, and the PDF regenerates from the upload.
+
+- Offered only when the card has a deliverable (`card.docxPath`, i.e. tailoring produced one) -
+  the same condition the route enforces, with 409 for a card that never went through tailoring,
+  400 for a malformed id or a refused upload, 404 for an unknown card, 409 while a render is
+  already running, 502 when the broker refused the publish.
+- `multipart/form-data` with one `file` part. `lib/docxUpload.ts` holds the rules (a `.docx` name,
+  a ZIP signature, `MAX_DOCX_UPLOAD_BYTES` mirrored from `config.py`) and they run **twice**: the
+  modal checks the name and size before sending (instant feedback, no wasted megabyte), the route
+  checks the bytes as well - and `rerender.py` refuses again, because a route is not a guarantee.
+- Order: claim the row and store the bytes in **one** statement (`markDocxUpdateRequested`,
+  refused while the row says `running`), publish to `resumes.rerender`, mark the row `failed` with
+  the broker's words if the publish throws. That order lives in `lib/docxRequest.ts`, mirroring
+  `lib/coverRequest.ts`.
+- The bytes go to Postgres (`resume_docx_update.content`): the POC board runs outside the cluster
+  and cannot write the `cv-artifacts` volume - the same reason it *reads* artifacts through the
+  mirror. One row per vacancy is the audit trail; the latest upload is the deliverable.
+- The outcome arrives through the **card payload** (`docxUpdate`, another `LEFT JOIN` in
+  `CARD_SELECT`) and the existing 5s poll. `lib/docxUpload.ts::renderState` maps the row to the
+  five states the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and is unit
+  tested, so the component stays a rendering layer.
 
 ## Application drafts (`POST`/`GET /api/apply/<job_id>`, `GET`/`PUT /api/profile`)
 

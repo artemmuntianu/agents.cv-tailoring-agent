@@ -12,6 +12,7 @@ The worker is single-threaded per pod (``prefetch_count = 1``), so one lazily
 opened psycopg connection per process is enough.
 """
 
+import base64
 import json
 import os
 import uuid
@@ -215,6 +216,60 @@ class LocalDb:
 
     def get_cover_letter(self, job_id):
         return self._load().get("cover_letters", {}).get(job_id)
+
+    def upsert_docx_update(
+        self,
+        job_id,
+        status,
+        filename=None,
+        content=None,
+        requested_by=None,
+        error=None,
+        attempts=0,
+    ):
+        """Create/refresh the single hand-edited-deliverable row (see PostgresDb).
+
+        The payload is base64 here: the file backend has to survive a round trip through a JSON
+        text file, and this store is for local runs and tests.
+        """
+        data = self._load()
+        updates = data.setdefault("docx_updates", {})
+        record = updates.get(job_id) or {
+            "job_id": job_id,
+            "filename": None,
+            "content_b64": None,
+            "size_bytes": 0,
+            "requested_by": None,
+            "attempts": 0,
+            "created_at": now_iso(),
+        }
+        record["status"] = status
+        record["error"] = error
+        if filename:
+            record["filename"] = filename
+        if requested_by:
+            record["requested_by"] = requested_by
+        if content is not None:
+            record["content_b64"] = base64.b64encode(content).decode("ascii")
+            record["size_bytes"] = len(content)
+        record["attempts"] = max(int(record.get("attempts") or 0), int(attempts or 0))
+        record["updated_at"] = now_iso()
+        updates[job_id] = record
+        self._save(data)
+        return {key: value for key, value in record.items() if key != "content_b64"}
+
+    def get_docx_update(self, job_id):
+        """The row without its payload: status, size and filename are what callers show."""
+        record = self._load().get("docx_updates", {}).get(job_id)
+        if not record:
+            return None
+        return {key: value for key, value in record.items() if key != "content_b64"}
+
+    def load_docx_update(self, job_id):
+        """The uploaded DOCX itself, or None when nothing was uploaded for this card."""
+        record = self._load().get("docx_updates", {}).get(job_id) or {}
+        encoded = record.get("content_b64")
+        return base64.b64decode(encoded) if encoded else None
 
     def upsert_application(
         self, job_id, status, plan=None, model=None, schema_hash=None, error=None, attempts=0
@@ -591,6 +646,25 @@ create table if not exists resume_application (
     attempts    integer not null default 0,
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
+);
+
+-- A hand-edited deliverable (the board's *Update docx* button). The operator downloads the
+-- tailored DOCX, fixes what the model could not, and uploads it back: the bytes land here, this
+-- row is the audit trail, and the rerender worker (`rerender.py`) writes the new pair to the
+-- volume and repoints `resumes.docx_path`/`pdf_url`, which is what the board's links follow. The
+-- bytes travel through Postgres because the board runs *outside* the cluster and cannot write the
+-- artifact volume, and one row per vacancy is enough - the latest upload is the deliverable.
+create table if not exists resume_docx_update (
+    job_id       text primary key references resumes (job_id) on delete cascade,
+    status       text not null default 'queued',
+    filename     text,
+    content      bytea,
+    size_bytes   integer,
+    requested_by text,
+    error        text,
+    attempts     integer not null default 0,
+    created_at   timestamptz not null default now(),
+    updated_at   timestamptz not null default now()
 );
 
 -- Backoffice accounts. There is NO public signup: an administrator provisions
@@ -1137,6 +1211,92 @@ class PostgresDb:
                 )
                 row = cur.fetchone()
         return dict(row) if row else None
+
+    def upsert_docx_update(
+        self,
+        job_id,
+        status,
+        filename=None,
+        content=None,
+        requested_by=None,
+        error=None,
+        attempts=0,
+    ):
+        """Create/refresh the single hand-edited-deliverable row of one vacancy.
+
+        `filename`/`content` are only overwritten when the caller has them, so the worker's status
+        transitions cannot wipe the upload it is rendering; `attempts` only ever grows. The
+        payload is deliberately not returned: it can be megabytes, and no caller of this method
+        wants it (`load_docx_update` is the reader).
+        """
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into resume_docx_update
+                        (job_id, status, filename, content, size_bytes, requested_by, error,
+                         attempts)
+                    values (%(job_id)s, %(status)s, %(filename)s, %(content)s, %(size_bytes)s,
+                            %(requested_by)s, %(error)s, %(attempts)s)
+                    on conflict (job_id) do update
+                        set status = excluded.status,
+                            filename = coalesce(excluded.filename,
+                                                resume_docx_update.filename),
+                            content = coalesce(excluded.content, resume_docx_update.content),
+                            size_bytes = coalesce(excluded.size_bytes,
+                                                 resume_docx_update.size_bytes),
+                            requested_by = coalesce(excluded.requested_by,
+                                                    resume_docx_update.requested_by),
+                            error = excluded.error,
+                            attempts = greatest(resume_docx_update.attempts, excluded.attempts),
+                            updated_at = now()
+                    returning job_id, status, filename, size_bytes, requested_by, error, attempts,
+                              created_at, updated_at
+                    """,
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "filename": filename,
+                        "content": content,
+                        "size_bytes": len(content) if content is not None else None,
+                        "requested_by": requested_by,
+                        "error": error,
+                        "attempts": int(attempts or 0),
+                    },
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    def get_docx_update(self, job_id):
+        """The row without its payload: status, size and filename are what callers show."""
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select job_id, status, filename, size_bytes, requested_by, error, attempts,
+                           created_at, updated_at
+                    from resume_docx_update where job_id = %s
+                    """,
+                    (job_id,),
+                )
+                row = cur.fetchone()
+        return dict(row) if row else None
+
+    def load_docx_update(self, job_id):
+        """The uploaded DOCX itself, or None when nothing was uploaded for this card."""
+        self.ensure_schema()
+        with self.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select content from resume_docx_update where job_id = %s", (job_id,)
+                )
+                row = cur.fetchone()
+        if not row or row.get("content") is None:
+            return None
+        return bytes(row["content"])
 
     def upsert_application(
         self, job_id, status, plan=None, model=None, schema_hash=None, error=None, attempts=0

@@ -87,6 +87,20 @@ export interface CoverLetterState {
 }
 
 /**
+ * The hand-edited deliverable of one card (`resume_docx_update`) - what the *Update docx* button
+ * last did. The row is written by the board (the upload) and by `rerender.py` (the render), and it
+ * never carries the bytes: the DOCX itself is read only by the worker that converts it.
+ */
+export interface DocxUpdateState {
+  /** `queued` (uploaded, render expected) | `running` | `completed` | `failed`. */
+  status: string;
+  filename: string | null;
+  sizeBytes: number | null;
+  error: string | null;
+  updatedAt: string | null;
+}
+
+/**
  * One card = one row of the worker's `resumes` table joined with the board's
  * `resume_board` (stage + the archive columns) and its `resume_history` rows.
  * The board never copies the vacancy: it reads the worker's row and only owns the
@@ -133,6 +147,8 @@ export interface BoardCard {
   artifactAvailability: { pdf: boolean; docx: boolean };
   /** `null` = nobody asked for a letter yet. */
   coverLetter: CoverLetterState | null;
+  /** `null` = no hand-edited upload yet; the button appears once `docxPath` is set. */
+  docxUpdate: DocxUpdateState | null;
   /**
    * Whether the vacancy's job description is stored (`resumes.description_raw`). A card
    * scraped before 2026-09-26 has none, and neither a tailored CV nor a cover letter can be

@@ -96,6 +96,15 @@ rabbitmqDefinitions:
         auto_delete: false
         internal: false
         arguments: {}
+      # ... and the hand-edited-deliverable queue (`rerender.py`): a poison upload must not bury
+      # a letter, a form or a tailored CV either.
+      - name: resumes.rerender.dlx
+        vhost: /
+        type: direct
+        durable: true
+        auto_delete: false
+        internal: false
+        arguments: {}
     queues:
       - name: resumes.generate
         vhost: /
@@ -136,6 +145,19 @@ rabbitmqDefinitions:
         durable: true
         auto_delete: false
         arguments: {}
+      - name: resumes.rerender
+        vhost: /
+        durable: true
+        auto_delete: false
+        # MUST stay identical to utils/messaging.py::_declare_topology() for this queue.
+        arguments:
+          x-dead-letter-exchange: resumes.rerender.dlx
+          x-dead-letter-routing-key: resumes.rerender.dlq
+      - name: resumes.rerender.dlq
+        vhost: /
+        durable: true
+        auto_delete: false
+        arguments: {}
       - name: vacancies.parse
         vhost: /
         durable: true
@@ -164,6 +186,12 @@ rabbitmqDefinitions:
         destination: applications.draft.dlq
         destination_type: queue
         routing_key: applications.draft.dlq
+        arguments: {}
+      - source: resumes.rerender.dlx
+        vhost: /
+        destination: resumes.rerender.dlq
+        destination_type: queue
+        routing_key: resumes.rerender.dlq
         arguments: {}
 
 # --------------------------------------------------------------------------- #

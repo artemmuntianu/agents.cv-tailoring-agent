@@ -119,8 +119,8 @@ row id, not a business key.
 `prefetch = 1` plus KEDA's `QueueLength` trigger (`ready + unacked`) means one pod
 per waiting vacancy and no pod when the queue is empty. Counting in-flight work is
 the important part: the deployment cannot scale to zero while a task is still
-being processed. The two **interactive** queues (`resumes.cover`,
-`applications.draft`) are the exception - they keep one pod warm
+being processed. The three **interactive** queues (`resumes.cover`,
+`applications.draft`, `resumes.rerender`) are the exception - they keep one pod warm
 (`minReplicaCount: 1`) - because a cold start is most of the wait when a click,
 not a batch, is what woke the queue.
 
@@ -227,6 +227,13 @@ beside the CV tailoring, leaving a letter that is already there alone. Its own w
 from the stored job description and the master `cv_data.json` - it can only repeat what the CV
 says - and the modal shows it with a *Copy* button. `docs/MESSAGE_CONTRACT.md` documents that
 payload.
+
+A card that **went through tailoring** also gets an **Update docx** section: download the tailored
+DOCX, verify it, fix what the model could not, upload it back - the board stores the file, asks
+`resumes.rerender` for a new render, and `rerender.py` writes the upload back as the card's
+deliverable and rebuilds its PDF with the image's LibreOffice, so the *Tailored PDF* / *Tailored
+DOCX* links keep pointing at the current pair. The status of that render shows in the modal as it
+happens (`CONSTITUTION.md` invariant 32).
 
 The card is the operator's workspace. An **`➕ Add action`** button records a change
 *without* moving the card - which is also how a card escapes the auto-archiver's ten-day rule.

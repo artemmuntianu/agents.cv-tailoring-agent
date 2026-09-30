@@ -169,6 +169,27 @@ class CoverLetterMessage(BaseModel):
     enqueued_at: str | None = None
 
 
+class RerenderMessage(BaseModel):
+    """One *Update docx* request: the operator uploaded a hand-edited deliverable.
+
+    As tiny as the cover-letter message, and for the same reason - the file itself is in the
+    database row (`resume_docx_update.content`) rather than in the payload. A broker message that
+    carried a megabyte of DOCX would be a message nobody can read in the RabbitMQ UI, and the
+    redelivery the broker promises would copy the bytes again.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str = Field(
+        min_length=4,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+        description="Row id of the vacancy whose deliverable was replaced (`resumes.job_id`).",
+    )
+    attempt: int = 0
+    enqueued_at: str | None = None
+
+
 class ApplicationField(BaseModel):
     """One fillable control the extension annotated in the rendered page.
 

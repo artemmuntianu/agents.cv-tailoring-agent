@@ -49,6 +49,14 @@ the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
                     resume_cover_letter (text) + the master cv_data.json
                     + the candidate facts (application_profile row)
 
+the board (an "Update docx" upload) --> RabbitMQ (resumes.rerender)
+                                     |  KEDA: queue depth -> replicas (0 -> N -> 0)
+                                     v
+                     ai-agent-worker-rerender pod (LibreOffice, no model)
+                                     |
+                    cv-artifacts volume (the uploaded DOCX + its new PDF)
+                    + resume_docx_update (bytes in, status out)
+
 the extension (a "Populate" click)  --> RabbitMQ (applications.draft)
                                        |  KEDA: queue depth -> replicas (0 -> N -> 0)
                                        v
@@ -577,6 +585,20 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     `MAX_VALUE_CHARS`, standing answers at `MAX_ANSWER_CHARS` (a project deep-dive does not fit in a
     form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` merges
     `standing_answers` so a popup save cannot wipe it.
+
+32. **The deliverable can be replaced by hand, and the PDF follows.** The operator downloads the
+    tailored DOCX, verifies it, edits what the model could not, and uploads it back through the
+    card modal (`POST /api/board/docx/<job_id>`, the *Update docx* button - offered only for a card
+    that has a `docx_path`, refused with 409 otherwise). Its own queue (`resumes.rerender`, its own
+    worker `rerender.py`, its own DLX/DLQ/ScaledObject and the same four-declarer agreement) renders
+    the upload with the image's LibreOffice and repoints `resumes.docx_path`/`pdf_url` **in place**,
+    so the board's existing artifact links are the new pair with no new concept. The bytes travel in
+    Postgres (`resume_docx_update.content`): the POC board runs outside the cluster and cannot write
+    the `cv-artifacts` volume, which is the same reason it *reads* artifacts through the mirror. One
+    row per vacancy is the audit trail (`queued` -> `running` -> `completed`/`failed`), the claim
+    refuses while a render is `running` (two clicks cannot replace the bytes a conversion is
+    reading), `MAX_DOCX_UPLOAD_BYTES` is enforced on both ends, and a card that never went through
+    tailoring is refused by the route *and* dead-lettered by the worker.
 
 ## 8. When code and prose disagree
 

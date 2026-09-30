@@ -59,6 +59,23 @@ export function applicationDeadLetterQueue(): string {
   return process.env.APPLICATION_QUEUE_DLQ?.trim() || `${applicationQueueName()}.dlq`;
 }
 
+/**
+ * `resumes.rerender` - the hand-edited-deliverable queue (`rerender.py`). Same naming rule as the
+ * other two: `config.py` is the reference, and every declarer of the topology (this publisher, the
+ * chart's definitions Secret, the worker's own spec) must agree field for field.
+ */
+export function rerenderQueueName(): string {
+  return process.env.RERENDER_QUEUE_NAME?.trim() || 'resumes.rerender';
+}
+
+export function rerenderDeadLetterExchange(): string {
+  return process.env.RERENDER_QUEUE_DLX?.trim() || `${rerenderQueueName()}.dlx`;
+}
+
+export function rerenderDeadLetterQueue(): string {
+  return process.env.RERENDER_QUEUE_DLQ?.trim() || `${rerenderQueueName()}.dlq`;
+}
+
 /** Every queue this client publishes to, declared on connect. */
 export function queueTopology(): { queue: string; dlx: string; dlq: string }[] {
   return [
@@ -68,6 +85,11 @@ export function queueTopology(): { queue: string; dlx: string; dlq: string }[] {
       queue: applicationQueueName(),
       dlx: applicationDeadLetterExchange(),
       dlq: applicationDeadLetterQueue(),
+    },
+    {
+      queue: rerenderQueueName(),
+      dlx: rerenderDeadLetterExchange(),
+      dlq: rerenderDeadLetterQueue(),
     },
   ];
 }
@@ -210,6 +232,19 @@ export async function publishApplicationRequests(
   messages: Record<string, unknown>[],
 ): Promise<number> {
   return publish(applicationQueueName(), messages);
+}
+
+/**
+ * Publish one hand-edited-deliverable request (the modal's *Update docx* button).
+ *
+ * Same confirm semantics again: the route must not tell the operator a render is on its way before
+ * the broker acknowledged the publish - and the bytes live in the database row, so the message
+ * itself stays readable in the RabbitMQ UI.
+ */
+export async function publishRerenderRequests(
+  messages: Record<string, unknown>[],
+): Promise<number> {
+  return publish(rerenderQueueName(), messages);
 }
 
 async function publish(queue: string, messages: Record<string, unknown>[]): Promise<number> {

@@ -74,6 +74,16 @@ def application_queue_spec() -> QueueSpec:
         directory=os.path.join(config.QUEUE_DIR, "apply"),
     )
 
+
+def rerender_queue_spec() -> QueueSpec:
+    """`resumes.rerender` - one message per hand-edited DOCX whose PDF must be rebuilt."""
+    return QueueSpec(
+        name=config.RERENDER_QUEUE_NAME,
+        dlx=config.RERENDER_QUEUE_DLX,
+        dlq=config.RERENDER_QUEUE_DLQ,
+        directory=os.path.join(config.QUEUE_DIR, "rerender"),
+    )
+
 try:  # pika is optional outside of AMQP mode
     import pika
 

@@ -198,6 +198,16 @@ COVER_QUEUE_DLQ = os.getenv("COVER_QUEUE_DLQ", f"{COVER_QUEUE_NAME}.dlq")
 APPLICATION_QUEUE_NAME = os.getenv("APPLICATION_QUEUE_NAME", "applications.draft")
 APPLICATION_QUEUE_DLX = os.getenv("APPLICATION_QUEUE_DLX", f"{APPLICATION_QUEUE_NAME}.dlx")
 APPLICATION_QUEUE_DLQ = os.getenv("APPLICATION_QUEUE_DLQ", f"{APPLICATION_QUEUE_NAME}.dlq")
+# The fourth queue: a hand-edited deliverable (`rerender.py`). The operator downloads the tailored
+# DOCX, fixes what the model could not, and uploads it back; the bytes are stored in
+# `resume_docx_update` and this queue asks for the new PDF. Its own ScaledObject and its own four
+# declarers, for the same reason as the cover queue: rendering must not wait behind tailoring.
+RERENDER_QUEUE_NAME = os.getenv("RERENDER_QUEUE_NAME", "resumes.rerender")
+RERENDER_QUEUE_DLX = os.getenv("RERENDER_QUEUE_DLX", f"{RERENDER_QUEUE_NAME}.dlx")
+RERENDER_QUEUE_DLQ = os.getenv("RERENDER_QUEUE_DLQ", f"{RERENDER_QUEUE_NAME}.dlq")
+# The upload cap, mirrored by the board (`backoffice/src/lib/docxUpload.ts`): a DOCX is a few
+# hundred kilobytes in practice, and both ends of the wire have to refuse the same way.
+MAX_DOCX_UPLOAD_BYTES = _env_int("MAX_DOCX_UPLOAD_BYTES", 20 * 1024 * 1024)
 PREFETCH_COUNT = _env_int("PREFETCH_COUNT", 1)
 CONSUMER_POLL_INTERVAL = _env_float("CONSUMER_POLL_INTERVAL", 2.0)
 # AMQP heartbeat (seconds), 0 disables it. It MUST exceed the longest task: the

@@ -14,6 +14,10 @@ One AMQP message == one vacancy == one LangGraph run.
 | Exchange | `resumes.cover.dlx` (direct) | dead-letter target of the cover queue |
 | Queue | `resumes.cover.dlq` | poison cover-letter requests |
 | Queues | `resumes.cover.retry.{60,300,900,1800,3600}s` | the same TTL ladder, declared by `cover.py` |
+| Queue | `resumes.rerender` | durable, consumed by `rerender.py` with `prefetch_count=1` |
+| Exchange | `resumes.rerender.dlx` (direct) | dead-letter target of the rerender queue |
+| Queue | `resumes.rerender.dlq` | poison re-render requests |
+| Queues | `resumes.rerender.retry.{60,300,900,1800,3600}s` | the same TTL ladder, declared by `rerender.py` |
 | Queues | `vacancies.parse`, `applications.submit` | declared for the gateway/extension side |
 
 Backpressure: the worker declares the topology on connect (`utils/messaging.py`),
@@ -95,6 +99,29 @@ master `cv_data.json` and the operator's candidate facts (`application_profile`,
 itself (invariant 24), so a stale copy cannot reach the prompt. The
 outcome is one row of `resume_cover_letter` (`queued` -> `running` -> `completed`/`failed`) -
 the broker semantics (ack / retry / TTL retry / DLQ) are the ones in the table below.
+
+## Hand-edited deliverables (`resumes.rerender`)
+
+The board's *Update docx* button, and the fourth queue for the same reason as the third: a
+conversion must not wait behind a tailoring backlog, and it must not wake a tailoring pod.
+
+```json
+{ "job_id": "0a58a065-...", "enqueued_at": "2026-09-30T10:12:00.000Z" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `job_id` | **yes** | the vacancy whose deliverable was replaced |
+| `attempt` | no | informational; the authoritative counter is `resume_docx_update.attempts` |
+
+The payload carries **no** file. The operator's DOCX travels in Postgres
+(`resume_docx_update.content`, a `bytea` column): the board runs outside the cluster and cannot
+write the artifact volume, so the row is both the transport and the audit trail of the workflow -
+download the tailored DOCX, verify it, edit what the model could not, upload it back. `rerender.py`
+reads the bytes, writes them as the card's deliverable (same artifact key as the tailoring
+pipeline, so every existing link keeps working), converts it to a PDF with the image's LibreOffice,
+repoints `resumes.docx_path`/`pdf_url`, and records one row of
+`resume_docx_update`: `queued` -> `running` -> `completed`/`failed`.
 
 ## Application drafts (`applications.draft`)
 

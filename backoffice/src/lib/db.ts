@@ -74,6 +74,11 @@ interface CardRow {
   cover_error: string | null;
   cover_model: string | null;
   cover_updated_at: Date | string | null;
+  docx_status: string | null;
+  docx_filename: string | null;
+  docx_size_bytes: number | null;
+  docx_error: string | null;
+  docx_updated_at: Date | string | null;
 }
 
 interface HistoryRow {
@@ -161,10 +166,13 @@ const CARD_SELECT = `
          b.archived_at, b.archived_actor, b.archived_reason,
          b.recruiter, b.salary_offered, b.salary_desired, b.communication_channels, b.apply_url,
          c.status as cover_status, c.text as cover_text, c.error as cover_error,
-         c.model as cover_model, c.updated_at as cover_updated_at
+         c.model as cover_model, c.updated_at as cover_updated_at,
+         d.status as docx_status, d.filename as docx_filename, d.size_bytes as docx_size_bytes,
+         d.error as docx_error, d.updated_at as docx_updated_at
     from resumes r
     left join resume_board b on b.job_id = r.job_id
-    left join resume_cover_letter c on c.job_id = r.job_id`;
+    left join resume_cover_letter c on c.job_id = r.job_id
+    left join resume_docx_update d on d.job_id = r.job_id`;
 
 async function fetchHistory(jobIds: string[]): Promise<HistoryRow[]> {
   const history = await pool().query<HistoryRow>(
@@ -245,6 +253,18 @@ function toCard(
             error: row.cover_error,
             model: row.cover_model,
             updatedAt: row.cover_updated_at === null ? null : toIso(row.cover_updated_at),
+          },
+    // The hand-edited deliverable (`resume_docx_update`): what the *Update docx* button last
+    // did, so the modal can show a render in progress, its outcome, or its failure reason.
+    docxUpdate:
+      row.docx_status === null
+        ? null
+        : {
+            status: row.docx_status,
+            filename: row.docx_filename,
+            sizeBytes: row.docx_size_bytes,
+            error: row.docx_error,
+            updatedAt: row.docx_updated_at === null ? null : toIso(row.docx_updated_at),
           },
     history: history
       .filter((entry) => entry.job_id === row.job_id)
@@ -974,6 +994,11 @@ export interface TaskMessageRow {
   descriptionRaw: string | null;
   status: string;
   stage: string;
+  /**
+   * `resumes.docx_path` - the tailored deliverable. Non-null is exactly the condition for the
+   * modal's *Update docx* button, and the route refuses the upload without it.
+   */
+  docxPath: string | null;
 }
 
 /**
@@ -996,9 +1021,10 @@ export async function taskMessageRow(jobId: string): Promise<TaskMessageRow | nu
     description_raw: string | null;
     status: string;
     stage: string;
+    docx_path: string | null;
   }>(
     `select r.job_id, r.user_id, r.external_id, r.source, r.cv_version, r.title, r.company,
-            r.source_url, r.description_raw, r.status,
+            r.source_url, r.description_raw, r.status, r.docx_path,
             coalesce(b.stage, 'scraped') as stage
        from resumes r
        left join resume_board b on b.job_id = r.job_id
@@ -1020,6 +1046,7 @@ export async function taskMessageRow(jobId: string): Promise<TaskMessageRow | nu
     descriptionRaw: row.description_raw,
     status: row.status,
     stage: row.stage,
+    docxPath: row.docx_path,
   };
 }
 
@@ -1091,6 +1118,80 @@ export async function coverLetter(jobId: string): Promise<CoverLetterRow | null>
     status: row.status,
     text: row.text,
     model: row.model,
+    error: row.error,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+// -- the hand-edited deliverable (the modal's *Update docx* button) ----------- #
+
+/** One card's deliverable-replacement row, as the modal reads it. */
+export interface DocxUpdateRow {
+  status: string;
+  filename: string | null;
+  sizeBytes: number | null;
+  error: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * Claim the render and store the upload in **one** statement.
+ *
+ * The `where ... status <> 'running'` guard is what makes two clicks safe: the second one changes
+ * nothing and gets `false` back, so it cannot replace the bytes a conversion is already reading -
+ * and because a refused claim stores no upload either, the payload rides on this statement rather
+ * than on a second write that would leave half a request behind.
+ */
+export async function markDocxUpdateRequested(
+  jobId: string,
+  filename: string,
+  content: Uint8Array,
+): Promise<boolean> {
+  const result = await pool().query(
+    `insert into resume_docx_update (job_id, status, filename, content, size_bytes)
+     values ($1, 'queued', $2, $3, $4)
+     on conflict (job_id) do update
+        set status = 'queued', filename = excluded.filename, content = excluded.content,
+            size_bytes = excluded.size_bytes, error = null, updated_at = now()
+      where resume_docx_update.status <> 'running'`,
+    [jobId, filename, Buffer.from(content), content.length],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** The publish failed, so nothing is on its way: leaving the row `queued` would be a lie. */
+export async function failDocxUpdateRequest(jobId: string, error: string): Promise<void> {
+  await pool().query(
+    `insert into resume_docx_update (job_id, status, error) values ($1, 'failed', $2)
+     on conflict (job_id) do update
+        set status = 'failed', error = excluded.error, updated_at = now()`,
+    [jobId, error.slice(0, 500)],
+  );
+}
+
+/**
+ * One card's upload row, **without** its payload: the modal shows the status, the size and the
+ * filename, and the DOCX itself is only ever read by the worker that renders it.
+ */
+export async function docxUpdate(jobId: string): Promise<DocxUpdateRow | null> {
+  const result = await pool().query<{
+    status: string;
+    filename: string | null;
+    size_bytes: number | null;
+    error: string | null;
+    updated_at: Date | string | null;
+  }>(
+    `select status, filename, size_bytes, error, updated_at
+       from resume_docx_update
+      where job_id = $1`,
+    [jobId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    status: row.status,
+    filename: row.filename,
+    sizeBytes: row.size_bytes,
     error: row.error,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
   };

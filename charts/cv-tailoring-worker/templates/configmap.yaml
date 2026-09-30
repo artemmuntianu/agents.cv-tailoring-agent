@@ -10,6 +10,7 @@ data:
   QUEUE_NAME: {{ .Values.config.queueName | quote }}
   COVER_QUEUE_NAME: {{ .Values.cover.queueName | quote }}
   APPLICATION_QUEUE_NAME: {{ .Values.apply.queueName | quote }}
+  RERENDER_QUEUE_NAME: {{ .Values.rerender.queueName | quote }}
   PREFETCH_COUNT: {{ .Values.config.prefetchCount | quote }}
   MAX_ATTEMPTS: {{ .Values.config.maxAttempts | quote }}
   QUEUE_RETRY_TTL_MS: {{ .Values.config.queueRetryTtlMs | quote }}
