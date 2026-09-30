@@ -114,7 +114,9 @@ if ($Smoke) {
     # A fresh external_id, so the result (cv_<id>.pdf) cannot be confused with a
     # document an earlier local run already wrote into artifacts\output.
     $smokePath = Join-Path $inputDir ('jd_' + $SmokeName + '.txt')
-    if (-not $DryRun) {
+    # Copying the smoke JD onto itself throws an IOException - which is exactly what happens when
+    # artifacts\input holds only jd_smoke_test.txt, i.e. the default -Smoke source.
+    if (-not $DryRun -and $jdPaths[0] -ne $smokePath) {
         Copy-Item -LiteralPath $jdPaths[0] -Destination $smokePath -Force
     }
     Say ("smoke vacancy: " + $smokePath + " (external_id '" + $SmokeName + "')")
