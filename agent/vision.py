@@ -1,8 +1,8 @@
 """`vision_check`: the rendered pages judged for layout defects - its prompt lives here too.
 
 The loop it feeds (`should_continue` in `agent/graph.py`) can only ask for shorter text, never for
-a different design, which is why the guidelines explicitly accept multi-page output and the
-document's own intentional overlaps, and only flag severe structural defects.
+a different design, which is why the guidelines explicitly accept multi-page output and tolerate
+orphan lines and minor overflows, and only flag severe structural defects.
 """
 
 from PIL import Image
@@ -32,7 +32,7 @@ def vision_check(state: State) -> State:
 
 IMPORTANT LAYOUT GUIDELINES:
 * Layout & Page Flow: Accept two-column design with sidebar ending on page 1. Allow natural overflow to page 2 (even partial pages or multi-page entry splits). Never propose margin, font, or spacing tweaks for page fitting.
-* Ignore Design Non-Issues: Do not flag orphan lines, minor overflows, or the intentional overlap between 'AI & Agentic Workflows' and the 'RELEVANT SKILLS' header background bar.
+* Ignore Design Non-Issues: Do not flag orphan lines or minor overflows.
 * Focus & Scope: Flag only severe structural or visual defects. Prioritize content readability, technical accuracy, and structural hierarchy over page count.
 * NEVER try to condense the content to fit comfortably onto a single page.
 
