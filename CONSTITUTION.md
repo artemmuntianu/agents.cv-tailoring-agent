@@ -296,15 +296,19 @@ automation         .github/workflows/
     A feed no parser claims fails preflight (`collect` skips it) instead of being guessed at, and
     the suite requires a fixture for every discovered source and a parser for every configured feed
     URL - so adding a site is a parser module plus a URL in `SCOUT_FEEDS`, not an edit to the flow.
-    DOU and Djinni are the two that exist today: a DOU title carries role/company/location plus a
-    salary tail, a Djinni title carries the role alone (its feed has no company, salary or
-    location, so those card fields stay empty rather than being guessed).
+    DOU, Djinni and Landing.Jobs are the three that exist today: a DOU title carries
+    role/company/location plus a salary tail, a Djinni title carries the role alone (its feed has no
+    company, salary or location, so those card fields stay empty rather than being guessed), and
+    Landing.Jobs publishes **Atom** - one document holding its whole open board, ISO-8601 dates, the
+    company in `<author>` instead of the title, and its own `lj:` elements whose namespace the feed
+    never binds (the parser repairs that; `scout/AGENTS.md`).
 
-    The intake also **refuses what a feed dated too long ago**: a `<pubDate>` older than
-    `SCOUT_MAX_AGE_DAYS` (7 days, `0` disables the rule) means no card, no dedupe check and no
-    Telegram message, because a feed is a window and not a stream. A vacancy whose feed states no
-    usable date is kept - the rule judges what a feed said, never what it omitted, so a feed that
-    stops publishing dates cannot become a silent no-op (`scout/policy.py`).
+    The intake also **refuses what a feed dated too long ago**: a date older than
+    `SCOUT_MAX_AGE_DAYS` (14 days, `0` disables the rule) means no card, no dedupe check and no
+    Telegram message, because a feed is a window and not a stream. The feed's own date is read in
+    either form a feed uses - RFC-822 on the two RSS boards, ISO-8601 on the Atom one - and a vacancy
+    whose feed states no usable date is kept: the rule judges what a feed said, never what it omitted,
+    so a feed that stops publishing dates cannot become a silent no-op (`scout/policy.py`).
 
 26. **Interviews are their own record, and the Interviews section *is* their history.**
     `resume_interview` (one row per call: `scheduled_at`, `type` - the four types are code plus

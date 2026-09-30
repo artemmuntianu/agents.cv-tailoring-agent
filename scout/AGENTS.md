@@ -1,7 +1,7 @@
 # scout/ - the scheduled vacancy intake
 
-Turns configured RSS feeds into cards in the board's **Scraped** column, and tells Telegram about
-each new one. It is the machine half of the intake: the operator's browser scrape is the other.
+Turns configured RSS and Atom feeds into cards in the board's **Scraped** column, and tells Telegram
+about each new one. It is the machine half of the intake: the operator's browser scrape is the other.
 
 Read `CONSTITUTION.md` first (invariants 16, 17, 23, 25); this file is the layer-specific detail.
 
@@ -52,7 +52,7 @@ is never reported as an empty result.
 |---|---|
 | `contracts.py` | The interface a feed source must satisfy: `FeedSource(name, hosts, parse_feed)` and the `Vacancy`/`ScopedVacancy` card shapes - the file that makes a new site a local change |
 | `sources.py` | The registry: discovers `scout/parsers/*`, routes a feed URL to its site (`source_for_url`), refuses a duplicated slug or host (`validate`) |
-| `parsers/` | One **pure** module per site, each exporting `SOURCE` (`dou.py`, `djinni.py`): the site's own id rule, title shape and text quirks |
+| `parsers/` | One **pure** module per site, each exporting `SOURCE` (`dou.py`, `djinni.py`, `landingjobs.py`): the site's own id rule, title shape and text quirks |
 | `html_text.py` | The escaped-HTML -> plain-text pass the parsers share - the double unescape and the `&nbsp;` normalisation live here once |
 | `feeds.py` | The only network code: fetch each configured URL, tolerate a broken one |
 | `policy.py` | What deserves a card at all: the feed's own date, the age cutoff (`SCOUT_MAX_AGE_DAYS`) and the counts of what it refused (`select`) - the operator's "no old vacancies" rule, in one place |
@@ -138,15 +138,67 @@ the CLI accepts, never a free-text value.
 - `link` and `guid` are the same job URL, and the guid is the fallback identity when a feed ever
   ships without a link.
 
+## Feed contract (Landing.Jobs)
+
+```
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>https://landing.jobs/at/damia/uphill-health-senior-platform-engineer</id>
+    <published>2026-09-29T16:06:54Z</published>
+    <link rel="alternate" href="https://landing.jobs/at/damia/…-engineer?utm_source=rss"/>
+    <title>Uphill Health - Senior Platform Engineer</title>
+    <content type="html"><![CDATA[ … the description as HTML … ]]></content>
+    <author><name>Damia</name></author>
+    <lj:city>Lisbon</lj:city><lj:salary/><lj:job_type>Permanent</lj:job_type>
+```
+
+- The endpoint is the site's **Atom** feed (`https://landing.jobs/feed`, advertised in its own markup
+  as "Landing.Jobs » Offers feed"), and **one document carries every vacancy open on the board** -
+  there is no per-keyword search to tune, which is exactly what the age rule below is for. Nothing
+  else there is a feed: `/feed/rss`, `/rss`, `/rss.xml`, `/jobs.rss` are 404. `/api/v1/jobs` answers
+  JSON, but `robots.txt` disallows `/api/` *and* its 50-item page ignores `page`/`per_page`, so the
+  feed is both the sanctioned and the complete source (2026-09-30: 56 vacancies in the feed, all 50
+  of the API's plus 6 newer ones).
+- **The document is not well-formed.** Every entry ends in `<lj:city>`, `<lj:salary>`,
+  `<lj:job_type>`, … whose `xmlns:lj` is declared nowhere, so a strict parser stops at the first one
+  (`unbound prefix`) and the whole site would silently read as empty. `landingjobs.repair_prefixes`
+  injects the missing declaration - only when it is absent - and the fixture keeps the site's own
+  bug, so the workaround cannot rot unnoticed. This is why the parser looks elements up by local
+  name rather than by a hardcoded namespace.
+- The **id** is the vacancy's URL path (`/at/damia/…-engineer`), which is the `<id>` the site itself
+  publishes: a Landing.Jobs page carries no number, so the path is the only usable identity.
+- The **company is `<author><name>`**, not part of the title: only 3 of the 56 live titles carry a
+  " - " marker and the rest are the role alone (`Analytics Engineer`, `Oracle DBA`), so nothing is
+  split on a dash - a guessed split would misread 53 of them.
+- `lj:salary` (an empty element when the posting states none), `lj:city` + `lj:country` - falling
+  back to the nested `lj:location` block - fill the salary and location a card shows. `lj:job_type`,
+  `lj:category`, `lj:remote_policy` and `lj:expires_at` are read by nobody on purpose: the card has
+  no field for them and inventing one would only put the feed's taxonomy in a prompt.
+- The description is HTML inside CDATA. It **keeps** the feed's own terms line ("At Damia (Permanent),
+  in Lisbon, Portugal / Expires at: … / Remote policy: …") and loses only the logo `<img>`, which is
+  a tag like any other: that line is the posting's terms and it grounds the tailoring prompt, unlike
+  DOU's "apply" link.
+- The **date is ISO-8601** (`2026-09-29T16:06:54Z`), not RFC-822: `policy.parse_feed_date` reads
+  both, which is what stops a whole-board feed from becoming a dump of everything still open.
+- The browser scrape has **no extractor for this site**: `extension/src/extract.js` is DOM-shaped per
+  site (Djinni's `div[id^="job-item-"]`, DOU, Greenhouse) and knows nothing about a Landing.Jobs
+  page, so the feed is currently the only way a Landing.Jobs vacancy reaches the board. Writing that
+  extractor - with the same URL path as its id - is what would let the two writers share a card.
+
 ## The age rule (what is not scraped)
 
-A feed is a window, not a stream: it keeps returning what it published weeks ago. A vacancy whose
-`<pubDate>` is older than `SCOUT_MAX_AGE_DAYS` (7) is **not scraped at all** - no card, no dedupe
-check, no Telegram message (`scout/policy.py`). Live evidence, 2026-09-28: of the 122 items the four
-configured feeds returned, **86 were older than 7 days**.
+A feed is a window, not a stream: it keeps returning what it published weeks ago. A vacancy the feed
+dated older than `SCOUT_MAX_AGE_DAYS` (14) is **not scraped at all** - no card, no dedupe check, no
+Telegram message (`scout/policy.py`). Live evidence, 2026-09-28: of the 122 items the four feeds then
+configured returned, **86 were older than the 7 days** in force at the time. 2026-09-30: of the 56
+vacancies the Landing.Jobs feed carried - its whole open board - only **4 were inside 7 days** and 11
+inside 14, which is what makes the rule load-bearing rather than a tidy-up.
 
-- The age comes from the feed's own RFC-822 date, **offset honoured**, so a site's timezone cannot
-  move a vacancy across the cutoff.
+- The age comes from the feed's own date in either standard form: RFC-822 (`<pubDate>`, the RSS
+  boards) or ISO-8601 (`<published>`, the Atom one), both read by `policy.parse_feed_date`. RFC-822's
+  offset is honoured, so a site's timezone cannot move a vacancy across the cutoff. Reading only
+  RFC-822 would make every Atom card *undated*, i.e. exempt from the rule - a whole board of old
+  postings would land on the board as new.
 - A vacancy with **no usable date is kept** and counted (`undated`): the rule judges what a feed
   said, never what it omitted - a feed that stops publishing dates must not become a silent no-op.
 - `0` disables the rule. The cutoff is `age > limit`, so a limit can never refuse everything a
@@ -158,10 +210,10 @@ configured feeds returned, **86 were older than 7 days**.
 
 | Variable | Default | Notes |
 |---|---|---|
-`SCOUT_FEEDS` | three DOU feeds (`.NET 5+`, `Engineering Manager`, `Architect`) + the Djinni search | comma-separated; each URL's **host** picks the parser and the card's slug (`scout/sources.py`), so a new site is a new URL and nothing else |
+`SCOUT_FEEDS` | three DOU feeds (`.NET 5+`, `Engineering Manager`, `Architect`) + the Djinni search + the Landing.Jobs Atom feed | comma-separated; each URL's **host** picks the parser and the card's slug (`scout/sources.py`), so a new site is a new URL and nothing else |
 `SCOUT_USER_ID` | – | **required**: a provisioned `app_users.id` (`npm run user -- add`), or the drag's message would fork a second row |
 `SCOUT_MAX_PER_RUN` | `0` (everything) | cap for a runaway feed |
-`SCOUT_MAX_AGE_DAYS` | `7` | a vacancy the feed itself dated older than this is not scraped (`0` disables the rule; a vacancy with no usable date is kept) |
+`SCOUT_MAX_AGE_DAYS` | `14` | a vacancy the feed itself dated older than this is not scraped (`0` disables the rule; a vacancy with no usable date is kept) |
 `SCOUT_NOTIFY` | `telegram` | `none` keeps the cards but sends nothing |
 `SCOUT_TELEGRAM_TOKEN` / `_CHAT_ID` | – | from the Secret, never from git |
 `SCOUT_TIMEOUT_SECONDS` | `20` | per feed |
@@ -170,7 +222,8 @@ configured feeds returned, **86 were older than 7 days**.
 ## Testing this layer
 
 `tests/test_scout.py` is hermetic: the feeds are fixtures copied from the live ones (escaped HTML,
-double-escaped entities, the utm link, the apply tail, Djinni's role-only title), the store is the
+double-escaped entities, the utm link, the apply tail, Djinni's role-only title, and the Atom feed
+whose `lj:` prefix is deliberately left unbound the way the site ships it), the store is the
 file backend, and Telegram is never called. It pins what would break silently:
 
 1. per-site parsing (the id from the link, DOU's title split, the plain-text description with both

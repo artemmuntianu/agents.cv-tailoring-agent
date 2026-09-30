@@ -4,12 +4,13 @@ The scheduled vacancy intake: `python -m scout` in the worker's image, as a **Cr
 
 What one run does (and nothing else):
 
-1. fetches every feed in `config.feeds` (three DOU ones and one Djinni one by default) and routes
-   each URL to the parser of its **host** (`scout/sources.py`), which is also what decides the
-   card's `resumes.source` slug - so adding a site is adding a feed URL;
+1. fetches every feed in `config.feeds` (three DOU ones, a Djinni one and the Landing.Jobs Atom one
+   by default) and routes each URL to the parser of its **host** (`scout/sources.py`), which is also
+   what decides the card's `resumes.source` slug - so adding a site is adding a feed URL;
 2. parses each item - role/company/location/salary, the vacancy id from the link, the
-   description as plain text (Djinni's feed carries no company/salary/location: those stay empty);
-3. refuses what the feed itself dated older than `config.maxAgeDays` (7 days; `0` disables the rule):
+   description as plain text (Djinni's feed carries no company/salary/location: those stay empty;
+   Landing.Jobs takes the company from its feed's `<author>` and the rest from its own `lj:` elements);
+3. refuses what the feed itself dated older than `config.maxAgeDays` (14 days; `0` disables the rule):
    a feed keeps returning what it published weeks ago (`scout/policy.py`);
 4. de-duplicates against the **board** (any owner, any status, refused cards included);
 5. creates one `resumes` row per new vacancy with `status = 'submitted'` - a card in the

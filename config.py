@@ -234,6 +234,10 @@ SCOUT_FEEDS = _env_csv(
         "&primary_keyword=Node.js&primary_keyword=CTO&primary_keyword=Engineering%20Manager"
         "&primary_keyword=Architect&salary=5000&exp_level=5y&employment=remote"
         "&english_level=pre&english_level=intermediate&english_level=upper",
+        # Landing.Jobs publishes **Atom**, not RSS, and its one document carries every vacancy open
+        # on the board - there is no per-keyword search to tune, which is exactly what the age rule
+        # below is for. The URL's host picks its parser and the `landing-jobs` slug.
+        "https://landing.jobs/feed",
     ],
 )
 # There is deliberately no `SCOUT_SOURCE`: a card's site slug is a property of its *feed*, not of
@@ -250,7 +254,7 @@ SCOUT_MAX_PER_RUN = _env_int("SCOUT_MAX_PER_RUN", 0)
 # posting is a dead one. A vacancy the feed itself dated further back than this is not scraped at
 # all (0 disables the rule). A vacancy whose feed carries no usable date is kept - the rule judges
 # what a feed *said*, never what it omitted (`scout/policy.py`).
-SCOUT_MAX_AGE_DAYS = _env_int("SCOUT_MAX_AGE_DAYS", 7)
+SCOUT_MAX_AGE_DAYS = _env_int("SCOUT_MAX_AGE_DAYS", 14)
 SCOUT_TIMEOUT_SECONDS = _env_int("SCOUT_TIMEOUT_SECONDS", 20)
 # `telegram` sends one message per new vacancy (scheduled sources only - a browser scrape never
 # notifies); `none` keeps the intake silent while still creating the cards.
