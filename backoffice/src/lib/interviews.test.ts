@@ -5,6 +5,7 @@ import {
   draftToRequest,
   formatInterviewAt,
   hasReachedInterviewing,
+  interviewHistoryAction,
   nextInterview,
   parseInterviewCreate,
   parseInterviewRequest,
@@ -239,5 +240,45 @@ describe('the drafts the dialogs collect', () => {
   it('formats a date for the section and survives nonsense', () => {
     expect(formatInterviewAt('2026-09-30T14:30:00.000Z')).not.toBe('');
     expect(formatInterviewAt('not a date')).toBe('not a date');
+  });
+});
+
+describe('the History line an interview write leaves (invariant 26)', () => {
+  it('names the round and when it was scheduled', () => {
+    expect(
+      interviewHistoryAction('added', {
+        scheduledAt: '2026-10-02T14:00',
+        type: 'Technical Interview',
+      }),
+    ).toBe('Interview added: Technical Interview, 2026-10-02 14:00');
+    expect(
+      interviewHistoryAction('edited', {
+        scheduledAt: '2026-10-03T09:30:00.000Z',
+        type: 'Final Interview',
+      }),
+    ).toBe('Interview edited: Final Interview, 2026-10-03 09:30');
+  });
+
+  it('stops at the round when there is no date to trust, as on a removal', () => {
+    expect(
+      interviewHistoryAction('removed', { scheduledAt: '', type: 'Management Interview' }),
+    ).toBe('Interview removed: Management Interview');
+  });
+
+  it('never lets the free-text result into an audit line', () => {
+    // `resume_interview.result` caps at 2000 characters while `resume_history.action` caps at 500,
+    // so the line carries the round and the date - the note stays in the Interviews section.
+    const line = interviewHistoryAction('edited', {
+      scheduledAt: '2026-10-02T14:00',
+      type: 'Initial Interview',
+    });
+    expect(line.length).toBeLessThan(80);
+    expect(line).not.toMatch(/went bad|became|they said/);
+  });
+
+  it('degrades instead of inventing: a missing type still reads as an interview', () => {
+    expect(interviewHistoryAction('added', { scheduledAt: '', type: '  ' })).toBe(
+      'Interview added: Interview',
+    );
   });
 });

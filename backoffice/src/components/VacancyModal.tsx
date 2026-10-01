@@ -56,9 +56,9 @@ interface VacancyModalProps {
    */
   onUploadDocx?: (jobId: string, file: File) => Promise<void>;
   /**
-   * The Interviews section's three writes. Every one of them re-reads the card, and none of
-   * them writes a history row: the list in the section *is* the interview history
-   * (`CONSTITUTION.md` invariant 26).
+   * The Interviews section's three writes. Every one of them re-reads the card, and every one
+   * leaves a History line and moves the card's clock (`recordCardActivity`) while
+   * `resume_interview` keeps the interview's own record - the `result` text lives there.
    */
   onAddInterview?: (jobId: string, interview: InterviewRequest) => Promise<void>;
   /**

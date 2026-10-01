@@ -222,8 +222,9 @@ export type InterviewType =
   | 'Final Interview';
 
 /**
- * One interview of one card (`resume_interview`). It is its own record and its own history:
- * `result` is the free text the operator writes after the call, not a `resume_history` action.
+ * One interview of one card (`resume_interview`). It is its own record - `result` is the free
+ * text the operator writes after the call - and each write from the Interviews section also
+ * leaves one `resume_history` line and moves the card's clock (invariant 26).
  */
 export interface Interview {
   /** `resume_interview.id` (bigserial). */

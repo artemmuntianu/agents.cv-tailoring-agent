@@ -62,7 +62,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/api/board.ts` | `GET` the cards |
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
 | `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the card's `➕ Add action`): a `move` history row with `from_state = to_state` |
-| `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, never a history row |
+| `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, plus one `resume_history` line and the card's clock per write (invariant 26) |
 | `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels, the application URL) - the whole set in one write, never a history row |
 | `src/pages/api/board/history/[id].ts` | `PATCH` one history line (date, actor, wording, kind, both states) · `DELETE` one - the audit trail's only corrective write, and it touches nothing else (invariant 29) |
 | `src/pages/api/processes.ts` | `GET` the internal jobs' run history (`process_runs`) for the Processes page |
@@ -370,6 +370,15 @@ to that page yet (a normal answer, not a 404).
 - **The board never writes `resumes.status`.** That column is the worker's claim and
   idempotency state (`ACTIVE_STATUSES` in `utils/db.py`); the `created` sub-state is
   *derived* from it (`tailoringFromStatus`), which is why the modal shows it read-only.
+- **A card is dated by the board's own clock.** The card payload's `updatedAt` is
+  `coalesce(resume_board.updated_at, resumes.updated_at)` (`CARD_SELECT`): the board's activity
+  field first, the worker's column only as the fallback for a card that has no board row yet. Every
+  move, *Add action*, interview write and Details save bumps it through `recordCardActivity`, so
+  the card's "updated N days ago", the modal's *Last change*, the list sort (`lib/board.ts`) and
+  the date-window filter (`lib/filters.ts`) all agree with each other *and* with the inactivity
+  sweep (`archiver/AGENTS.md`). Reading `resumes.updated_at` - the worker's step counter - made a
+  card the operator had just touched report days-old, sort below older ones and drop out of its own
+  filter (reported 2026-10-01 on `brightfin/373897`).
 - **Cards move only by hand**, and only through the dialog: a drop opens
   `ReasonDialog`, `Cancel`/Escape changes nothing, `Proceed` POSTs actor + reason.
   The writers that are not the dialog are the **intake** - the batch route and the
@@ -431,15 +440,20 @@ to that page yet (a normal answer, not a 404).
   on the calendar). The line follows the **rows**: a card whose rows were removed stops advertising a
   call while `hasReachedInterviewing` still decides whether an empty section is honest. Unreadable
   stamps say so instead of inventing a date.
-- **Interviews are their own section, outside the history.** `resume_interview` (invariant 26):
-  the section appears when the history holds a move into Interviewing *or* the card is there now
-  (`hasReachedInterviewing`), so it survives a move on to Offer and is absent for a card that
-  never got there. `➕ Add` / `✏️ Edit` / `✕ Remove` in the section, and the Move dialog's own
-  Interview section, never write a `resume_history` row; every interview write answers with the
-  re-read card, like the other mutations. The five cards that were already standing in
-  Interviewing when the table arrived had their interviews derived from History once, by
-  `scripts/backfill_interviews.sql` (the sheet had dates but no times, so those rows are at
-  midnight - the pencil in the section is the way to fix one).
+- **Interviews are their own section, and every write to them is activity.** `resume_interview`
+  (invariant 26): the section appears when the history holds a move into Interviewing *or* the card
+  is there now (`hasReachedInterviewing`), so it survives a move on to Offer and is absent for a
+  card that never got there. `➕ Add` / `✏️ Edit` / `✕ Remove` in the section (and the Move dialog's
+  own Interview section) each leave one `resume_history` line - `Interview added/edited/removed: ...`
+  from `lib/interviews.ts::interviewHistoryAction`, which carries the round and its date but never
+  the `result` (that caps at 2000 while a history `action` caps at 500) - and move the card's clock
+  through `recordCardActivity`, so the *Updated* label counts them and the sweep leaves the card
+  alone. The drop into Interviewing is the one case with a single line: its move row covers the
+  interview it seeds. Every interview write answers with the re-read card, like the other
+  mutations. The five cards that were already standing in Interviewing when the table arrived had
+  their interviews derived from History once, by `scripts/backfill_interviews.sql` (the sheet had
+  dates but no times, so those rows are at midnight - the pencil in the section is the way to fix
+  one).
 - **The card carries its own detail fields.** `resume_board.recruiter`, `salary_offered`,
   `salary_desired`, `communication_channels` (a `text[]` with a six-value CHECK) and `apply_url`
   (the page the application is finished on, http(s) only) are edited in the card's **Details**

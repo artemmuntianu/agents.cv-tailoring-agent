@@ -318,17 +318,24 @@ automation         .github/workflows/
     whose feed states no usable date is kept: the rule judges what a feed said, never what it omitted,
     so a feed that stops publishing dates cannot become a silent no-op (`scout/policy.py`).
 
-26. **Interviews are their own record, and the Interviews section *is* their history.**
+26. **Interviews are their own record, and every write to them is operator activity.**
     `resume_interview` (one row per call: `scheduled_at`, `type` - the four types are code plus
-    a DB CHECK - and the free-text `result`) is deliberately **not** historicised in
-    `resume_history`: adding, editing a date/time/type/result and removing an interview write no
-    audit row, because the list in the section is the history. What *is* audited is the move
-    into **Interviewing** (`kind='move'`), and that is also what makes the section appear
-    (`backoffice/src/lib/interviews.ts::hasReachedInterviewing`: the history has such a move, or
-    the card is in the column now) - so a card that moved on to Offer keeps its interviews and a
+    a DB CHECK - and the free-text `result`) keeps the interview itself, and the `result` is stored
+    there and nowhere else. On top of that, each of the three writes from the Interviews section -
+    add, edit, remove - leaves **one** `resume_history` line (`kind='move'` with
+    `from_state = to_state`, the column the card is in) and bumps `resume_board.updated_at`, through
+    the same `backoffice/src/lib/db.ts::recordCardActivity` the *Add action* button uses: a card
+    whose interview was just scheduled or corrected has to read as touched. (Revised 2026-10-01:
+    the write path used to keep neither, and the card's *Last change* plus its "updated N days ago"
+    label read `resumes.updated_at` - the worker's column - so a fresh interview looked days old on
+    `brightfin/373897`.) What *was* already audited is the move into **Interviewing**
+    (`kind='move'`, the action text the operator chose), and that is also what makes the section
+    appear (`backoffice/src/lib/interviews.ts::hasReachedInterviewing`: the history has such a move,
+    or the card is in the column now) - so a card that moved on to Offer keeps its interviews and a
     card that never got there has no section. The first interview can be collected by the Move
-    dialog and is inserted *in the same transaction* as the column change; an empty draft
-    inserts nothing. Rows cascade away with the card (`🗑 Remove`).
+    dialog and is inserted *in the same transaction* as the column change; that drop writes its move
+    line, so the interview it seeds adds no second one, and an empty draft inserts nothing. Rows
+    cascade away with the card (`🗑 Remove`).
 27. **The board's columns have a second, headless writer: the scheduled sweep.** `python -m
     archiver` (`archiver/`, a daily CronJob) refuses the cards in `AUTO_ARCHIVE_STAGES`
     (`applied`) whose **`resume_board.updated_at`** - the board's own activity clock, bumped by

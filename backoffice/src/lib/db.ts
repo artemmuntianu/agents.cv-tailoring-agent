@@ -4,6 +4,7 @@ import type { ActionInput } from './admin';
 import { artifactAvailability } from './artifacts';
 import type { ExistingVacancy, InsertPlan } from './ingest';
 import { isCommunicationChannel } from './details';
+import { interviewHistoryAction } from './interviews';
 import type {
   ActionRequest,
   Actor,
@@ -79,6 +80,7 @@ interface CardRow {
   docx_size_bytes: number | null;
   docx_error: string | null;
   docx_updated_at: Date | string | null;
+  board_updated_at: Date | string | null;
 }
 
 interface HistoryRow {
@@ -162,7 +164,7 @@ const CARD_SELECT = `
          r.status, r.attempts, r.revision_count, r.duration_ms, r.error,
          r.pdf_url, r.docx_path, r.created_at, r.updated_at,
          (r.description_raw is not null) as has_description,
-         coalesce(b.stage, 'scraped') as stage,
+         coalesce(b.stage, 'scraped') as stage, b.updated_at as board_updated_at,
          b.archived_at, b.archived_actor, b.archived_reason,
          b.recruiter, b.salary_offered, b.salary_desired, b.communication_channels, b.apply_url,
          c.status as cover_status, c.text as cover_text, c.error as cover_error,
@@ -224,7 +226,14 @@ function toCard(
     pdfUrl: row.pdf_url,
     docxPath: row.docx_path,
     createdAt: toIso(row.created_at),
-    updatedAt: toIso(row.updated_at),
+    // The card is dated by the **board's** clock, not by the worker's (`resumes.updated_at`, used
+    // only when the card has no board row yet): every move, action, interview write and details
+    // save bumps `resume_board.updated_at`, while `resumes.updated_at` moves only when the worker
+    // finishes a step. Reading the worker's column made a card the operator had just touched
+    // report "updated 3 days ago" - and the same field feeds the list sort and the date window, so
+    // a fresh card could sort below an older one and drop out of its own filter (reported
+    // 2026-10-01 on `brightfin/373897`).
+    updatedAt: toIso(row.board_updated_at ?? row.updated_at),
     stage: row.stage as BoardCard['stage'],
     archivedAt: row.archived_at === null ? null : toIso(row.archived_at),
     archivedActor: (row.archived_actor as BoardCard['archivedActor']) ?? null,
@@ -405,22 +414,7 @@ export async function appendAction(request: ActionRequest): Promise<BoardCard | 
       return null;
     }
 
-    const current = await client.query<{ stage: string | null }>(
-      'select stage from resume_board where job_id = $1',
-      [request.jobId],
-    );
-    const stage = current.rows[0]?.stage ?? 'scraped';
-
-    await client.query(
-      `insert into resume_board (job_id, stage, updated_at) values ($1, $2, now())
-       on conflict (job_id) do update set updated_at = now()`,
-      [request.jobId, stage],
-    );
-    await client.query(
-      `insert into resume_history (job_id, actor, action, kind, from_state, to_state)
-       values ($1, $2, $3, 'move', $4, $4)`,
-      [request.jobId, request.actor, request.action, stage],
-    );
+    await recordCardActivity(client, request.jobId, request.actor, request.action);
     await recordAction(client, request.action, 'move');
     await client.query('commit');
   } catch (error) {
@@ -440,8 +434,9 @@ export async function appendAction(request: ActionRequest): Promise<BoardCard | 
  * The five fields are replaced as a set (the form sends all of them, so there is no diff to
  * merge) and `updated_at` moves with them: typing a recruiter **is** operator activity, so the
  * card surfaces in the date window and the inactivity sweep leaves it alone for another ten
- * days. No `resume_history` row - like the interviews, these are card attributes rather than a
- * funnel transition, and a History full of "salary typed" lines would bury the moves.
+ * days. Unlike an interview write - which leaves a History line as well, because scheduling a
+ * call is an event - no `resume_history` row is kept here: these are card attributes rather than
+ * an event, and a History full of "salary typed" lines would bury the moves (invariant 28).
  *
  * A card without a board row is seeded as `scraped`, exactly like the column default.
  */
@@ -510,6 +505,41 @@ async function insertInterviewRow(
     interview.result,
   ]);
   return inserted.rows[0].id;
+}
+
+/**
+ * Record one line of *operator activity* on a card: `resume_board.updated_at` moves, and one
+ * `kind = 'move'` row lands in `resume_history`, with `from_state = to_state` (the column the card
+ * is in) because this is not a funnel transition - the shape the *Add action* button, the
+ * Interviews section and the Interviews' own dialogs all use.
+ *
+ * One implementation, deliberately: this clock is what dates a card everywhere (the card's
+ * *Updated* label, `filters.ts`'s date window, `board.ts`'s sort, and the inactivity sweep), so a
+ * write that forgot it would look like a card nobody touched - the "updated 3 days ago" bug
+ * reported on 2026-10-01. `actor` is the operator's own side of the board (`Candidate`, the default
+ * the dialogs open with); `Company` is for the recruiter's side, i.e. the autos.
+ */
+async function recordCardActivity(
+  client: PoolClient,
+  jobId: string,
+  actor: string,
+  action: string,
+): Promise<void> {
+  const current = await client.query<{ stage: string | null }>(
+    'select stage from resume_board where job_id = $1',
+    [jobId],
+  );
+  const stage = current.rows[0]?.stage ?? 'scraped';
+  await client.query(
+    `insert into resume_board (job_id, stage, updated_at) values ($1, $2, now())
+     on conflict (job_id) do update set updated_at = now()`,
+    [jobId, stage],
+  );
+  await client.query(
+    `insert into resume_history (job_id, actor, action, kind, from_state, to_state)
+     values ($1, $2, $3, 'move', $4, $4)`,
+    [jobId, actor, action, stage],
+  );
 }
 
 /**
@@ -1342,6 +1372,16 @@ export async function insertInterview(
       return { ok: false, reason: 'unknown' };
     }
     await insertInterviewRow(client, jobId, interview);
+    // Operator activity, like every other write from the board: one History line plus the board's
+    // clock, so a card whose interview was just scheduled or corrected is dated by *that* and the
+    // inactivity sweep leaves it alone (invariant 26). The actor is `Candidate` - the operator is
+    // the one who sat the call, the same default the move dialog opens with.
+    await recordCardActivity(
+      client,
+      jobId,
+      'Candidate',
+      interviewHistoryAction('added', interview),
+    );
     await client.query('commit');
   } catch (error) {
     await client.query('rollback').catch(() => undefined);
@@ -1356,34 +1396,85 @@ export async function insertInterview(
 /**
  * Edit one interview: its date & time, its type and the `result` the operator wrote down.
  *
- * No history row and no `resume_board` touch: the interview list *is* the interview history, so
- * correcting a date is not an audited change of the application (invariant 26).
+ * `resume_interview` keeps the record (the `result` in particular); on top of that the card gets
+ * one History line and its clock moves, because correcting a round the recruiter did move *is*
+ * operator activity - a card with a fresh interview must not read as untouched (invariant 26).
  */
 export async function updateInterview(
   id: number,
   interview: InterviewRequest,
 ): Promise<InterviewWrite> {
-  const updated = await pool().query<{ job_id: string }>(
-    `update resume_interview
-        set scheduled_at = $2, type = $3, result = $4, updated_at = now()
-      where id = $1
-     returning job_id`,
-    [id, interview.scheduledAt, interview.type, interview.result],
-  );
-  const jobId = updated.rows[0]?.job_id;
-  if (!jobId) return { ok: false, reason: 'unknown' };
+  let jobId: string | undefined;
+  const client = await pool().connect();
+  try {
+    await client.query('begin');
+    const updated = await client.query<{ job_id: string }>(
+      `update resume_interview
+          set scheduled_at = $2, type = $3, result = $4, updated_at = now()
+        where id = $1
+       returning job_id`,
+      [id, interview.scheduledAt, interview.type, interview.result],
+    );
+    jobId = updated.rows[0]?.job_id;
+    if (!jobId) {
+      await client.query('rollback');
+      return { ok: false, reason: 'unknown' };
+    }
+    await recordCardActivity(
+      client,
+      jobId,
+      'Candidate',
+      interviewHistoryAction('edited', interview),
+    );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
   const card = await fetchCard(jobId);
   return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
 }
 
-/** Remove one interview. The card, its column and its history are untouched. */
+/**
+ * Remove one interview.
+ *
+ * The line carries the round but **no date**: the removed row's `scheduled_at` would have to be
+ * rendered in some timezone here, and the one the operator typed is gone with the row - a wrong
+ * clock time in an audit line is worse than none. The card, its column and its stage are
+ * untouched, and the line plus the clock bump are all that is left of the write (invariant 26).
+ */
 export async function deleteInterview(id: number): Promise<InterviewWrite> {
-  const deleted = await pool().query<{ job_id: string }>(
-    'delete from resume_interview where id = $1 returning job_id',
-    [id],
-  );
-  const jobId = deleted.rows[0]?.job_id;
-  if (!jobId) return { ok: false, reason: 'unknown' };
+  let jobId: string | undefined;
+  const client = await pool().connect();
+  try {
+    await client.query('begin');
+    const deleted = await client.query<{ job_id: string; type: string }>(
+      'delete from resume_interview where id = $1 returning job_id, type',
+      [id],
+    );
+    const row = deleted.rows[0];
+    jobId = row?.job_id;
+    if (!jobId) {
+      await client.query('rollback');
+      return { ok: false, reason: 'unknown' };
+    }
+    await recordCardActivity(
+      client,
+      jobId,
+      'Candidate',
+      interviewHistoryAction('removed', { scheduledAt: '', type: row.type }),
+    );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
   const card = await fetchCard(jobId);
   return card ? { ok: true, card } : { ok: false, reason: 'unknown' };
 }

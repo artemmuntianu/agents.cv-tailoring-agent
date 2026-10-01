@@ -5,8 +5,12 @@ import type { BoardCard, Interview, InterviewDraft, InterviewRequest, InterviewT
  * and its dialogs share.
  *
  * The four types are the same kind of vocabulary as the Actors and the columns - code plus a
- * DB CHECK (`resume_interview.type`), never editable from `/admin`. And the list itself *is*
- * the interview history: nothing here ever writes a `resume_history` row (invariant 26).
+ * DB CHECK (`resume_interview.type`), never editable from `/admin`.
+ *
+ * An interview write is **operator activity**: `resume_interview` stays the interview's own
+ * record (the `result` text lives there and nowhere else), and each of the three writes also
+ * leaves one `resume_history` line and bumps `resume_board.updated_at`, so the card's *Updated*
+ * label and the inactivity sweep count it (`CONSTITUTION.md` invariant 26, revised 2026-10-01).
  */
 
 export const INTERVIEW_TYPES: InterviewType[] = [
@@ -25,6 +29,33 @@ export const INTERVIEW_HINT: Record<InterviewType, string> = {
 
 /** Longest `result` the database accepts (`resume_interview_result_check`). */
 export const MAX_RESULT_LENGTH = 2000;
+
+/** The three interview writes, as History words them. */
+export type InterviewHistoryVerb = 'added' | 'edited' | 'removed';
+
+const INTERVIEW_HISTORY_VERB: Record<InterviewHistoryVerb, string> = {
+  added: 'Interview added',
+  edited: 'Interview edited',
+  removed: 'Interview removed',
+};
+
+/**
+ * The `resume_history.action` line one interview write leaves - pure, so the wording is unit
+ * tested instead of living in SQL.
+ *
+ * It carries the round and when it was scheduled, never the `result`: that column caps at 500
+ * characters while a `result` may hold 2000, and the *Interviews* section (with the pencil) is
+ * where the note belongs. The date is rendered stable and timezone-free - the same wall-clock
+ * the operator typed - because a History line is data, not a formatted cell.
+ */
+export function interviewHistoryAction(
+  verb: InterviewHistoryVerb,
+  interview: { scheduledAt: string; type: string },
+): string {
+  const when = String(interview.scheduledAt ?? '').replace('T', ' ').slice(0, 16);
+  const type = String(interview.type ?? '').trim() || 'Interview';
+  return `${INTERVIEW_HISTORY_VERB[verb]}: ${type}${when ? `, ${when}` : ''}`;
+}
 
 export function isInterviewType(value: unknown): value is InterviewType {
   return typeof value === 'string' && (INTERVIEW_TYPES as string[]).includes(value);
