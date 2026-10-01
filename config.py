@@ -106,6 +106,12 @@ BACKOFF_MAX_RETRIES = _env_int("BACKOFF_MAX_RETRIES", 5)
 # How many times a queue message may be redelivered before it is parked in the
 # dead-letter queue (poison-message protection).
 MAX_ATTEMPTS = _env_int("MAX_ATTEMPTS", 3)
+# How many times the tailoring answer is sent back to the model when the deterministic check finds
+# an invented metric or a technology nothing backs (`agent/verification.py::self_heal_replacements`).
+# Each retry is one extra model call, so this is a spend ceiling as much as a quality dial: the loop
+# stops at the first clean answer, and a task that never gets one still ships *without* the
+# offending replacements rather than with them.
+MAX_FABRICATION_RETRIES = _env_int("MAX_FABRICATION_RETRIES", 3)
 
 # When a model runs out of daily quota we either wait interactively (a human is
 # at the console) or hand the task back to the queue for a later retry (pod).

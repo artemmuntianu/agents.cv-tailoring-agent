@@ -1,17 +1,20 @@
 """LangGraph topology.
 
-    adapt_text ──► render ──► vision_check ──┬──► persist ──► END
+    adapt_text ──► render ──► vision_check ──┬──► verify_document ──► persist ──► END
          ▲                                   │
          └─────────── retry (max N) ─────────┘
 
-`persist` is the mandatory terminal node: it uploads the PDF/DOCX and writes the
-final status, so a graph run only completes once the artifact is durable. The
-queue message stays unacked until then.
+`verify_document` reads the produced DOCX back and fails the task if it claims anything the CV
+text and the candidate facts do not back (`agent/document_gate.py`), so nothing unbacked can reach
+`persist`. `persist` is the mandatory terminal node: it uploads the PDF/DOCX and writes the final
+status, so a graph run only completes once the artifact is durable. The queue message stays unacked
+until then.
 """
 
 from langgraph.graph import END, StateGraph
 
 import config
+from agent.document_gate import verify_document
 from agent.nodes import adapt_text, render
 from agent.persist import persist
 from agent.state import State
@@ -49,6 +52,7 @@ def create_graph():
     workflow.add_node("adapt_text", adapt_text)
     workflow.add_node("render", render)
     workflow.add_node("vision_check", vision_check)
+    workflow.add_node("verify_document", verify_document)
     workflow.add_node("persist", persist)
 
     workflow.set_entry_point("adapt_text")
@@ -57,7 +61,9 @@ def create_graph():
         "adapt_text",
         check_after_adapt,
         {
-            "persist": "persist",
+            # Even the early stop goes through the gate: "no replacements applied" still means a
+            # document is about to be uploaded.
+            "persist": "verify_document",
             "render": "render",
         },
     )
@@ -68,11 +74,12 @@ def create_graph():
         "vision_check",
         should_continue,
         {
-            "persist": "persist",
+            "persist": "verify_document",
             "adapt_text": "adapt_text",
         },
     )
 
+    workflow.add_edge("verify_document", "persist")
     workflow.add_edge("persist", END)
 
     return workflow.compile()

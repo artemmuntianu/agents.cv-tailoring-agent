@@ -146,7 +146,9 @@ automation         .github/workflows/
    dates, technologies or metrics. Two sources count as *already known*: the
    master CV text and the operator's candidate facts (invariant 31), which
    `agent/verification.py` accepts through `ground_truth=`; anything stated in
-   neither is still dropped.
+   neither is dropped. The **job description is not one of them** - it is the target
+   (invariant 33) - and detection is vocabulary *plus shape*, so a name no list
+   contains (`FastAPI`, `FastMCP`, `PyTorch`, `GPT-4`) is still checked.
 8. **Fail fast on misconfiguration.** `worker.preflight()` checks storage, DB,
    render tools and `MODEL_NAME` (against `models.list()`) before consuming. A
    wrong model id is a non-retryable 400, so it must not reach a task.
@@ -606,6 +608,23 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     refuses while a render is `running` (two clicks cannot replace the bytes a conversion is
     reading), `MAX_DOCX_UPLOAD_BYTES` is enforced on both ends, and a card that never went through
     tailoring is refused by the route *and* dead-lettered by the worker.
+
+33. **The job description is a target, never evidence.** Nothing a vacancy asks for authorises a
+    claim about the candidate: the evidence is the master CV text and the candidate facts
+    (invariants 7, 31). The tailoring answer is checked by
+    `agent/verification.py::invented_technologies` against those two sources only - the JD is passed
+    in for diagnostics ("the vacancy asks for it, which is a reason to leave it out"), never as
+    evidence - and detection runs on a curated vocabulary *plus* the shape of a name (an internal
+    capital like `FastAPI`/`FastMCP`/`PyTorch`, or a digit like `GPT-4`/`n8n`), because no list can
+    contain tomorrow's tool. Three layers enforce it: the prompt states the rule (tailoring rule 12),
+    `self_heal_replacements` hands a violating answer back with the violations spelled out up to
+    `MAX_FABRICATION_RETRIES` (3) times and keeps the best draft it saw, and whatever is still
+    offending is *dropped* - the CV keeps its own wording, so nothing unbacked reaches the file. The
+    guarantee covers the file too: the `verify_document` node (`agent/document_gate.py`, between
+    `vision_check` and `persist`) reads the produced DOCX back and **fails the task** rather than
+    upload a CV whose text claims something no evidence backs. 2026-10-01 is why all of it exists:
+    `FastAPI` and `FastMCP` shipped in a tailored CV for `851224` because the job description was one
+    of the admissible sources and neither token was in the pattern the check searched for.
 
 ## 8. When code and prose disagree
 

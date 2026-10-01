@@ -17,7 +17,7 @@ from agent.contracts import JobStatus
 from agent.job_log import job_logger, set_status
 from agent.state import State
 from agent.tailoring_prompt import build_tailoring_prompt
-from agent.verification import evaluate_fabrications
+from agent.verification import self_heal_replacements
 from utils import candidate as candidate_module
 from utils import db as db_module
 from utils.cv_replacements import drop_read_only_replacements, normalize_replacements
@@ -82,35 +82,30 @@ def adapt_text(state: State) -> State:
         for m in mod_result.modifications
     ]
 
-    # Deterministic Fabrication Verification (0% Lies Check)
+    # Deterministic Fabrication Verification (0% lies), with the bounded self-healing loop: the
+    # evidence is the CV text and the candidate facts ONLY - the job description is the target, and
+    # a technology only it asks for is dropped, never surfaced (invariants 7, 33).
     jd_text = state.get("job_description", "")
-    eval_res = evaluate_fabrications(
-        cv_text, raw_replacements, job_description=jd_text, ground_truth=candidate_digest
+    eval_res, retries = self_heal_replacements(
+        lambda retry_prompt: gemini.suggest_replacements(client, retry_prompt),
+        prompt,
+        cv_text,
+        raw_replacements,
+        job_description=jd_text,
+        ground_truth=candidate_digest,
+        max_retries=config.MAX_FABRICATION_RETRIES,
     )
-    if eval_res.violations:
-        job_log.warning(
-            "fabrications detected in initial LLM output - requesting self-healing retry",
-            lie_percentage=eval_res.lie_percentage,
-            violations=eval_res.violations,
-        )
-        retry_prompt = prompt + (
-            "\n\nCRITICAL DETERMINISTIC VERIFICATION DETECTED FABRICATIONS ('LIES') (Rule 4 violation):\n"
-            + "\n".join(f"- {v}" for v in eval_res.violations)
-            + "\n\nFix the replacements above so that NO invented metrics, altered numbers, or unlisted technologies remain. Fabrication count MUST be 0."
-        )
-        try:
-            retry_result = gemini.suggest_replacements(client, retry_prompt)
-            retry_raw = [
-                (m.original_text, m.tailored_text, getattr(m, "reason", "N/A"))
-                for m in retry_result.modifications
-            ]
-            eval_res = evaluate_fabrications(
-                cv_text, retry_raw, job_description=jd_text, ground_truth=candidate_digest
-            )
-        except Exception as retry_err:  # noqa: BLE001
-            job_log.warning("self-healing fabrication retry failed", error=str(retry_err))
 
-    # Strict Guarantee: Filter out any remaining replacements that contain fabrications (0% lies)
+    # Strict Guarantee: whatever the loop could not talk the model out of is dropped here, so the
+    # document keeps the CV's own wording instead of a claim nothing backs.
+    if eval_res.violations:
+        job_log.error(
+            "self-healing exhausted - dropping the offending replacements",
+            retries=retries,
+            dropped=len(eval_res.violations),
+            kept=len(eval_res.clean_replacements),
+            violations=eval_res.violations[:5],
+        )
     clean_raw_replacements = [
         (item.original_text, item.tailored_text, getattr(item, "reason", "N/A"))
         if hasattr(item, "original_text")
@@ -119,8 +114,8 @@ def adapt_text(state: State) -> State:
     ]
     job_log.info(
         "deterministic fabrication verification complete",
-        initial_lies=len(eval_res.violations),
-        final_lie_percentage=0.0 if not eval_res.violations else eval_res.lie_percentage,
+        retries=retries,
+        remaining_lies=len(eval_res.violations),
         retained_replacements=len(clean_raw_replacements),
     )
 

@@ -24,7 +24,10 @@ SAMPLE_CV_DATA = {
     "summary": "Engineer with 10 years building desktop and web applications.",
     "skills": {
         "Languages": "C#, SQL, JavaScript",
-        "Platforms": "Windows, Docker",
+        # Azure is here because the fixture's tailored summary and the sample JD both name it: a
+        # claim only the *vacancy* makes is no longer admissible (invariants 7, 33), so the sample
+        # CV has to back it for the pipeline test to mean "a clean tailoring run".
+        "Platforms": "Windows, Docker, Azure",
     },
     "professional_experience": [
         {
