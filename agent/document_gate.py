@@ -5,15 +5,16 @@ reads the DOCX that was actually written - every paragraph of it - and runs the 
 whole thing, so a claim that reached the file by any other route (a stray paragraph, a section the
 prompt never listed, text no grader looked at) cannot be uploaded.
 
-It sits between `vision_check` and `persist` for that reason: `persist` is what makes an artifact
-durable, and a document claiming a technology the CV text and the candidate facts do not state must
-never become one. The task **fails loudly** instead - the operator sees the exact claim, which is
-the only honest answer when the alternative is a CV that lies about the candidate.
+It runs **facts before pixels**: straight after `adapt_text` has written the replacements into the
+DOCX and before `render`/`vision_check` - a document that claims something no evidence backs fails
+here, so it never costs a LibreOffice conversion or a vision call, and it never occupies the
+reviewer's time as a rendered PDF. The vision retry loop comes back through `adapt_text`, so every
+revision is re-checked by this node before it is rendered.
 
-2026-10-01 is why this node exists: `FastAPI` and `FastMCP` reached a delivered CV because the job
+It exists because of 2026-10-01: `FastAPI` and `FastMCP` reached a delivered CV because the job
 description was treated as evidence and neither token was in the vocabulary the check looked for.
-Both are fixed in `verification.py`; this node is what makes the guarantee hold for the file rather
-than for the patch list.
+Both faults are fixed in `verification.py`; this node is what makes the guarantee hold for the file
+rather than for the patch list.
 """
 
 import os

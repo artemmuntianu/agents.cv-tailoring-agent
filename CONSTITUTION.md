@@ -620,9 +620,12 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     `self_heal_replacements` hands a violating answer back with the violations spelled out up to
     `MAX_FABRICATION_RETRIES` (3) times and keeps the best draft it saw, and whatever is still
     offending is *dropped* - the CV keeps its own wording, so nothing unbacked reaches the file. The
-    guarantee covers the file too: the `verify_document` node (`agent/document_gate.py`, between
-    `vision_check` and `persist`) reads the produced DOCX back and **fails the task** rather than
-    upload a CV whose text claims something no evidence backs. 2026-10-01 is why all of it exists:
+    guarantee covers the file too: the `verify_document` node (`agent/document_gate.py`) reads the
+    produced DOCX back and **fails the task** rather than upload a CV whose text claims something no
+    evidence backs. It runs **before the visual check** - straight after `adapt_text`, ahead of
+    `render`/`vision_check` - so a lying document costs nothing to reject and never occupies the
+    renderer or the vision model, and each pass of the vision retry loop re-verifies because the
+    loop comes back through `adapt_text`. 2026-10-01 is why all of it exists:
     `FastAPI` and `FastMCP` shipped in a tailored CV for `851224` because the job description was one
     of the admissible sources and neither token was in the pattern the check searched for.
 
