@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { STAGES } from '../lib/stages';
 import type { StageId } from '../lib/types';
 
-/** The three pages this panel links to - the only thing it knows about routing. */
-export type NavSection = 'board' | 'processes' | 'vocabularies';
+/** The four pages this panel links to - the only thing it knows about routing. */
+export type NavSection = 'board' | 'sources' | 'processes' | 'vocabularies';
 
 interface NavBarProps {
   /** Which of the three the page being rendered is; it decides the highlighted item. */
@@ -160,6 +160,25 @@ export default function NavBar({
               {!collapsed && (
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
                   run log
+                </span>
+              )}
+            </a>
+          </li>
+
+          <li>
+            <a
+              href="/sources"
+              className={itemClass(collapsed, active === 'sources')}
+              title={collapsed ? 'Sources of truth' : undefined}
+              aria-current={active === 'sources' ? 'page' : undefined}
+            >
+              <span className="flex items-center gap-2">
+                <span aria-hidden>🧭</span>
+                {!collapsed && <span>Sources of truth</span>}
+              </span>
+              {!collapsed && (
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                  read-only
                 </span>
               )}
             </a>
