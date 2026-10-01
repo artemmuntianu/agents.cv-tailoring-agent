@@ -31,7 +31,7 @@ def store():
         with conn.cursor() as cur:
             cur.execute(
                 "drop table if exists resume_interview, process_runs, resume_application, "
-                "resume_cover_letter, resume_history, resume_board, resumes, "
+                "resume_cover_letter, resume_docx_update, resume_history, resume_board, resumes, "
                 "application_profile, app_users, board_actions, artifact_purge, "
                 "model_availability, app_settings"
             )
@@ -43,7 +43,7 @@ def store():
         with conn.cursor() as cur:
             cur.execute(
                 "drop table if exists resume_interview, process_runs, resume_application, "
-                "resume_cover_letter, resume_history, resume_board, resumes, "
+                "resume_cover_letter, resume_docx_update, resume_history, resume_board, resumes, "
                 "application_profile, app_users, board_actions, artifact_purge, "
                 "model_availability, app_settings"
             )
@@ -621,7 +621,7 @@ def test_a_legacy_database_is_migrated_to_the_source_and_scraped_vocabulary(stor
         with conn.cursor() as cur:
             cur.execute(
                 "drop table if exists resume_interview, process_runs, resume_application, "
-                "resume_cover_letter, resume_history, resume_board, resumes, "
+                "resume_cover_letter, resume_docx_update, resume_history, resume_board, resumes, "
                 "application_profile, app_users, board_actions, artifact_purge, "
                 "model_availability, app_settings"
             )

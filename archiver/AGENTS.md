@@ -58,6 +58,20 @@ restore and recorded action (the card's `➕ Add action` button included). `resu
 is deliberately **not** used: the worker writes status changes there, so a tailoring run would
 look like operator activity and a card could stay in Applied forever.
 
+**A board write that is not an operator action has to back-date this column.** The 2026-09-26
+spreadsheet import wrote `resume_board` rows directly and left `updated_at` on its `now()`
+default, so nine cards in `applied` got a fresh ten-day clock: the sweep ran, honestly found
+`candidates: 0`, and cards silent since 2026-09-18 stayed where they were - which reads like an
+archiver bug and is not one. `scripts/backdate_imported_clocks.sql` is the repair (it back-dates
+exactly the import-only cards), and the same rule applies to any future import or backfill: an
+import reconstructs history, it does not touch cards.
+
+Diagnose from the evidence, in this order: the ledger row (`process_runs`, `candidates`/`refused`/
+`failed` - a sweep that ran with nothing to do looks exactly like a sweep that is broken, except
+for its row), then `select updated_at, stage, archived_at from resume_board where job_id = ...`,
+then the card's `resume_history.at`. Never widen `AUTO_ARCHIVE_AFTER_DAYS` to make a stale card
+match, and never date by `resumes.updated_at`.
+
 The `archiver` is the second writer of the board's tables besides the backoffice, and the only
 one without a human behind it; it keeps the same transaction shape the board's own archive route
 uses (`utils/db.py::PostgresDb.archive_card`): archive columns together, one `kind='archive'`
