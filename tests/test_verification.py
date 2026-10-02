@@ -230,6 +230,31 @@ def test_the_document_gate_judges_the_file_not_the_patch_list():
     assert all("produced document" in v for v in violations)
 
 
+def test_a_name_and_a_heading_are_never_technology_claims():
+    """Live 2026-10-02: the gate rejected a real CV for `ARTEM`, `BLOGS` and `EDUCATION`.
+
+    Consecutive capitals satisfy the "internal capital" shape test, so an ALL-CAPS word with no
+    digit is excluded - it is a name or a heading, and acronyms live in the curated vocabulary.
+    """
+    document = "ARTEM MUNTIANU\nSUMMARY\nEngineer.\nBLOGS\nEDUCATION\nUniversity of Nowhere."
+    assert invented_technologies(document, SAMPLE_CV) == []
+
+
+def test_the_gate_reads_the_master_document_as_evidence():
+    """The produced file is the master CV plus the replacements, so its own words back them."""
+    master = "ARTEM MUNTIANU\nBLOGS\nPython, FastAPI\nEDUCATION\nSome university"
+
+    # Nothing was added: no violations, even though the CV *model* text lacks the name, the
+    # headings and FastAPI.
+    assert scan_document_for_fabrications(master, SAMPLE_CV, "", master_text=master) == []
+
+    # A claim the master does not carry is still refused.
+    added = master + "\nFastMCP and Snowflake pipelines."
+    violations = scan_document_for_fabrications(added, SAMPLE_CV, "", master_text=master)
+    assert any("FASTMCP" in v for v in violations)
+    assert any("SNOWFLAKE" in v for v in violations)
+
+
 # --- the bounded self-healing loop ------------------------------------------- #
 
 

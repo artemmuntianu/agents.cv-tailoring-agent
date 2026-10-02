@@ -156,12 +156,21 @@ def extract_tech_keywords(text: str) -> set[str]:
     """Every technology *claim* in `text`: the curated vocabulary plus the shape detector.
 
     Upper-cased, so a violation names the token the way the document shows it.
+
+    An ALL-CAPS word with no digit is **not** a claim by shape: it is a name or a heading
+    (`ARTEM`, `BLOGS`, `EDUCATION` - found live on 2026-10-02, when the gate rejected a real CV for
+    its own name). Consecutive capitals satisfy the "internal capital" test, so that class is
+    excluded here and read only through the vocabulary, where `MCP`, `RAG`, `LLM` and friends live
+    with a one-line escape hatch when a false positive shows up.
     """
     claims = {name for name in TECH_VOCABULARY if mentions_technology(text, name)}
     for token in SHAPE_PATTERN.findall(text or ""):
         lowered = token.lower()
-        if lowered not in NOT_TECH:
-            claims.add(lowered)
+        if lowered in NOT_TECH:
+            continue
+        if token.isupper() and not any(character.isdigit() for character in token):
+            continue
+        claims.add(lowered)
     return {claim.upper() for claim in claims}
 
 
@@ -281,7 +290,7 @@ def evaluate_fabrications(
 
 
 def scan_document_for_fabrications(
-    document_text: str, cv_text: str, ground_truth: str = ""
+    document_text: str, cv_text: str, ground_truth: str = "", master_text: str = ""
 ) -> list[str]:
     """Check a *finished* document the way a replacement is checked - the last line of defence.
 
@@ -289,11 +298,18 @@ def scan_document_for_fabrications(
     actually says, so a claim that reached the DOCX by any other route is caught as well. The
     `verify_document` node calls it and **fails the task** rather than upload a document with a
     claim nothing can back.
+
+    `master_text` is the master document's own text and it matters: the produced file is that
+    document plus the replacements, so anything the *master* already says (the name line, the
+    `BLOGS` / `EDUCATION` headings, a company) is evidenced by definition. Passing only `cv_text`
+    - the prompt's view of the CV model, which leaves those pieces out - flagged a real CV for its
+    own name on 2026-10-02.
     """
+    evidence = (cv_text, ground_truth, master_text)
     violations = [f"Unlisted technology claim '{tech}' in the produced document "
                   "(absent from the CV text and the candidate facts)"
-                  for tech in invented_technologies(document_text, cv_text, ground_truth)]
-    evidenced_numbers = extract_numbers(cv_text)
+                  for tech in invented_technologies(document_text, *evidence)]
+    evidenced_numbers = extract_numbers(cv_text) | extract_numbers(master_text)
     facts = _normalize_text(ground_truth)
     for number in sorted(extract_numbers(document_text)):
         if number not in evidenced_numbers and number not in facts:

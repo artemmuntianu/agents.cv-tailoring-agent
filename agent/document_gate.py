@@ -55,8 +55,15 @@ def verify_document(state: State) -> State:
     cv_data = state.get("cv_data") or load_cv_data()
     cv_text = extract_doc_text(cv_data)
 
-    # The evidence is read here rather than carried in the state on purpose: this node must not be
-    # foolable by a state that forgot to pass it. Same source as `adapt_text` uses.
+    # The evidence for a *document* comparison is the document that was there before: the master
+    # CV, read the same way the gate reads the result. `cv_data`'s text is the prompt's view and
+    # leaves out pieces the file carries (the name line, the BLOGS / EDUCATION headings), so
+    # judging the produced file against it alone flagged a real CV for its own name (2026-10-02).
+    master_path = state.get("cv_path") or ""
+    master_text = read_docx_text(master_path) if master_path and os.path.exists(master_path) else ""
+
+    # The candidate facts are read here rather than carried in the state on purpose: this node must
+    # not be foolable by a state that forgot to pass them. Same source as `adapt_text` uses.
     try:
         facts = candidate_module.load(db_module.get_db(), state.get("user_id"))
     except Exception as exc:  # noqa: BLE001 - a missing profile must never fail a run
@@ -65,7 +72,9 @@ def verify_document(state: State) -> State:
     digest = candidate_module.digest(facts) if facts else ""
 
     document_text = read_docx_text(document_path)
-    violations = scan_document_for_fabrications(document_text, cv_text, digest)
+    violations = scan_document_for_fabrications(
+        document_text, cv_text, digest, master_text=master_text
+    )
     if violations:
         job_log.error(
             "the produced document claims something the evidence does not back",
