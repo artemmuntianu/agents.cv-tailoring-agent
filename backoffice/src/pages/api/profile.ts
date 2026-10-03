@@ -7,9 +7,10 @@ export const prerender = false;
 /**
  * GET /api/profile - the candidate facts an application form is filled from.
  *
- * One `application_profile` row per operator, read by the `apply` worker to build the prompt and by
- * the extension to pre-fill its own editor: the model may use these facts and must never invent the
- * others. `facts` lists the known keys, so a client never has to hardcode them.
+ * One `application_profile` row per operator, read by every prompt through the **card's owner**
+ * (`utils/candidate.py`): the model may use these facts and must never invent the others. No
+ * extension editor writes them any more (removed 2026-10-03); `facts` lists the known keys, so a
+ * client never has to hardcode them.
  */
 export const GET: APIRoute = async ({ locals }) => {
   const session = locals.session;
@@ -31,9 +32,9 @@ export const GET: APIRoute = async ({ locals }) => {
  * in a Gemini prompt. An empty profile is a legitimate save (the operator may want to clear it); a
  * non-object body is not.
  *
- * `standing_answers` is merged rather than replaced: the extension's editor only shows the facts,
- * so leaving the key out keeps the stored question/answer set (a Save facts click must not wipe
- * it). Send an explicit `{}` to clear it.
+ * `standing_answers` is merged rather than replaced: leaving the key out keeps the stored
+ * question/answer set (a caller whose form shows only the facts must not wipe it). Send an explicit
+ * `{}` to clear it.
  */
 export const PUT: APIRoute = async ({ request, locals }) => {
   const session = locals.session;

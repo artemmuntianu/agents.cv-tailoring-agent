@@ -360,20 +360,6 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     };
   }
 
-  /** The candidate facts, edited from the popup - the same document the worker reads. */
-  async function profileGet() {
-    const result = await gatewayJson('/api/profile');
-    return result.ok ? { ok: true, ...result.body } : result;
-  }
-
-  async function profilePut(profile) {
-    const result = await gatewayJson('/api/profile', {
-      method: 'PUT',
-      body: JSON.stringify(profile || {}),
-    });
-    return result.ok ? { ok: true, ...result.body } : result;
-  }
-
   return {
     populate,
     /** The popup's ticker: which step the flow is in, and since when. */
@@ -384,7 +370,5 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     hostOf,
     formMessage,
     externalIdFromUrl,
-    profileGet,
-    profilePut,
   };
 }

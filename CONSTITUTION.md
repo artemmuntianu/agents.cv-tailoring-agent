@@ -291,9 +291,14 @@ automation         .github/workflows/
     `status = 'submitted'`, and sends one Telegram message per card. It calls no model, publishes
     no message and owns no status beyond that intake value, so a run costs nothing no matter how
     many vacancies it finds - which is also why there is no per-run limit by default
-    (`SCOUT_MAX_PER_RUN=0`). `SCOUT_USER_ID` must be a provisioned `app_users.id`, because the
-    drag publishes the **row's own** owner and a different one would make the claim insert a
-    second row. "No feed answered" exits 1: that is not an empty week, and a CronJob has to be
+    (`SCOUT_MAX_PER_RUN=0`). `SCOUT_USER_ID` must be a provisioned `app_users.id` - and
+    specifically the **operator's**, not a separate service account: every prompt is grounded in
+    the candidate facts of the card's *owner* (`candidate_module.load(store, row.user_id)`), so
+    filing scouted cards under their own account grounds them in that account's facts. That is the
+    2026-10-03 `Ukraine` bug (Djinni 851326; `scripts/reown_scout_cards.sql`), and it fits "the
+    board renders every row whatever its `user_id`". The drag publishes the **row's own** owner, so
+    a different one would also make the claim insert a second row. "No feed answered" exits 1: that
+    is not an empty week, and a CronJob has to be
     able to tell them apart. The declared queue `vacancies.parse` stays unused - the scout parses
     in-process (D12).
 
@@ -433,7 +438,7 @@ so that a change which depends on them is a conscious one.
 | D14 | `utils/db.SCHEMA_SQL` created `application_profile` (which references `app_users (id)`) **before** `app_users` | The script is applied top-down, so a *fresh* database died at `relation "app_users" does not exist` and the documented bootstrap could never work - invisible because every database in use already carried the account table from an earlier boot. The gated Postgres suite hit it as soon as its `store` fixture dropped `app_users` too; that drop list was itself stale (no `resume_application`, `application_profile`, `app_users`), so a run left dependants behind and failed its own teardown with `DependentObjectsStillExist` | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 `SCHEMA_SQL` tables (verified: 28/28 gated tests green on a database built from scratch) |
 | D15 | Fonts inside the container: the rendered PDF vs what Word shows | Carlito is metric-compatible with Calibri, so the **body** wraps and paginates exactly as Word does. It has no *Light* weight, so the master CV's heading runs (`asciiTheme="majorHAnsi"` -> Calibri Light) were rendered in **DejaVu Serif** (Serif Bold for the section headings) - a different design *and* different metrics. Verified 2026-09-29 by rendering `artifacts/input/cv.docx` inside the worker image and reading `pdffonts`, next to an A/B on that same image with the Calibri layer hidden: without it the PDF embeds `DejaVuSerif`, `DejaVuSerif-Bold`, `Carlito-Regular/Bold/Italic`, `OpenSymbol` and `LiberationMono`; with it `Calibri`, `Calibri-Bold`, `Calibri-Italic`, `Calibri-Light`, `OpenSymbol` and `LiberationMono` - Carlito and DejaVu gone entirely. `fc-match 'Calibri Light'` **on its own** reports DejaVu *Sans* (the generic fallback for a name nothing claims), which is not the face the document render picks - never treat that alone as the evidence. `Times New Roman` never appears in the master `document.xml`; only as per-script theme fallbacks, the `NormalWeb` style and a `fontTable` entry, and no serif substitute reaches the PDF | **Mitigated 2026-09-29** - `scripts/fetch-fonts.ps1` copies the genuine (licensed) Calibri family from Windows into the untracked `deploy/fonts/`, which `docker build` installs to `/usr/share/fonts/truetype/ms-calibri/` + `fc-cache -f`, so a locally built image embeds real Calibri/Calibri Light. CI builds the same Dockerfile with that directory empty (README only) and keeps the substitution on purpose - the `COPY` names the directory, not a glob, so a font-less build stays valid. The files are Microsoft-licensed: never committed and never published |
 
-| D16 | `candidate_profile.json`, named in `agent/application.py`, `agent/contracts.py`, the `apply` deployment comment and the extension's popup hint | There is no such file: the candidate facts are the `application_profile` **row** (`utils/candidate.py`, `backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` now exists as the *seed input* of `scripts/seed_profile.py`, which is what made the old wording look plausible | **Doc fixed 2026-09-29** - all four call sites name the row; the file is described as a seed |
+| D16 | `candidate_profile.json`, named in `agent/application.py`, `agent/contracts.py`, the `apply` deployment comment and the extension's popup hint (removed 2026-10-03) | There is no such file: the candidate facts are the `application_profile` **row** (`utils/candidate.py`, `backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` now exists as the *seed input* of `scripts/seed_profile.py`, which is what made the old wording look plausible | **Doc fixed 2026-09-29** - all four call sites name the row; the file is described as a seed |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -454,6 +459,12 @@ so that a change which depends on them is a conscious one.
   the gateway as `POST /api/vacancies/batch`, storage on the `cv-artifacts` PVC, and a
   poll-based live board instead of realtime WebSockets (D12). Do not reintroduce either
   provider, and do not add a signup form.
+* **The extension's candidate-facts editor.** The popup's *Candidate facts* form (name, contacts,
+  salary, availability, work rights, English level - `PUT /api/profile` from the popup) was removed
+  2026-10-03: it was a second writer keyed to whichever account the extension was signed in as, and
+  every card is grounded in its **owner's** row anyway (invariant 25). The facts have one maintenance
+  surface - the `application_profile` row, rendered by `/sources` and loaded by
+  `scripts/seed_profile.py`. Do not add a second editor inside the extension.
 * **kind / k3d / minikube support** in `scripts/local-deploy.ps1`. Docker Desktop's
   kubeadm cluster shares Docker's image store, which is what makes a locally built
   image visible to the kubelet; every other local provider keeps its own store and
@@ -592,8 +603,10 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     fabrication. It is **evidence, never document text**: no prompt may write contacts, salary,
     availability, work format, location or job-search status into the CV or the letter. Facts cap at
     `MAX_VALUE_CHARS`, standing answers at `MAX_ANSWER_CHARS` (a project deep-dive does not fit in a
-    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` merges
-    `standing_answers` so a popup save cannot wipe it.
+    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` still
+    merges `standing_answers` so a partial save cannot wipe the question/answer set. The row that
+    grounds a card is its **owner's** (invariant 25), and the extension no longer edits facts at
+    all: the one maintenance surface is this row (`/sources` renders it, `seed_profile.py` loads it).
 
 32. **The deliverable can be replaced by hand, and the PDF follows.** The operator downloads the
     tailored DOCX, verifies it, edits what the model could not, and uploads it back through the

@@ -257,10 +257,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } else if (message && message.type === 'populate') {
         const tab = await activeTab();
         sendResponse(await formWorker.populate(tab && tab.id));
-      } else if (message && message.type === 'profileGet') {
-        sendResponse(await formWorker.profileGet());
-      } else if (message && message.type === 'profilePut') {
-        sendResponse(await formWorker.profilePut(message.profile));
       } else if (message && message.type === 'cardStatus') {
         sendResponse(await cardStatus(message, tabUrl));
       } else if (message && message.type === 'scrapeCard') {

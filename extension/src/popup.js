@@ -3,23 +3,10 @@ import { phaseLabel } from './form/phases.js';
 import { describeReport } from './form/plan.js';
 
 /**
- * Popup: scrape the active tab, drive the application-form filler, edit the candidate facts.
- * No credential ever reaches this side - the worker owns the token.
+ * Popup: scrape the active tab, drive the application-form filler. No credential ever reaches this
+ * side - the worker owns the token.
  */
 const $ = (id) => document.getElementById(id);
-
-const PROFILE_FIELDS = [
-  'full_name',
-  'email',
-  'phone',
-  'location',
-  'linkedin',
-  'github',
-  'english_level',
-  'salary_expectation',
-  'availability',
-  'work_rights',
-];
 
 function send(message) {
   return new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
@@ -52,7 +39,7 @@ async function refresh() {
     ? `Signed in as ${state.user}\nGateway: ${state.gateway}`
     : 'Not signed in - use the account your administrator provisioned.';
   if (!signedIn) $('gateway').value = state.gateway;
-  if (signedIn) await Promise.all([refreshRecipe(), loadProfile()]);
+  if (signedIn) await refreshRecipe();
 }
 
 /** What the extension knows about this site: the picked form and the two pins. */
@@ -204,31 +191,6 @@ async function populate() {
   }
 }
 
-async function loadProfile() {
-  const response = await send({ type: 'profileGet' });
-  if (!response.ok) {
-    report(response.error || 'could not read the candidate facts', 'error');
-    return;
-  }
-  const facts = (response.profile && response.profile.facts) || {};
-  for (const key of PROFILE_FIELDS) $(`p_${key}`).value = facts[key] || '';
-}
-
-async function saveProfile() {
-  const facts = {};
-  for (const key of PROFILE_FIELDS) {
-    const value = $(`p_${key}`).value.trim();
-    if (value) facts[key] = value;
-  }
-  const response = await send({ type: 'profilePut', profile: { facts } });
-  if (!response.ok) return report(response.error || 'could not save the facts', 'error');
-  report(
-    'Candidate facts saved on the board. A new fact changes the form hash, so the next Populate ' +
-      'drafts the form again.',
-    'ok',
-  );
-}
-
 $('signin').addEventListener('click', signIn);
 $('scrape').addEventListener('click', scrapeAndQueue);
 $('pick').addEventListener('click', () => pick('root', 'pick'));
@@ -240,8 +202,6 @@ $('forget').addEventListener('click', async () => {
   await refreshRecipe();
   status('This site’s form recipe was forgotten.', 'ok');
 });
-$('saveProfile').addEventListener('click', saveProfile);
-$('loadProfile').addEventListener('click', loadProfile);
 $('signout').addEventListener('click', async () => {
   await send({ type: 'signOut' });
   await refresh();

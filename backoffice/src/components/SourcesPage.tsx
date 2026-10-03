@@ -188,8 +188,8 @@ export default function SourcesPage({ session }: SourcesPageProps) {
             {!facts?.present && (
               <p className="text-sm text-amber-800">
                 No facts stored for this account yet: the three prompts run with an empty facts
-                block, so nothing the CV text does not state can be surfaced. Fill it from the
-                extension's profile editor (or <code>scripts/seed_profile.py</code>).
+                block, so nothing the CV text does not state can be surfaced. Load them with{' '}
+                <code>scripts/seed_profile.py</code> - the facts have no UI editor.
               </p>
             )}
             {facts?.present && (

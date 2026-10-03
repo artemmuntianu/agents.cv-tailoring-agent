@@ -91,9 +91,10 @@ Sign in, open the vacancy, click the site's own **Apply** so the form is on the 
    behind **Attach**. Escape cancels. Optional but recommended: **Pin the letter field** and
    **Pin the resume field**, the two places the generated documents must land, chosen by you rather
    than by the model.
-2. Fill in **Candidate facts** (once): name, contacts, salary expectation, availability, work
-   rights, English level. They live in the board's `application_profile` row for your account, which
-   is what the worker reads, so they survive a browser reset.
+2. The **candidate facts** (name, contacts, salary expectation, availability, work rights, English
+   level) are not edited here: they live in the board's `application_profile` row for your account and
+   every prompt reads them. Review them on the board's **Sources of truth** page (`/sources`), and
+   load a full answer set with `scripts/seed_profile.py`.
 3. **Populate.** The extension snapshots the form, asks the board to draft it (one Gemini call, on
    the `applications.draft` queue) and writes the answers into the page: the recruiter's questions,
    the cover letter into the message field, the tailored PDF into the resume field. What it could

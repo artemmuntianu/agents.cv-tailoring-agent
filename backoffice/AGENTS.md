@@ -271,9 +271,11 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   `utils/candidate.py`, `MAX_VALUE_CHARS` per fact and `MAX_ANSWER_CHARS` per standing answer). A
   database row rather than a file, because the board runs on the host and the `apply` worker runs in
   the cluster - the shared Postgres is the only place both can see. `PUT` **merges**
-  `standing_answers`: the popup editor only shows the facts, so a Save facts click must never wipe
-  the question/answer set (send `{}` to clear it deliberately). The same row now grounds the
-  tailoring and cover-letter prompts as well (`CONSTITUTION.md` invariants 30/31).
+  `standing_answers`, so a partial caller (one whose form shows the facts but not the question/answer
+  set) cannot wipe it (send `{}` to clear it deliberately); the extension no longer calls this route -
+  its *Candidate facts* editor was removed 2026-10-03. The same row grounds the tailoring and
+  cover-letter prompts as well (`CONSTITUTION.md` invariants 25/30/31), and the row a prompt reads is
+  the **card owner's**.
 * `GET /api/cover/<job_id>` serves the generated letter to the extension, which pastes it into a
   form; the board itself keeps reading it through the card payload.
 

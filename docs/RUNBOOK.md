@@ -191,6 +191,33 @@ The worker refuses to start when preflight fails (by design — fail fast):
 | row ends `failed`/`dead_lettered` with `[Errno 13] Permission denied: '/data/output/...'` | `/data/output` is owned by root, not by the worker's uid | the `cv-files` pod chowns `/data/input` + `/data/output` to `fileManager.owner` (10001:10001) on start; redeploy with `-SkipBuild` |
 | `helm test` fails while the worker itself is healthy | the chart probe pod lacked the broker env (`RABBITMQ_HOST`, credentials) | upgrade the chart - the test hook now carries the same env as the Deployment |
 
+## Broker credentials & the management UI
+
+There is **no `guest` account**, so the management UI's `guest`/`guest` answers *Not Authorized*.
+The StatefulSet sets `load_definitions`, and RabbitMQ refuses to seed its built-in default
+vhost/user when definitions are loaded - the definitions Secret declares the one user the chart
+needs instead: `cvt` (`rabbitmqCredentials.username`), an administrator on vhost `/`. (The stock
+image would drop `guest` anyway the moment `RABBITMQ_DEFAULT_USER` is set.)
+
+The password is `rabbitmqCredentials.password` (`deploy/values/dev.yaml`: `dev-only-change-me`,
+marked dev-only - production points the same key at an externally managed Secret). `rabbitmqctl`
+is the ground truth when the values file is not at hand:
+
+```bash
+kubectl exec -it rabbitmq-0 -- rabbitmqctl list_users      # -> cvt   [administrator]
+kubectl get secret rabbitmq-credentials -o jsonpath='{.data.rabbitmq-username}' | base64 -d
+kubectl get secret rabbitmq-credentials -o jsonpath='{.data.rabbitmq-password}' | base64 -d
+```
+
+The UI itself (the same Secret also carries the whole URL, credentials included):
+
+```bash
+kubectl port-forward svc/rabbitmq 15672:15672
+# -> http://localhost:15672   user cvt, the password above, vhost "/"
+```
+
+The `$U`/`$P` in the commands below are that same user and password.
+
 ## Dead-letter queue
 
 ```bash

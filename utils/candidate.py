@@ -30,7 +30,7 @@ from utils.logging_setup import get_logger
 log = get_logger(__name__)
 
 # The facts, in the order the prompt lists them. `label` is what the model sees, so a new fact is
-# one row here (plus a line in the extension's profile editor).
+# one row here (plus the mirrored list in `backoffice/src/lib/candidate.ts`).
 FACTS: tuple[tuple[str, str], ...] = (
     ("full_name", "NAME"),
     ("email", "EMAIL"),

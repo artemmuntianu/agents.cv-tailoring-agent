@@ -55,9 +55,12 @@ rabbitmqDefinitions:
 keda:
   enabled: true
 
-# The scheduled intake. `userId` is a provisioned app_users row: create one with
-#   cd backoffice; npm run user -- add --email=scout@local --password=<generated> --name="Scout Bot"
-# and copy the id it prints (or `select id from app_users where email = 'scout@local'`).
+# The scheduled intake. `userId` must be the **operator's** `app_users` row - the account whose
+# `application_profile` row grounds every prompt. Every prompt reads the candidate facts of the
+# card's OWNER (`candidate_module.load(store, row.user_id)`), while the board never reads the owner
+# (`CARD_SELECT` does not select `user_id`; both dedupe callers are board-scoped), so a separate
+# service account silently grounded every scouted card in *that* account's facts instead of the
+# operator's (Djinni 851326, 2026-10-03). `select id from app_users where email = '<you>'`.
 cv-tailoring-scout:
   enabled: true
   image:
@@ -70,10 +73,10 @@ cv-tailoring-scout:
   schedule: "0,30 7-23 * * *"
   timeZone: Europe/Lisbon
   config:
-    # scout@local: the intake's own account, so a scouted card is visibly not yours and the
-    # drag still publishes the row's own owner (CONSTITUTION.md invariant 25). There is no
+    # The operator's own account: a scouted card must be the operator's, because the card's owner
+    # is whose candidate facts every prompt reads (CONSTITUTION.md invariant 25). There is no
     # `source` value any more: a card's site slug comes from its feed's host (`scout/sources.py`).
-    userId: u-53f18341fb2495b8
+    userId: u-03ac63cd26651373
     notify: telegram
     maxPerRun: 0
     logLevel: DEBUG

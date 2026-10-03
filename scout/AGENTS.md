@@ -211,7 +211,7 @@ inside 14, which is what makes the rule load-bearing rather than a tidy-up.
 | Variable | Default | Notes |
 |---|---|---|
 `SCOUT_FEEDS` | three DOU feeds (`.NET 5+`, `Engineering Manager`, `Architect`) + the Djinni search + the Landing.Jobs Atom feed | comma-separated; each URL's **host** picks the parser and the card's slug (`scout/sources.py`), so a new site is a new URL and nothing else |
-`SCOUT_USER_ID` | – | **required**: a provisioned `app_users.id` (`npm run user -- add`), or the drag's message would fork a second row |
+`SCOUT_USER_ID` | – | **required**: the **operator's** provisioned `app_users.id` (`npm run user -- add`). Not a separate service account: every prompt is grounded in the candidate facts of the card's *owner* (`candidate_module.load(store, row.user_id)`), so a scout-only owner would ground scouted cards in that account's facts - the 2026-10-03 `Ukraine` bug (`scripts/reown_scout_cards.sql`). The drag also publishes the row's own owner, so a different one would fork a second row |
 `SCOUT_MAX_PER_RUN` | `0` (everything) | cap for a runaway feed |
 `SCOUT_MAX_AGE_DAYS` | `14` | a vacancy the feed itself dated older than this is not scraped (`0` disables the rule; a vacancy with no usable date is kept) |
 `SCOUT_NOTIFY` | `telegram` | `none` keeps the cards but sends nothing |

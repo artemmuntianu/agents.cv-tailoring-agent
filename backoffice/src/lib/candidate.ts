@@ -90,10 +90,10 @@ export function sanitizeCandidate(raw: unknown): CandidateProfile {
 /**
  * The standing answers to store after a save.
  *
- * `standing_answers` is the one merged field: the popup's editor only shows the facts, so an
- * *absent* key means "keep what is already stored" - a click on Save facts must never wipe the
- * question/answer set - while an explicit `{}` clears it. The facts themselves stay
- * replace-wholesale, which is what empty inputs in the editor mean.
+ * `standing_answers` is the one merged field: a caller that does not send it (one whose form shows
+ * the facts but not the question/answer set) means "keep what is already stored", so a save can
+ * never wipe the recruiter answers - while an explicit `{}` clears them. The facts themselves stay
+ * replace-wholesale.
  */
 export function mergeStandingAnswers(stored: unknown, incoming: unknown): Record<string, string> {
   const replace =

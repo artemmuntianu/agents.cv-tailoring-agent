@@ -64,12 +64,12 @@ write into the page. Four rules shape it, and all four are about not guessing:
    the plan only ever says *which element* each belongs in (`cover_letter` / `resume_file`, always
    with an empty value).
 3. **A missing fact is skipped, never invented.** The prompt may use the vacancy, the candidate
-   facts (`application_profile`, edited in the popup) and the CV digest; anything else is
-   `skip` + a reason, and the review panel lists it. Nothing is submitted by the extension - not the
-   form, not a consent checkbox, not the site's own template controls. The popup sends the *facts*
-   only, which is why `PUT /api/profile` merges `standing_answers`: the recruiter answers loaded by
-   `scripts/seed_profile.py` survive a Save facts click, and the same row grounds the CV and the
-   cover letter too (`CONSTITUTION.md` invariant 31).
+   facts (`application_profile`) and the CV digest; anything else is `skip` + a reason, and the
+   review panel lists it. Nothing is submitted by the extension - not the form, not a consent
+   checkbox, not the site's own template controls. The extension does not edit the facts: they are
+   the **card owner's** row, rendered read-only on the board's `/sources` page and loaded in bulk by
+   `scripts/seed_profile.py` (the popup's *Candidate facts* editor was removed 2026-10-03), and the
+   same row grounds the CV and the cover letter too (`CONSTITUTION.md` invariants 25/31).
 4. **The card is resolved twice, never guessed.** `form/worker.js` asks the page's own vacancy id
    first (`GET /api/vacancies/status`, the same lookup the per-card buttons use), and when that
    finds nothing it asks **which card this page is** (`GET /api/vacancies/link?url=…`) - the
@@ -140,7 +140,7 @@ for `fetch` from a service worker without it).
 | `src/form/plan.js` | Pure plan plumbing: the pins overriding the model, which documents a plan needs, and the popup's report |
 | `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply, recording the phase of each step |
 | `src/form/phases.js` | The progress vocabulary: the step list and the one-line label the popup ticks through while a fill runs (pure, unit tested) |
-| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the page->card lookup (`cardForUrl`), the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `profileGet`, `profilePut`, `phase`) |
+| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the page->card lookup (`cardForUrl`), the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `phase`) |
 | `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome |
 | `README.md` | The same load-and-use steps as above, for an operator |
 

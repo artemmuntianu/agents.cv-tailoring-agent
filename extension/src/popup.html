@@ -36,8 +36,6 @@
       #report { margin-top: 8px; font-size: 12px; color: #334155; white-space: pre-wrap; max-height: 180px; overflow: auto; }
       #report.error { color: #be123c; }
       #recipe { margin: 0 0 8px; font-size: 12px; color: #475569; }
-      details { margin-top: 12px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
-      summary { cursor: pointer; font-size: 12px; color: #475569; }
       a { color: #1d4ed8; }
       .hidden { display: none; }
     </style>
@@ -76,29 +74,6 @@
       </div>
       <button id="populate">Populate</button>
       <div id="report"></div>
-
-      <details id="profileBox">
-        <summary>Candidate facts (used by the model, never invented)</summary>
-        <p class="hint">
-          Stored on the board (the <code>application_profile</code> row) so the workers can read
-          them while they draft. Contacts are not in <code>cv_data.json</code>, which is why they
-          live here. Editing them here leaves the standing answers untouched.
-        </p>
-        <label>Full name<input id="p_full_name" /></label>
-        <label>Email<input id="p_email" /></label>
-        <label>Phone<input id="p_phone" /></label>
-        <label>Location<input id="p_location" /></label>
-        <label>LinkedIn<input id="p_linkedin" /></label>
-        <label>GitHub<input id="p_github" /></label>
-        <label>English level<input id="p_english_level" placeholder="Upper-Intermediate (B2+)" /></label>
-        <label>Salary expectation<input id="p_salary_expectation" placeholder="$5000 / month" /></label>
-        <label>Availability<input id="p_availability" placeholder="30 days notice" /></label>
-        <label>Work rights<input id="p_work_rights" placeholder="Ukraine, no sponsorship needed" /></label>
-        <div class="row">
-          <button id="saveProfile">Save facts</button>
-          <button id="loadProfile" class="secondary">Reload</button>
-        </div>
-      </details>
     </div>
 
     <div id="status"></div>
