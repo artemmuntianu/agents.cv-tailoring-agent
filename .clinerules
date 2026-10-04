@@ -1,11 +1,20 @@
 # Agent Behavior & Execution Rules
 
 - **Always respond in English**, regardless of the language used in the input (the operator may write in Russian; outputs are always in English).
-- **Mandatory Tooling Use**: Agents MUST use `python tools/analyze.py` (`context`, `impact`, `syntax-check`, `validate-docs`) during feature work instead of reading entire source files or doing ad-hoc text greps.
+- **LF only.** The repo is LF-only (`.gitattributes` -> `* text=auto eol=lf`); never introduce CRLF, and keep the Python patcher's `newline=""` round-trip.
 - DO NOT rewrite an entire component or python file to make minor adjustments. Use surgical string replacements or line patches.
 - Prioritize structured, maintainable code over quick hacks.
 - Do not spend tokens generating heavy mock data fixtures unless types or data models are missing.
 - Keep components and modules modular. If a module exceeds 250 lines during an adjustment, proactively suggest breaking it down into sub-modules.
+
+# Tooling gate — run these, they are not optional
+The tools are listed in `AGENTS.md` ("Commands") and `scripts/AGENTS.md`; this section is the mandate to *actually execute* them. `ci.yml` only runs `validate-docs`, so a skipped per-edit run is silent — it is on you.
+- **Before editing any `.py` file**: `python tools/analyze.py syntax-check <file.py>` (instant AST parse) so a syntax error never reaches a write.
+- **To understand a module**: `python tools/analyze.py context <file.py>` / `outline <file.py>` — do NOT read whole source files and do NOT use ad-hoc text greps for this.
+- **To answer "who references X?"**: `python tools/analyze.py impact <file.py>`; keep `git grep -n` only as the fallback when the tool has no answer.
+- **After changing any layer doc** (`<layer>/AGENTS.md`, `AGENTS.md`, `CONSTITUTION.md`): `python tools/analyze.py validate-docs` (the architecture map must still resolve; CI enforces this one).
+- **Operator/infrastructure work goes through `./scripts`**: run `.\scripts\local-deploy.ps1`, `storage-files.ps1`, `send-test-job.ps1`, `worker-secret.ps1`, `fetch-fonts.ps1`, `scripts/check_models.py --strict` etc. instead of re-implementing their logic with raw `kubectl`/`helm`/`docker` — each script encodes a failure that already happened once (`scripts/AGENTS.md`).
+- Name the gate commands you ran in your completion summary.
 
 # Shell (Windows PowerShell 5.1) — read `AGENTS.md` for full details
 - Chaining two commands with `&` or `&&` is a parse error here. **Only `;`** is valid as a separator.

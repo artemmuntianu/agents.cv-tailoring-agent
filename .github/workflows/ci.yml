@@ -41,6 +41,12 @@ jobs:
       - name: Ruff
         run: python -m ruff check .
 
+      - name: Layer docs (analyze.py)
+        # .clinerules "Tooling gate": validate-docs checks that every reference in
+        # the architecture maps resolves. analyze.py is a real file in CI - tools/
+        # is a junction only on the dev machine (AGENTS.md trap 16).
+        run: python tools/analyze.py validate-docs
+
       - name: Pytest
         # Postgres comes from the service container so the production-store tests
         # really run; everything else is hermetic (no network, no Gemini,

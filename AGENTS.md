@@ -55,11 +55,7 @@ The shared agent SDK lives outside this repo:
 
 Committed reference copy is `docs/template_agents.md` (the standard). Python analysis tooling is linked via `tools/analyze.py`.
 
-**Mandatory Tooling Expectation**: Agents MUST use `python tools/analyze.py` (`context`, `impact`, `syntax-check`, `validate-docs`) during feature work instead of dumping entire source files into context or doing ad-hoc text greps:
-- `python tools/analyze.py context <file.py>`: interface & type summary (saves up to 90% tokens).
-- `python tools/analyze.py impact <file.py>`: downstream dependent file analysis.
-- `python tools/analyze.py syntax-check <file.py>`: instant AST syntax check (<20ms).
-- `python tools/analyze.py validate-docs`: layer docs compliance validation.
+**The mandate to actually run the tooling lives in `.clinerules`** ("Tooling gate") - it is loaded on every turn, unlike this map. `python tools/analyze.py` is the repo's type/structure CLI (`context`, `impact`, `outline`, `syntax-check`, `validate-docs`).
 
 ## Commands
 
@@ -72,6 +68,7 @@ python -m pytest -q                      # hermetic: no network, no Gemini, no L
 python -m ruff check .                   # lint; must stay clean
 python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the junction (trap 16)
 
+python tools/analyze.py validate-docs    # architecture-map references must resolve
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
 python -m scout --dry-run                # what the scheduled intake would add (writes nothing)
 python -m archiver --dry-run             # what the inactivity sweep would refuse (writes nothing)
@@ -142,27 +139,33 @@ must be green.
 
 ## Shared analysis tooling
 
-There is no type-aware Python CLI in this repo, and the SDK's `analyze.mjs` is
-TypeScript-only (see above). Instead:
+The repo's type/structure CLI is `python tools/analyze.py` (tracked, reached
+through the `tools/` junction - trap 16). The SDK's `analyze.mjs` is
+TypeScript-only and does not apply here.
 
+- `python tools/analyze.py context|outline <file.py>` for a module's interface;
+- `python tools/analyze.py impact <file.py>` for "who references X?";
+- `python tools/analyze.py syntax-check <file.py>` before editing, and
+  `validate-docs` after touching a layer doc;
 - `python -m pytest -q` + `python -m ruff check .` for behaviour and lint;
-- `git grep -n "<symbol>"` for "who references X?" - cheap and honest, but it also
-  matches comments and strings, so confirm each hit;
-- `python -c "..."` with `ast` when a structural view of a module is needed;
-- module docstrings and `python -m pydoc <module>` for the intended contract.
+- `git grep -n "<symbol>"` only as a fallback when the tool has no answer - cheap
+  and honest, but it also matches comments and strings, so confirm each hit.
 
-Do not add a dependency just to answer a reference/dead-code question.
+Whether and when to run these is enforced in `.clinerules` ("Tooling gate"); do
+not add a dependency just to answer a reference/dead-code question.
 
 
 ## Known environment traps (do NOT re-investigate)
 
-1. **CRLF + the editor's replace path.** Some files are CRLF and others LF, so an
-   exact-match multi-line replacement can silently miss. Worse, the editor's
-   replace path substitutes a dollar sign that is immediately followed by a
-   single quote or by a backtick - in this repo that already truncated edits and
-   duplicated a whole document. For large or dollar-sign-heavy edits use a small
-   Python patcher that reads with `newline=""`, asserts the anchor appears
-   exactly once, writes back with the same newlines, then AST-parses the result.
+1. **The editor's replace path mangles dollar-quoted text.** It substitutes a
+   dollar sign that is immediately followed by a single quote or by a backtick -
+   in this repo that already truncated edits and duplicated a whole document. For
+   large or dollar-sign-heavy edits use a small Python patcher that reads with
+   `newline=""`, asserts the anchor appears exactly once, writes back with the
+   same newlines, then AST-parses the result. Line endings are no longer a hazard:
+   the repo is LF-only now - `.gitattributes` sets `* text=auto eol=lf`, which also
+   overrides the system-level `core.autocrlf=true` that used to rewrite 276
+   tracked files to CRLF and made exact-match replacements silently miss.
 2. **`model_state.json` is tracked but rewritten at runtime.** Run
    `git checkout -- model_state.json` after local test/CLI runs to keep the tree clean.
 3. **Bitnami is dead.** `charts.bitnami.com` now redirects to `repo.broadcom.com`
@@ -277,6 +280,8 @@ Do not add a dependency just to answer a reference/dead-code question.
 
 - **Output language**: always respond in English, even if the user writes in
   another language.
+- **Line endings are LF everywhere.** `.gitattributes` -> `* text=auto eol=lf`
+  (`.editorconfig` makes editors agree); never commit CRLF.
 - Provider-specific code sits behind an **env-selected backend plus a `get_*()`
   factory with a matching `reset_*_cache()` test hook** (`utils/`). Follow that
   pattern for anything new instead of branching on the backend at call sites.

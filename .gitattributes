@@ -1,0 +1,18 @@
+# LF-only repository. `text=auto` lets git detect binaries; `eol=lf` forces LF
+# in the working tree on every platform. `eol=lf` also overrides a system-level
+# core.autocrlf=true - which is what had turned 276 tracked files into CRLF.
+* text=auto eol=lf
+
+# Explicit binaries: listed so a future attribute change cannot normalise them.
+*.docx  binary
+*.pdf   binary
+*.ttf   binary
+*.otf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.zip   binary

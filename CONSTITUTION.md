@@ -414,6 +414,12 @@ automation         .github/workflows/
     `resume_interview` rows stay where they are. The `/admin` vocabulary surface still never
     rewrites history - only the operator's own pencil does.
 
+30. **The repo is LF-only.** `.gitattributes` (`* text=auto eol=lf`) stores *and*
+    checks out every text file with LF - it overrides a system-level
+    `core.autocrlf=true`, which had rewritten 276 tracked files to CRLF and made
+    exact-match edits silently miss. After changing line-ending attributes,
+    renormalise with `git add --renormalize .` then `git checkout-index -f -a`.
+
 ## 5. Known discrepancies, dead code and legacy paths
 
 These were verified against the working tree on 2026-09-19. They are **not**
