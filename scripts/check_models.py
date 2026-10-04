@@ -18,8 +18,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+# The worker app lives under apps/worker after the monorepo move; its
+# packages (config, agent, utils) are importable only from there.
+APP_ROOT = os.path.join(REPO_ROOT, "apps", "worker")
+if APP_ROOT not in sys.path:
+    sys.path.insert(0, APP_ROOT)
 
 import config  # noqa: E402
 from agent import gemini  # noqa: E402

@@ -17,7 +17,7 @@ Turns a job description into a CV tailored for it, as **DOCX + PDF**, using:
 
 | Concern | Technology |
 |---|---|
-| Orchestration | LangGraph (`agent/graph.py`) |
+| Orchestration | LangGraph (`apps/worker/agent/graph.py`) |
 | LLM (the only external call) | Google Gemini (`google-genai`) |
 | Document surgery | `python-docx` (AST/XML mutation) |
 | Rendering | LibreOffice (`soffice`) to poppler (`pdftoppm`) |
@@ -65,7 +65,7 @@ the extension (a "Populate" click)  --> RabbitMQ (applications.draft)
                     resume_application (the plan: which field gets what) + application_profile
 
 the scout (CronJob, twice an hour)  --> resumes rows (cards in the board's "Scraped")
-        (+ once per deploy: the startup hook Job, `chart: charts/cv-tailoring-scout`)
+        (+ once per deploy: the startup hook Job, `chart: infra/charts/cv-tailoring-scout`)
 the archiver (CronJob, once a day)  --> resume_board + resume_history (the Applied cards
                                        nobody touched for 10 days are refused *in place*)
           both write one row per run to process_runs -> the board's "Processes" window
@@ -73,7 +73,7 @@ the archiver (CronJob, once a day)  --> resume_board + resume_history (the Appli
 
 ## 2. One way to run the pipeline
 
-`agent/pipeline.py` is the **single** implementation of the flow, and there is a
+`apps/worker/agent/pipeline.py` is the **single** implementation of the flow, and there is a
 single supported runtime: the **local Kubernetes cluster** installed by
 `.\scripts\local-deploy.ps1` (Docker Desktop on the dev machine), where `worker.py`
 consumes the RabbitMQ queue inside a pod. Queue = amqp, DB = postgres, model state =
@@ -87,42 +87,42 @@ always local (section 5, D1).
 ## 3. Layer map and dependency direction
 
 ```
-entry points        worker.py · publisher.py · healthcheck.py
+entry points        apps/worker/worker.py · publisher.py · healthcheck.py
       |                     |
       v                     v
-orchestration      agent/   (state, contracts, models, tailoring_prompt,
+orchestration      apps/worker/agent/   (state, contracts, models, tailoring_prompt,
       |                      application_prompt, gemini, nodes, vision, persist,
       |                      graph, pipeline)
       |
       v
-adapters/infra     utils/   (messaging, db, storage, model_state, retry, cv_text,
+adapters/infra     apps/worker/utils/   (messaging, db, storage, model_state, retry, cv_text,
       |                      cv_replacements, docx_mutator, renderer, logging_setup)
       v
-config             config.py   (env parsing only; imports no provider SDK)
+config             apps/worker/config.py   (env parsing only; imports no provider SDK)
 
-deployment         charts/ · deploy/values/ · Dockerfile
+deployment         infra/charts/ · infra/deploy/values/ · apps/worker/Dockerfile
 operator tooling   scripts/ · Makefile
-verification       tests/
+verification       apps/worker/tests/
 documentation      docs/ · README.md
-backoffice         backoffice/  (Astro+React kanban UI + the authenticated batch gateway;
+backoffice         apps/backoffice/  (Astro+React kanban UI + the authenticated batch gateway;
                                  shares the worker's Postgres)
-scraper            extension/   (Chrome MV3 scraper -> backoffice gateway -> queue)
-scheduled jobs     scout/ · archiver/   (CronJobs on the worker's image; the scout's chart also runs
-                                 it once per deploy as a Helm hook Job; each records its run
-                                 in process_runs - `utils/process_runs.py` is the ledger)
+scraper            apps/extension/   (Chrome MV3 scraper -> backoffice gateway -> queue)
+scheduled jobs     apps/worker/scout/ · apps/worker/archiver/   (CronJobs on the worker's image;
+                                 the scout's chart also runs it once per deploy as a Helm hook Job;
+                                 each records its run in process_runs - `apps/worker/utils/process_runs.py` is the ledger)
 automation         .github/workflows/
 ```
 
-**Direction invariant:** `agent/` may import `utils/` and `config`; `utils/` must
-**never** import `agent/`. `config.py` imports nothing from this project.
+**Direction invariant:** `apps/worker/agent/` may import `apps/worker/utils/` and `config`; `apps/worker/utils/` must
+**never** import `apps/worker/agent/`. `config.py` imports nothing from this project.
 
 ## 4. Invariants (do not break these silently)
 
-1. **One pipeline.** `agent/pipeline.run_cv_tailoring()` / `run_task()` are the
+1. **One pipeline.** `apps/worker/agent/pipeline.run_cv_tailoring()` / `run_task()` are the
    only ways to run the graph; `worker.py` calls them (and so do the tests).
 2. **Ack only after `persist`.** The queue message is acknowledged after the
    artifact is stored *and* the DB row is written, so a crash/OOM/scale-down
-   simply redelivers the message (`worker.handle_delivery`, `agent/nodes.persist`).
+   simply redelivers the message (`worker.handle_delivery`, `apps/worker/agent/nodes.persist`).
 3. **Idempotency.** Business key `coalesce(user_id,'local') : external_id :
    cv_version`, enforced by the unique index `resumes_job_key_idx`. A duplicate
    delivery must never pay for Gemini twice.
@@ -145,7 +145,7 @@ automation         .github/workflows/
    re-weight only what is already on the CV - no invented employers, titles,
    dates, technologies or metrics. Two sources count as *already known*: the
    master CV text and the operator's candidate facts (invariant 31), which
-   `agent/verification.py` accepts through `ground_truth=`; anything stated in
+   `apps/worker/agent/verification.py` accepts through `ground_truth=`; anything stated in
    neither is dropped. The **job description is not one of them** - it is the target
    (invariant 33) - and detection is vocabulary *plus shape*, so a name no list
    contains (`FastAPI`, `FastMCP`, `PyTorch`, `GPT-4`) is still checked.
@@ -158,20 +158,20 @@ automation         .github/workflows/
     in-flight task finishes and is acked before the process exits.
 11. **State is a flat, fully-populated TypedDict.** `initial_state()` fills every
     key so nodes may read without `KeyError`.
-12. **Gemini calls are decorated.** Every call helper in `agent/gemini.py` (the
+12. **Gemini calls are decorated.** Every call helper in `apps/worker/agent/gemini.py` (the
     only module that builds a client) goes through `retry_with_exponential_backoff`
     (429/503 backoff, model fallback ladder, daily-quota handling); the prompts
-    live with their own layers (`agent/tailoring_prompt.py`, `agent/cover.py`,
-    `agent/application.py`).
+    live with their own layers (`apps/worker/agent/tailoring_prompt.py`, `apps/worker/agent/cover.py`,
+    `apps/worker/agent/application.py`).
 13. **Secrets never live in git.** `.env` is gitignored; charts use
     `existingSecret`; `scripts/worker-secret.ps1` creates the Secret.
 14. **`helm lint`/`helm template` are not enough.** Render and validate with
     `kubeconform` before trusting a chart change (see section 5, D8).
 15. **No public signup, ever.** Backoffice accounts exist only because an
-    administrator provisioned them (`backoffice/scripts/user.mjs`); the UI
+    administrator provisioned them (`apps/backoffice/scripts/user.mjs`); the UI
     authenticates and never creates. A session is an HS256 token (cookie for the
     browser, `Authorization: Bearer` for the extension) signed with
-    `BACKOFFICE_JWT_SECRET`, and `backoffice/src/middleware.ts` is the only gate.
+    `BACKOFFICE_JWT_SECRET`, and `apps/backoffice/src/middleware.ts` is the only gate.
 16. **The batch route validates and creates cards; the operator's drag publishes.**
     `POST /api/vacancies/batch` rejects anything the worker could not consume (required
     `external_id` + `description_raw`, http(s) `source_url`, a `[a-z0-9-]{2,32}` source slug,
@@ -179,8 +179,8 @@ automation         .github/workflows/
     no broker round trip and no Gemini request. The message is published by
     `POST /api/board/move` when a card enters **Prepare**
     (`lib/board.ts::tailoringRequest` decides queue/retry/none), and it is exactly
-    `ResumeTaskMessage`; the AMQP topology in `backoffice/src/lib/queue.ts` mirrors
-    `utils/messaging.py` field for field (a mismatch is a 406 from the broker).
+    `ResumeTaskMessage`; the AMQP topology in `apps/backoffice/src/lib/queue.ts` mirrors
+    `apps/worker/utils/messaging.py` field for field (a mismatch is a 406 from the broker).
 17. **A scraped vacancy is a card immediately, and the worker's claim adopts it.** The
     intake (the batch route, and the scheduled scout) inserts the `resumes` row with
     `status = 'submitted'`; that row **is** the card, and it waits in Scraped until the
@@ -197,7 +197,7 @@ automation         .github/workflows/
     different owner would make the claim insert a second row. That is how this was found live
     on 2026-09-26.
 18. **`resumes.pdf_url` / `docx_path` are storage paths, not URLs.** They are what
-    `utils/storage.LocalStorage.upload` returned (`/data/output/848944.pdf` in the
+    `apps/worker/utils/storage.LocalStorage.upload` returned (`/data/output/848944.pdf` in the
     cluster), so nothing in a browser may link them: the board serves downloads from
     `GET /api/artifacts/<job_id>` (keyed by `job_id`, resolved against `ARTIFACTS_DIR`,
     traversal-refused) and reports "not on this machine" instead of a bare 404. **Both
@@ -235,7 +235,7 @@ automation         .github/workflows/
     shape (`isStageId`) and the tailoring sub-states are derived from the worker's statuses,
     so `/admin` renders those three from the code that defines them.
     **The vocabulary is the catalogue, and an edit is catalogue-only.** `board_actions` is
-    the whole list (`backoffice/src/lib/db.ts::fetchActionVocabulary` reads nothing else), so
+    the whole list (`apps/backoffice/src/lib/db.ts::fetchActionVocabulary` reads nothing else), so
     a removed or reworded value stops being suggested in a dialog and stops being offered as
     a filter option - there is no second, history-derived half. The words themselves are not
     touched: `resume_history` and `archived_reason` keep what they were recorded with, and
@@ -270,7 +270,7 @@ automation         .github/workflows/
     and whether it is archived (`POST /api/cover/<job_id>`). It goes to `resumes.cover`, which
     has its own worker (`cover.py`), its own DLX/DLQ and its own ScaledObject, so asking for a
     letter can never wake a tailoring pod - and the four declarers of that topology (the chart's
-    definitions, `utils/messaging.py`, `backoffice/src/lib/queue.ts`) have to agree as exactly
+    definitions, `apps/worker/utils/messaging.py`, `apps/backoffice/src/lib/queue.ts`) have to agree as exactly
     as they do for `resumes.generate`. The prompt is built from **the database's own copy** of
     the job description (`resumes.description_raw`) and the master `cv_data.json`, never from a
     copy in the message, and it forbids inventing anything the CV does not say - so the feature
@@ -285,7 +285,7 @@ automation         .github/workflows/
     is already written or on its way alone (`lib/cover.ts::coverNeeded`), because regenerating
     behind the operator's back would replace text they may have read and pay for a second call.
 
-25. **The scheduled intake creates cards and nothing else.** `python -m scout` (`scout/`)
+25. **The scheduled intake creates cards and nothing else.** `python -m scout` (`apps/worker/scout/`)
     fetches the configured feeds, de-duplicates against the **board** (`find_existing_ids`: any
     owner, any status - invariant 17), inserts one `resumes` row per new vacancy with
     `status = 'submitted'`, and sends one Telegram message per card. It calls no model, publishes
@@ -303,10 +303,10 @@ automation         .github/workflows/
     in-process (D12).
 
     **A card's site is a property of its feed, not of the run.** There is no `SCOUT_SOURCE`: one
-    module per site in `scout/parsers/` exports a `FeedSource` (slug, hosts, pure parser), the
-    registry (`scout/sources.py`) routes every fetched URL by **host**, and the slug it decides is
+    module per site in `apps/worker/scout/parsers/` exports a `FeedSource` (slug, hosts, pure parser), the
+    registry (`apps/worker/scout/sources.py`) routes every fetched URL by **host**, and the slug it decides is
     what completes the business key (`resumes_job_key_idx`) - deliberately the same slug the
-    browser scrape derives from its page URL (`extension/src/background.js::sourceForUrl`,
+    browser scrape derives from its page URL (`apps/extension/src/background.js::sourceForUrl`,
     invariant 16), so a vacancy the intake found and the same vacancy scraped by hand are one card.
     A feed no parser claims fails preflight (`collect` skips it) instead of being guessed at, and
     the suite requires a fixture for every discovered source and a parser for every configured feed
@@ -316,14 +316,14 @@ automation         .github/workflows/
     company, salary or location, so those card fields stay empty rather than being guessed), and
     Landing.Jobs publishes **Atom** - one document holding its whole open board, ISO-8601 dates, the
     company in `<author>` instead of the title, and its own `lj:` elements whose namespace the feed
-    never binds (the parser repairs that; `scout/AGENTS.md`).
+    never binds (the parser repairs that; `apps/worker/scout/AGENTS.md`).
 
     The intake also **refuses what a feed dated too long ago**: a date older than
     `SCOUT_MAX_AGE_DAYS` (14 days, `0` disables the rule) means no card, no dedupe check and no
     Telegram message, because a feed is a window and not a stream. The feed's own date is read in
     either form a feed uses - RFC-822 on the two RSS boards, ISO-8601 on the Atom one - and a vacancy
     whose feed states no usable date is kept: the rule judges what a feed said, never what it omitted,
-    so a feed that stops publishing dates cannot become a silent no-op (`scout/policy.py`).
+    so a feed that stops publishing dates cannot become a silent no-op (`apps/worker/scout/policy.py`).
 
 26. **Interviews are their own record, and every write to them is operator activity.**
     `resume_interview` (one row per call: `scheduled_at`, `type` - the four types are code plus
@@ -331,20 +331,20 @@ automation         .github/workflows/
     there and nowhere else. On top of that, each of the three writes from the Interviews section -
     add, edit, remove - leaves **one** `resume_history` line (`kind='move'` with
     `from_state = to_state`, the column the card is in) and bumps `resume_board.updated_at`, through
-    the same `backoffice/src/lib/db.ts::recordCardActivity` the *Add action* button uses: a card
+    the same `apps/backoffice/src/lib/db.ts::recordCardActivity` the *Add action* button uses: a card
     whose interview was just scheduled or corrected has to read as touched. (Revised 2026-10-01:
     the write path used to keep neither, and the card's *Last change* plus its "updated N days ago"
     label read `resumes.updated_at` - the worker's column - so a fresh interview looked days old on
     `brightfin/373897`.) What *was* already audited is the move into **Interviewing**
     (`kind='move'`, the action text the operator chose), and that is also what makes the section
-    appear (`backoffice/src/lib/interviews.ts::hasReachedInterviewing`: the history has such a move,
+    appear (`apps/backoffice/src/lib/interviews.ts::hasReachedInterviewing`: the history has such a move,
     or the card is in the column now) - so a card that moved on to Offer keeps its interviews and a
     card that never got there has no section. The first interview can be collected by the Move
     dialog and is inserted *in the same transaction* as the column change; that drop writes its move
     line, so the interview it seeds adds no second one, and an empty draft inserts nothing. Rows
     cascade away with the card (`🗑 Remove`).
 27. **The board's columns have a second, headless writer: the scheduled sweep.** `python -m
-    archiver` (`archiver/`, a daily CronJob) refuses the cards in `AUTO_ARCHIVE_STAGES`
+    archiver` (`apps/worker/archiver/`, a daily CronJob) refuses the cards in `AUTO_ARCHIVE_STAGES`
     (`applied`) whose **`resume_board.updated_at`** - the board's own activity clock, bumped by
     every move, archive, restore and recorded action - is older than `AUTO_ARCHIVE_AFTER_DAYS`
     (`10`) days. It keeps the archive invariants exactly (19, 20): the three archive columns
@@ -356,12 +356,12 @@ automation         .github/workflows/
     an action without moving it (`POST /api/board/action`: a `move` history row with
     `from_state = to_state`, no queue message - so it is not the Prepare *retry* a same-column
     move would be). Both scheduled jobs open one row per run in **`process_runs`**
-    (`utils/process_runs.py`: `feed-parser`, `auto-archiver`), which is what the board's
+    (`apps/worker/utils/process_runs.py`: `feed-parser`, `auto-archiver`), which is what the board's
     **Processes** window reads - a run that changed nothing is visible, a killed run stays
     `running` until the next run of that job retires it as `aborted`, and a `--dry-run` writes
     no row at all. A row also says *what* started the run - the column's CHECK is
     `schedule | manual | startup` - and the intake is the one job that uses the third: its
-    chart (`charts/cv-tailoring-scout`) posts the same Job once as a Helm
+    chart (`infra/charts/cv-tailoring-scout`) posts the same Job once as a Helm
     `post-install,post-upgrade` hook (`python -m scout --trigger startup`), so a deploy runs
     the intake instead of waiting up to half an hour for a slot, and a startup run that fails
     fails the release (the run is idempotent, so the next deploy or slot is free to try
@@ -387,13 +387,13 @@ automation         .github/workflows/
     Apply opens the employer's own ATS page (`job-boards.eu.greenhouse.io/growe/jobs/4987494101`).
     It lives on `resume_board` rather than `resumes` on purpose: only the click reveals the
     redirect, so it is operator data, not something a scrape can know. Both sides go through
-    `backoffice/src/lib/applyUrl.ts::normalizeApplyUrl` - written by the Details form, read by
+    `apps/backoffice/src/lib/applyUrl.ts::normalizeApplyUrl` - written by the Details form, read by
     `GET /api/vacancies/link` - which drops the fragment and the query string (`?gh_src=…` is not
     part of the vacancy's identity) and lower-cases the host, so a stored URL can actually match
     the page it came from. The DB CHECK (`resume_board_details_shape`) admits only `http(s)://…`,
     and the constraint is **widened guard-first** in `SCHEMA_SQL`: it is created `if not exists`,
     so a database that already had the four-field version is rebuilt rather than silently left
-    unguarded (`tests/test_postgres_store.py::test_the_details_constraint_is_widened_for_the_application_url`).
+    unguarded (`apps/worker/tests/test_postgres_store.py::test_the_details_constraint_is_widened_for_the_application_url`).
 
 29. **The audit trail is correctable by hand, and correcting it is not activity.** A
     `resume_history` line is written by a dialog or a job; the board's **History** section lets the
@@ -401,7 +401,7 @@ automation         .github/workflows/
     states) or drop one (`DELETE`), because a mis-recorded line - a wrong actor, a date nobody had
     to hand, "Other" where the reason mattered - is worse than a corrected one. The vocabulary is
     still the DB CHECKs (four kinds, `Candidate`/`Company`, a 500-character reason), and the two
-    states are validated **against the kind** in `backoffice/src/lib/history.ts` (a `move` carries
+    states are validated **against the kind** in `apps/backoffice/src/lib/history.ts` (a `move` carries
     column ids, a `tailoring` line the worker's sub-states, `archive`/`restore` the pair
     `active`/`archived`): that is the one check the table cannot make, so it is made in code before
     the database is touched. A correction writes `resume_history` and **nothing else** - no column
@@ -428,23 +428,23 @@ so that a change which depends on them is a conscious one.
 
 | # | What | Reality | Status |
 |---|---|---|---|
-| D1 | `Dockerfile` line 48 comment ("persist to Supabase") and line 51 `ENV STORAGE_BACKEND=supabase` | There is no `STORAGE_BACKEND` in `config.py`, and `utils/storage.py` has no backend selection - storage is unconditionally `LocalStorage`. `deploy/values/dev.yaml` (`config.storageBackend: local`) and `.github/workflows/helm-smoke.yml` (`--set config.storageBackend=local`) set a value that `charts/cv-tailoring-worker/templates/configmap.yaml` never renders, so both are inert as well | **Dead** (leftover from the removed Supabase era). Harmless at runtime, misleading to readers. |
+| D1 | `Dockerfile` line 48 comment ("persist to Supabase") and line 51 `ENV STORAGE_BACKEND=supabase` | There is no `STORAGE_BACKEND` in `config.py`, and `apps/worker/utils/storage.py` has no backend selection - storage is unconditionally `LocalStorage`. `infra/deploy/values/dev.yaml` (`config.storageBackend: local`) and `.github/workflows/helm-smoke.yml` (`--set config.storageBackend=local`) set a value that `infra/charts/cv-tailoring-worker/templates/configmap.yaml` never renders, so both are inert as well | **Dead** (leftover from the removed Supabase era). Harmless at runtime, misleading to readers. |
 | D2 | `pyproject.toml` description: "...LangGraph + RabbitMQ + Supabase" | Supabase was removed; storage is a PVC | **Fixed 2026-09-25** (description now names local Kubernetes) |
 | D3 | `requirements.txt`: `pypdf>=4.0.0` | Not imported anywhere in the repo | **Unused dependency** |
 | D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
-| D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
-| D6 | `utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
+| D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `apps/worker/utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
+| D6 | `apps/worker/utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
 | D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **150 collected, 28 skipped, 122 passed** (`python -m pytest`, 2026-09-29, after the module split), plus the backoffice's **250 tests in 24 files** (`npm test`) | **Stale doc** |
 | D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
 | D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
-| D10 | `docs/postgres_schema.sql` vs `utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
-| D11 | `backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), its `GET /api/vacancies/status?external_ids=...` answers "already on the board?" for the extension's injected per-card buttons (the same lookup, board-scoped), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI. A refused card can also be **removed for good** (invariant 22): the row, its board state, its whole history and its artifacts - with whatever the board cannot reach queued in `artifact_purge` for `scripts/storage-files.ps1 -Action purge` | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
-| D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `extension/`, and `scout/` parses in-process rather than through that queue) | **Substituted by design** - do not reintroduce the providers; `extension/` is the real replacement for the design's "Chrome extension" box (it scrapes before the gateway; and its loading `content_scripts` entry injects a `Scrape`/`Scraped` button into every listing card, the `Scraped` link deep-linking to `/?card=<job_id>` on the board) |
-| D13 | `scripts/archive_not_applicable.sql`, which `scripts/AGENTS.md` described as the written record of the 2026-09-26 spreadsheet import | **The file does not exist and never did**: `git log --all -- scripts/archive_not_applicable.sql` is empty and the path is not tracked in any revision, so that description was prose-only. The import it documented is real - 828 `resume_history` rows carry the `Imported: ` prefix and 121 cards are refused as `Candidate` / `Not applicable` (`resume_board` archive columns, stage untouched) | **Doc fixed 2026-09-27** - `scripts/AGENTS.md` now says the script is absent; re-add one if that import ever has to be replayed. **Fallout found 2026-10-01**: the same import wrote `resume_board` rows directly, so `updated_at` kept its `now()` default and nine `applied` cards carried a *fresh* ten-day clock - the archiver ran every morning and honestly reported `candidates: 0` while cards silent since 2026-09-18 stayed put (`373908`, `373812` reported by the operator). Repaired with `scripts/backdate_imported_clocks.sql` (back-dates exactly the import-only cards; the rule is now in `archiver/AGENTS.md`) |
-| D14 | `utils/db.SCHEMA_SQL` created `application_profile` (which references `app_users (id)`) **before** `app_users` | The script is applied top-down, so a *fresh* database died at `relation "app_users" does not exist` and the documented bootstrap could never work - invisible because every database in use already carried the account table from an earlier boot. The gated Postgres suite hit it as soon as its `store` fixture dropped `app_users` too; that drop list was itself stale (no `resume_application`, `application_profile`, `app_users`), so a run left dependants behind and failed its own teardown with `DependentObjectsStillExist` | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 `SCHEMA_SQL` tables (verified: 28/28 gated tests green on a database built from scratch) |
-| D15 | Fonts inside the container: the rendered PDF vs what Word shows | Carlito is metric-compatible with Calibri, so the **body** wraps and paginates exactly as Word does. It has no *Light* weight, so the master CV's heading runs (`asciiTheme="majorHAnsi"` -> Calibri Light) were rendered in **DejaVu Serif** (Serif Bold for the section headings) - a different design *and* different metrics. Verified 2026-09-29 by rendering `artifacts/input/cv.docx` inside the worker image and reading `pdffonts`, next to an A/B on that same image with the Calibri layer hidden: without it the PDF embeds `DejaVuSerif`, `DejaVuSerif-Bold`, `Carlito-Regular/Bold/Italic`, `OpenSymbol` and `LiberationMono`; with it `Calibri`, `Calibri-Bold`, `Calibri-Italic`, `Calibri-Light`, `OpenSymbol` and `LiberationMono` - Carlito and DejaVu gone entirely. `fc-match 'Calibri Light'` **on its own** reports DejaVu *Sans* (the generic fallback for a name nothing claims), which is not the face the document render picks - never treat that alone as the evidence. `Times New Roman` never appears in the master `document.xml`; only as per-script theme fallbacks, the `NormalWeb` style and a `fontTable` entry, and no serif substitute reaches the PDF | **Mitigated 2026-09-29** - `scripts/fetch-fonts.ps1` copies the genuine (licensed) Calibri family from Windows into the untracked `deploy/fonts/`, which `docker build` installs to `/usr/share/fonts/truetype/ms-calibri/` + `fc-cache -f`, so a locally built image embeds real Calibri/Calibri Light. CI builds the same Dockerfile with that directory empty (README only) and keeps the substitution on purpose - the `COPY` names the directory, not a glob, so a font-less build stays valid. The files are Microsoft-licensed: never committed and never published |
+| D10 | `docs/postgres_schema.sql` vs `apps/worker/utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `apps/worker/utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
+| D11 | `apps/backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), its `GET /api/vacancies/status?external_ids=...` answers "already on the board?" for the extension's injected per-card buttons (the same lookup, board-scoped), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI. A refused card can also be **removed for good** (invariant 22): the row, its board state, its whole history and its artifacts - with whatever the board cannot reach queued in `artifact_purge` for `scripts/storage-files.ps1 -Action purge` | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
+| D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `apps/backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`apps/worker/utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `apps/extension/`, and `apps/worker/scout/` parses in-process rather than through that queue) | **Substituted by design** - do not reintroduce the providers; `apps/extension/` is the real replacement for the design's "Chrome extension" box (it scrapes before the gateway; and its loading `content_scripts` entry injects a `Scrape`/`Scraped` button into every listing card, the `Scraped` link deep-linking to `/?card=<job_id>` on the board) |
+| D13 | `scripts/archive_not_applicable.sql`, which `scripts/AGENTS.md` described as the written record of the 2026-09-26 spreadsheet import | **The file does not exist and never did**: `git log --all -- scripts/archive_not_applicable.sql` is empty and the path is not tracked in any revision, so that description was prose-only. The import it documented is real - 828 `resume_history` rows carry the `Imported: ` prefix and 121 cards are refused as `Candidate` / `Not applicable` (`resume_board` archive columns, stage untouched) | **Doc fixed 2026-09-27** - `scripts/AGENTS.md` now says the script is absent; re-add one if that import ever has to be replayed. **Fallout found 2026-10-01**: the same import wrote `resume_board` rows directly, so `updated_at` kept its `now()` default and nine `applied` cards carried a *fresh* ten-day clock - the archiver ran every morning and honestly reported `candidates: 0` while cards silent since 2026-09-18 stayed put (`373908`, `373812` reported by the operator). Repaired with `scripts/backdate_imported_clocks.sql` (back-dates exactly the import-only cards; the rule is now in `apps/worker/archiver/AGENTS.md`) |
+| D14 | `apps/worker/utils/db.SCHEMA_SQL` created `application_profile` (which references `app_users (id)`) **before** `app_users` | The script is applied top-down, so a *fresh* database died at `relation "app_users" does not exist` and the documented bootstrap could never work - invisible because every database in use already carried the account table from an earlier boot. The gated Postgres suite hit it as soon as its `store` fixture dropped `app_users` too; that drop list was itself stale (no `resume_application`, `application_profile`, `app_users`), so a run left dependants behind and failed its own teardown with `DependentObjectsStillExist` | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 `SCHEMA_SQL` tables (verified: 28/28 gated tests green on a database built from scratch) |
+| D15 | Fonts inside the container: the rendered PDF vs what Word shows | Carlito is metric-compatible with Calibri, so the **body** wraps and paginates exactly as Word does. It has no *Light* weight, so the master CV's heading runs (`asciiTheme="majorHAnsi"` -> Calibri Light) were rendered in **DejaVu Serif** (Serif Bold for the section headings) - a different design *and* different metrics. Verified 2026-09-29 by rendering `artifacts/input/cv.docx` inside the worker image and reading `pdffonts`, next to an A/B on that same image with the Calibri layer hidden: without it the PDF embeds `DejaVuSerif`, `DejaVuSerif-Bold`, `Carlito-Regular/Bold/Italic`, `OpenSymbol` and `LiberationMono`; with it `Calibri`, `Calibri-Bold`, `Calibri-Italic`, `Calibri-Light`, `OpenSymbol` and `LiberationMono` - Carlito and DejaVu gone entirely. `fc-match 'Calibri Light'` **on its own** reports DejaVu *Sans* (the generic fallback for a name nothing claims), which is not the face the document render picks - never treat that alone as the evidence. `Times New Roman` never appears in the master `document.xml`; only as per-script theme fallbacks, the `NormalWeb` style and a `fontTable` entry, and no serif substitute reaches the PDF | **Mitigated 2026-09-29** - `scripts/fetch-fonts.ps1` copies the genuine (licensed) Calibri family from Windows into the untracked `apps/worker/fonts/`, which `docker build` installs to `/usr/share/fonts/truetype/ms-calibri/` + `fc-cache -f`, so a locally built image embeds real Calibri/Calibri Light. CI builds the same Dockerfile with that directory empty (README only) and keeps the substitution on purpose - the `COPY` names the directory, not a glob, so a font-less build stays valid. The files are Microsoft-licensed: never committed and never published |
 
-| D16 | `candidate_profile.json`, named in `agent/application.py`, `agent/contracts.py`, the `apply` deployment comment and the extension's popup hint (removed 2026-10-03) | There is no such file: the candidate facts are the `application_profile` **row** (`utils/candidate.py`, `backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` now exists as the *seed input* of `scripts/seed_profile.py`, which is what made the old wording look plausible | **Doc fixed 2026-09-29** - all four call sites name the row; the file is described as a seed |
+| D16 | `candidate_profile.json`, named in `apps/worker/agent/application.py`, `apps/worker/agent/contracts.py`, the `apply` deployment comment and the extension's popup hint (removed 2026-10-03) | There is no such file: the candidate facts are the `application_profile` **row** (`apps/worker/utils/candidate.py`, `apps/backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` now exists as the *seed input* of `scripts/seed_profile.py`, which is what made the old wording look plausible | **Doc fixed 2026-09-29** - all four call sites name the row; the file is described as a seed |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -453,7 +453,7 @@ so that a change which depends on them is a conscious one.
 * **Bitnami RabbitMQ subchart** - replaced by our own StatefulSet on the official
   `rabbitmq:3.13-management` image (the Bitnami index moved behind
   `repo.broadcom.com` and its free images were emptied; see
-  `charts/cv-tailoring-platform/Chart.yaml`).
+  `infra/charts/cv-tailoring-platform/Chart.yaml`).
 * **Every second way to run the app** - removed 2026-09-25 in favour of the single
   local-cluster runtime: the batch CLI (`main.py`), `docker-compose.yml`, the
   managed-cluster documentation and `docs/postgres_schema.sql` (D10). Publishing from
@@ -461,7 +461,7 @@ so that a change which depends on them is a conscious one.
   is gone for good - do not add another one. (The HTTP batch endpoint in the backoffice
   is a different thing: it is a gateway, not a second runtime - see D12.)
 * **Supabase (Auth, DB, Storage, Realtime) and Vercel.** Their *functions* now live in
-  the local stack - admin-provisioned accounts in `app_users` (`backoffice/src/lib/auth.ts`),
+  the local stack - admin-provisioned accounts in `app_users` (`apps/backoffice/src/lib/auth.ts`),
   the gateway as `POST /api/vacancies/batch`, storage on the `cv-artifacts` PVC, and a
   poll-based live board instead of realtime WebSockets (D12). Do not reintroduce either
   provider, and do not add a signup form.
@@ -483,18 +483,18 @@ so that a change which depends on them is a conscious one.
   documents own the deep dives. Do not delete them again without moving their content.
   (`postgres_schema.sql` is the one exception: it was deleted again on 2026-09-25, this
   time deliberately, because its only consumer - the docker-compose initdb path - was
-  removed and `utils/db.SCHEMA_SQL` is the only schema; see D10.)
+  removed and `apps/worker/utils/db.SCHEMA_SQL` is the only schema; see D10.)
 
 
-## 6. Entry points (root files)
+## 6. Entry points (in apps/worker/)
 
 | File | Role | Notes |
 |---|---|---|
 | `config.py` | Every env-overridable setting | Import-safe without provider SDKs; calls `load_dotenv()` |
 | `worker.py` | Queue consumer (the pod) | preflight -> claim -> prepare -> graph -> ack/retry/DLQ |
-| `publisher.py` | Host-side dev stand-in for the API gateway | Publishes the real payload shape; `--all`, `--jd`, `--payload`. Driven by `scripts/send-test-job.ps1`. The in-app gateway (scraped batch → one message per vacancy) is `backoffice/src/pages/api/vacancies/batch.ts` |
+| `publisher.py` | Host-side dev stand-in for the API gateway | Publishes the real payload shape; `--all`, `--jd`, `--payload`. Driven by `scripts/send-test-job.ps1`. The in-app gateway (scraped batch → one message per vacancy) is `apps/backoffice/src/pages/api/vacancies/batch.ts` |
 | `healthcheck.py` | Exec probes | `--mode liveness`, `readiness`, `amqp`, `render`, `all` |
-| `model_state.json` | Local model-availability ledger | **Tracked but rewritten at runtime** - restore with `git checkout -- model_state.json` after local runs |
+| `model_state.json` | Local model-availability ledger | **Tracked but rewritten at runtime** - restore with `git checkout -- apps/worker/model_state.json` after local runs |
 
 ## 7. Verification expectations
 
@@ -503,17 +503,17 @@ python -m pytest -q          # hermetic: no network, no Gemini, no LibreOffice
 python -m ruff check .       # must stay clean (line-length 100, target py311)
 ```
 
-`tests/test_postgres_store.py` only runs when `TEST_DATABASE_URL` points at a
+`apps/worker/tests/test_postgres_store.py` only runs when `TEST_DATABASE_URL` points at a
 throwaway Postgres (`make test-postgres`); otherwise its 27 tests skip. A change
 that touches the DB, queue, DOCX mutator or retry logic is not done until the
 suite passes. The automation's four tables (`resume_interview`, `process_runs` and the
-board's own two) are pinned there, and `tests/test_archiver.py` / `tests/test_process_runs.py`
+board's own two) are pinned there, and `apps/worker/tests/test_archiver.py` / `apps/worker/tests/test_process_runs.py`
 assert the *policy* hermetically with an injected store.
 
-The `backoffice/` layer has its own hermetic gates - run them for any change there:
+The `apps/backoffice/` layer has its own hermetic gates - run them for any change there:
 
 ```sh
-cd backoffice
+cd apps/backoffice
 npm test             # vitest: auth, board helpers, interviews, details, history lines, run log, batch validation, scraper (jsdom)
 npx tsc --noEmit     # types (no mypy equivalent on this side)
 npm run build        # SSR bundle must build
@@ -538,7 +538,7 @@ Facts only a real install could reveal. All were fixed in the same change - keep
    ships `conf.d/10-defaults.conf` (`log.console = true`) and its entrypoint writes
    the generated default-user settings into that directory. A directory mount
    silences the console log (the boot failure becomes invisible) and blocks the write.
-4. **Pre-declared queue arguments must equal `utils/messaging.py`'s declaration**
+4. **Pre-declared queue arguments must equal `apps/worker/utils/messaging.py`'s declaration**
    (`x-dead-letter-exchange` + `x-dead-letter-routing-key`), otherwise the first
    publish dies with `406 PRECONDITION_FAILED - inequivalent arg`.
 5. **KEDA must scale over `protocol: http`** with the management URL from the Secret
@@ -571,7 +571,7 @@ Facts only a real install could reveal. All were fixed in the same change - keep
 ---
 
 29. **The extension fills application forms, and it never submits them.** The second half of
-    `extension/` (`src/formfill.js`, `src/form/`) puts the operator's *Populate* click through one
+    `apps/extension/` (`src/formfill.js`, `src/form/`) puts the operator's *Populate* click through one
     round trip: the page annotates every fillable control inside a **picked** form root with a
     deterministic `data-cvt-id`, the board queues that snapshot on `applications.draft`
     (`apply.py`, its own ScaledObject), and the plan comes back keyed by those ids. Two rules are
@@ -595,16 +595,16 @@ Facts only a real install could reveal. All were fixed in the same change - keep
 
 30. **`personal_projects` is read-only context.** The projects block is rendered into the CV text
     (`utils.cv_text.project_lines`) so the model can draw on it - a project stack is *proof*
-    of a technology, and `agent/verification.py` admits those terms - but it may inform the SUMMARY
+    of a technology, and `apps/worker/agent/verification.py` admits those terms - but it may inform the SUMMARY
     and RELEVANT SKILLS **only**: `drop_read_only_replacements()` discards any replacement whose
     target is one of its lines, because the headings carry the right-aligned tab run and the
     `Website:`/`Repo:`/`YT Video` lines carry the URLs. Its `heading` is stored verbatim, tabs
     included, because invariant 5 is a tab-preserving substring test.
 
 31. **One candidate-facts document grounds every prompt.** `application_profile` (one jsonb row per
-    operator; `utils/candidate.py`, mirrored by `backoffice/src/lib/candidate.ts`) is the half of
+    operator; `apps/worker/utils/candidate.py`, mirrored by `apps/backoffice/src/lib/candidate.ts`) is the half of
     the candidate that a CV does not carry. The CV tailoring prompt, the cover letter and the form
-    prompt all receive the same rendered digest, and `agent/verification.py` accepts it as an
+    prompt all receive the same rendered digest, and `apps/worker/agent/verification.py` accepts it as an
     admissible source (`ground_truth=`) so a fact-backed technology or number is not dropped as a
     fabrication. It is **evidence, never document text**: no prompt may write contacts, salary,
     availability, work format, location or job-search status into the CV or the letter. Facts cap at
@@ -631,7 +631,7 @@ Facts only a real install could reveal. All were fixed in the same change - keep
 33. **The job description is a target, never evidence.** Nothing a vacancy asks for authorises a
     claim about the candidate: the evidence is the master CV text and the candidate facts
     (invariants 7, 31). The tailoring answer is checked by
-    `agent/verification.py::invented_technologies` against those two sources only - the JD is passed
+    `apps/worker/agent/verification.py::invented_technologies` against those two sources only - the JD is passed
     in for diagnostics ("the vacancy asks for it, which is a reason to leave it out"), never as
     evidence - and detection runs on a curated vocabulary *plus* the shape of a name (an internal
     capital like `FastAPI`/`FastMCP`/`PyTorch`, or a digit like `GPT-4`/`n8n`), because no list can
@@ -639,7 +639,7 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     `self_heal_replacements` hands a violating answer back with the violations spelled out up to
     `MAX_FABRICATION_RETRIES` (3) times and keeps the best draft it saw, and whatever is still
     offending is *dropped* - the CV keeps its own wording, so nothing unbacked reaches the file. The
-    guarantee covers the file too: the `verify_document` node (`agent/document_gate.py`) reads the
+    guarantee covers the file too: the `verify_document` node (`apps/worker/agent/document_gate.py`) reads the
     produced DOCX back and **fails the task** rather than upload a CV whose text claims something no
     evidence backs. It runs **before the visual check** - straight after `adapt_text`, ahead of
     `render`/`vision_check` - so a lying document costs nothing to reject and never occupies the

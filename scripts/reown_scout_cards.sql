@@ -4,7 +4,7 @@
 
   Why this exists: every prompt - the CV tailoring, the cover letter and the application form - is
   grounded in the candidate facts of the **card's owner** (`candidate_module.load(store,
-  row.user_id)`: `agent/nodes.py`, `agent/document_gate.py`, `cover.py`, `apply.py`). The scheduled
+  row.user_id)`: `apps/worker/agent/nodes.py`, `apps/worker/agent/document_gate.py`, `cover.py`, `apply.py`). The scheduled
   intake filed its cards under `SCOUT_USER_ID` - a separate service account (`scout@local`) - whose
   `application_profile` row held placeholder values (`location = 'Ukraine (remote)'`, ...). The
   board's `/sources` page renders the *signed-in operator's* row instead, so the operator saw
@@ -14,7 +14,7 @@
   The board never reads the owner - `CARD_SELECT` does not select `user_id`, `fetchBoard` does not
   filter by it, and both dedupe callers (`/api/vacancies/batch`, `/api/vacancies/status`) already
   pass `scope: 'board'` - so the two-account split bought nothing but the wrong facts (the
-  "a scouted card is visibly not yours" intent in `deploy/values/dev.yaml` was never implemented).
+  "a scouted card is visibly not yours" intent in `infra/deploy/values/dev.yaml` was never implemented).
   Fix: the intake files under the operator, so `resumes.user_id` is half of the business key of the
   *one* facts row that grounds everything.
 
@@ -37,7 +37,7 @@
       Gemini call) instead of failing.
 
   After this, future runs must also file under the operator: `cv-tailoring-scout.config.userId`
-  (`deploy/values/dev.yaml`) is `u-03ac63cd26651373`, NOT `scout@local`.
+  (`infra/deploy/values/dev.yaml`) is `u-03ac63cd26651373`, NOT `scout@local`.
 
   Idempotent: a second run finds no `scout@local` rows and updates nothing. It touches only
   `application_profile` and `resumes.user_id` - no `status`, no board stage, no history (invariants

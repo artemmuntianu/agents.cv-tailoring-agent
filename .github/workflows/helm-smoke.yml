@@ -7,11 +7,11 @@ name: helm smoke
 on:
   pull_request:
     paths:
-      - "charts/**"
-      - "deploy/**"
-      - "Dockerfile"
-      - "worker.py"
-      - "healthcheck.py"
+      - "infra/charts/**"
+      - "infra/deploy/**"
+      - "apps/worker/Dockerfile"
+      - "apps/worker/worker.py"
+      - "apps/worker/healthcheck.py"
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
           version: v3.16.2
 
       - name: Build worker image
-        run: docker build -t cv-tailoring-worker:smoke .
+        run: docker build -t cv-tailoring-worker:smoke apps/worker
 
       - name: Create kind cluster
         uses: helm/kind-action@v1.10.0
@@ -38,7 +38,7 @@ jobs:
 
       - name: Install the worker chart with offline backends
         run: |
-          helm upgrade --install ai-agent-worker charts/cv-tailoring-worker \
+          helm upgrade --install ai-agent-worker infra/charts/cv-tailoring-worker \
             --set image.repository=cv-tailoring-worker \
             --set image.tag=smoke \
             --set image.pullPolicy=Never \

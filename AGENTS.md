@@ -15,19 +15,28 @@ live, so no agent has to re-derive them.
 
 ## Architecture map (read first)
 
+**Monorepo layout**: `apps/` holds the independently deployable units (the Python worker,
+the Astro backoffice, the Chrome extension), `infra/` holds everything applied to the
+cluster (Helm charts + deployment values), `packages/` is reserved for shared libraries,
+and the root keeps the cross-cutting tooling (`scripts/`, `docs/`, `.github/`, `Makefile`,
+`pyproject.toml`). See `CONSTITUTION.md` section 3 for the dependency direction.
+
 - **`CONSTITUTION.md`** - canonical architecture, invariants, legacy/dead code, known discrepancies.
-- **`agent/AGENTS.md`** - LangGraph orchestration: state, contract, models, nodes, graph, shared runner.
-- **`utils/AGENTS.md`** - backend adapters and infrastructure (queue, DB, storage, model state, retry, DOCX mutator, renderer, logging).
-- **`charts/AGENTS.md`** - Helm charts + `deploy/values` (the cluster deployment).
+- **`apps/worker/AGENTS.md`** - the Python image: entry points, the Docker build context, and where `apps/worker/agent/`, `apps/worker/utils/`, `apps/worker/scout/`, `apps/worker/archiver/` and `apps/worker/tests/` live.
+- **`apps/worker/agent/AGENTS.md`** - LangGraph orchestration: state, contract, models, nodes, graph, shared runner.
+- **`apps/worker/utils/AGENTS.md`** - backend adapters and infrastructure (queue, DB, storage, model state, retry, DOCX mutator, renderer, logging).
+- **`infra/charts/AGENTS.md`** - Helm charts + `infra/deploy/values` (the cluster deployment).
 - **`scripts/AGENTS.md`** - operator tooling: deploy, cluster storage, secrets, model check.
-- **`backoffice/AGENTS.md`** - the operator UI *and* the API gateway (Astro + React POC): run commands, auth contract, the batch-ingest contract, board contract, what is deliberately missing.
-- **`extension/AGENTS.md`** - the Chrome MV3 scraper that feeds the gateway (DOM contract, injection rules, where its tests live).
-- **`scout/AGENTS.md`** - the scheduled RSS intake (`python -m scout`): the feed contract, the board-scoped dedupe, the Telegram message, and what it deliberately never does (no Gemini, no queue message).
-- **`archiver/AGENTS.md`** - the scheduled housekeeping (`python -m archiver`): the inactivity sweep that refuses the Applied cards nobody touched for 10 days, the staleness clock it uses, and the run ledger both jobs write.
-- **`tests/AGENTS.md`** - the hermetic verification layer.
+- **`apps/backoffice/AGENTS.md`** - the operator UI *and* the API gateway (Astro + React POC): run commands, auth contract, the batch-ingest contract, board contract, what is deliberately missing.
+- **`apps/extension/AGENTS.md`** - the Chrome MV3 scraper that feeds the gateway (DOM contract, injection rules, where its tests live).
+- **`apps/worker/scout/AGENTS.md`** - the scheduled RSS intake (`python -m scout`): the feed contract, the board-scoped dedupe, the Telegram message, and what it deliberately never does (no Gemini, no queue message).
+- **`apps/worker/archiver/AGENTS.md`** - the scheduled housekeeping (`python -m archiver`): the inactivity sweep that refuses the Applied cards nobody touched for 10 days, the staleness clock it uses, and the run ledger both jobs write.
+- **`apps/worker/tests/AGENTS.md`** - the hermetic verification layer.
+- **`packages/AGENTS.md`** - the reserved shared-library slot and the rule for when a package earns a home there.
 - **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what; it also owns the runtime diagram spec + artifact in `docs/diagrams/`.
 - **`.github/AGENTS.md`** - CI workflows.
-- **Root entry points** (`config.py`, `worker.py`, `publisher.py`, `healthcheck.py`) are
+- **Root entry points** (`apps/worker/config.py`, `apps/worker/worker.py`,
+  `apps/worker/publisher.py`, `apps/worker/healthcheck.py`) are
   mapped in `CONSTITUTION.md` section 6.
 
 ### How the docs are layered
@@ -62,7 +71,7 @@ Committed reference copy is `docs/template_agents.md` (the standard). Python ana
 All commands run from the repo root.
 
 ```sh
-pip install -r requirements-dev.txt      # runtime + pytest + ruff
+pip install -r apps/worker/requirements-dev.txt      # runtime + pytest + ruff
 
 python -m pytest -q                      # hermetic: no network, no Gemini, no LibreOffice
 python -m ruff check .                   # lint; must stay clean
@@ -70,8 +79,8 @@ python -m ruff check tools/analyze.py    # vendored tool: local ruff skips the j
 
 python tools/analyze.py validate-docs    # architecture-map references must resolve
 python scripts/check_models.py --strict  # MODEL_NAME must exist for this API key
-python -m scout --dry-run                # what the scheduled intake would add (writes nothing)
-python -m archiver --dry-run             # what the inactivity sweep would refuse (writes nothing)
+cd apps/worker && python -m scout --dry-run      # what the scheduled intake would add (writes nothing)
+cd apps/worker && python -m archiver --dry-run   # what the inactivity sweep would refuse (writes nothing)
 ```
 
 The 27 Postgres integration tests only run when pointed at a throwaway database:
@@ -79,7 +88,7 @@ The 27 Postgres integration tests only run when pointed at a throwaway database:
 ```sh
 make test-postgres
 # or:
-TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt python -m pytest -q tests/test_postgres_store.py
+TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt python -m pytest -q apps/worker/tests/test_postgres_store.py
 ```
 
 The local cluster (Docker Desktop Kubernetes) is the only runtime:
@@ -99,30 +108,30 @@ the batch gateway that the Chrome extension posts to:
 ```sh
 kubectl port-forward svc/postgres 5432:5432      # in another terminal
 kubectl port-forward svc/rabbitmq 5672:5672      # only for the batch endpoint
-cd backoffice
+cd apps/backoffice
 npm install
 cp .env.example .env                             # DATABASE_URL, BACKOFFICE_JWT_SECRET, RABBITMQ_URL
 npm run user -- add --email me@example.com --password=secret --name Me --admin
 npm run dev                      # http://localhost:4321 -> sign in (no signup exists)
 npm test                         # vitest: auth, board, batch validation, scraper
 npx tsc --noEmit                 # types
-npm run build                    # SSR bundle -> backoffice/dist
+npm run build                    # SSR bundle -> apps/backoffice/dist
 ```
 
-The scraper is loaded unpacked from `extension/` (no build step):
-`chrome://extensions` → Developer mode → Load unpacked → `extension/`, then sign in
+The scraper is loaded unpacked from `apps/extension/` (no build step):
+`chrome://extensions` → Developer mode → Load unpacked → `apps/extension/`, then sign in
 with the same provisioned account and press *Scrape & queue this page* on a listing
 page. One message per vacancy lands on `resumes.generate`.
 
 Charts (offline validation, no cluster needed):
 
 ```sh
-helm lint charts/cv-tailoring-worker
-helm lint charts/cv-tailoring-scout
-helm lint charts/cv-tailoring-archiver
-helm dependency update charts/cv-tailoring-platform     # required before linting
-helm lint charts/cv-tailoring-platform
-helm template cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml > rendered.yaml
+helm lint infra/charts/cv-tailoring-worker
+helm lint infra/charts/cv-tailoring-scout
+helm lint infra/charts/cv-tailoring-archiver
+helm dependency update infra/charts/cv-tailoring-platform     # required before linting
+helm lint infra/charts/cv-tailoring-platform
+helm template cv-tailoring infra/charts/cv-tailoring-platform -f infra/deploy/values/dev.yaml > rendered.yaml
 kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 rendered.yaml
 ```
 
@@ -180,7 +189,7 @@ not add a dependency just to answer a reference/dead-code question.
    in the `required` list of `values.schema.json`; and every value a template
    reads needs a default in the chart's `values.yaml` or `helm lint` dies with a
    nil pointer.
-6. **Vendored subcharts shadow local sources.** `charts/*/charts/*.tgz` is
+6. **Vendored subcharts shadow local sources.** `infra/charts/*/charts/*.tgz` is
    gitignored exactly because a stale `.tgz` shadows `file://../cv-tailoring-worker`;
    always run `helm dependency update` before linting or templating.
 7. **`helm lint` and `helm template` cannot catch null/invalid field values** - a
@@ -215,7 +224,7 @@ not add a dependency just to answer a reference/dead-code question.
     "exists and cannot be imported". Related: Helm 4 applies server-side, so fields
     previously written by `kubectl patch` collide - `helm upgrade --force-conflicts`
     takes ownership back.
-15. **Single quotes are not quotes in `cmd.exe`.** `backoffice/scripts/user.mjs` is
+15. **Single quotes are not quotes in `cmd.exe`.** `apps/backoffice/scripts/user.mjs` is
     often run through cmd or through `npm run user -- ...`, where `--password 'secret'`
     provisions the literal password `'secret'` (login then fails with
     `invalid credentials`). Pass CLI arguments as `--key=value` (`--password=secret`) -
@@ -228,15 +237,15 @@ not add a dependency just to answer a reference/dead-code question.
     went red in CI only (`python -m ruff check . --show-files` lists 33 files and omits
     `tools/analyze.py`). Lint the tool explicitly before pushing a tooling change:
     `python -m ruff check tools/analyze.py`.
-17. **The Astro dev server and vitest share `backoffice/node_modules/.vite`.** Killing
+17. **The Astro dev server and vitest share `apps/backoffice/node_modules/.vite`.** Killing
     `npm run dev` with `Stop-Process -Force` (or any hard stop mid-build) can leave that
     cache unusable, and then `npm test` reports
     `FAIL src/lib/scraper.test.ts ... Error: Cannot find module
     '/@fs/e:/CVTailoringAgent/extension/src/extract.js' ... Does the file exist?` - while
     the file is right there, unmodified and readable. That test is the only one importing
-    from *outside* the Vite root (`extension/src/extract.js`), which is why it alone fails.
+    from *outside* the Vite root (`apps/extension/src/extract.js`), which is why it alone fails.
     Fix (verified 2026-09-26, 91/91 afterwards):
-    `Remove-Item -Recurse -Force backoffice/node_modules/.vite`. Do not go hunting for a
+    `Remove-Item -Recurse -Force apps/backoffice/node_modules/.vite`. Do not go hunting for a
     deleted file, a bad import, or a `server.fs.allow` misconfiguration.
 18. **A host-side run against the cluster's Postgres needs `DATABASE_SSLMODE=disable`.** The
     default is `require` (`config.py`), the dev Postgres serves plain TCP, and
@@ -283,10 +292,10 @@ not add a dependency just to answer a reference/dead-code question.
 - **Line endings are LF everywhere.** `.gitattributes` -> `* text=auto eol=lf`
   (`.editorconfig` makes editors agree); never commit CRLF.
 - Provider-specific code sits behind an **env-selected backend plus a `get_*()`
-  factory with a matching `reset_*_cache()` test hook** (`utils/`). Follow that
+  factory with a matching `reset_*_cache()` test hook** (`apps/worker/utils/`). Follow that
   pattern for anything new instead of branching on the backend at call sites.
-- Keep the dependency direction one-way: `agent/` -> `utils/` -> `config`.
-  `utils/` must never import `agent/`.
+- Keep the dependency direction one-way: `apps/worker/agent/` -> `apps/worker/utils/` -> `config`.
+  `apps/worker/utils/` must never import `apps/worker/agent/`.
 - Configuration is read once, in `config.py`. Never scatter `os.getenv()` through
   the code.
 - Docstrings explain the *why* (the invariant being protected), not a restatement
@@ -294,7 +303,7 @@ not add a dependency just to answer a reference/dead-code question.
 - Log through `utils.logging_setup.get_logger(__name__)` with structured
   `key=value` extras. No `print()` in library code - the one CLI (`publisher.py`,
   the host-side dev gateway) is the deliberate exception.
-- Keep Gemini-specific code in `agent/gemini.py`; the pipeline and adapters stay
+- Keep Gemini-specific code in `apps/worker/agent/gemini.py`; the pipeline and adapters stay
   provider-agnostic.
 - When you change a fact recorded in `CONSTITUTION.md`, update it in the same change.
 

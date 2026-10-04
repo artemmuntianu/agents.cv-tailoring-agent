@@ -1,0 +1,104 @@
+# infra/charts/ (+ infra/deploy/values) - the cluster deployment
+
+Two Helm charts and the values that point them at a cluster. They are the
+contract between the Python worker and Kubernetes: the worker ConfigMap is the
+only place a `config.py` setting becomes an env var, and the ScaledObject is what
+gives the platform its 0 -> M -> 0 cost profile.
+
+Read `CONSTITUTION.md` first (sections 2, 3 and 5).
+
+## Layout
+
+| Path | Owns |
+|---|---|
+| `cv-tailoring-platform/` | Umbrella: the broker, its Secrets, the local-dev Postgres, the artifact volume and both dependencies |
+| `cv-tailoring-platform/templates/rabbitmq.yaml` | RabbitMQ StatefulSet (`rabbitmq-0`) + Service: durable queue, the `-management` image (the KEDA scaler reads it over HTTP), `rabbitmq-diagnostics -q ping` probes plus a TCP `startupProbe` |
+| `cv-tailoring-platform/templates/local-postgres.yaml` | `localPostgres.enabled` -> single-replica Postgres + `local-postgres` Secret + `postgres-data` PVC. The worker creates its own tables (no init scripts) |
+| `cv-tailoring-platform/templates/storage.yaml` | `cv-artifacts` PVC (`helm.sh/resource-policy: keep`) and the always-on `cv-files` pod that keeps `kubectl cp` working while the worker is at zero |
+| `cv-tailoring-platform/templates/definitions.yaml` | The queue topology (`resumes.generate`, `resumes.cover`, `applications.draft` and `resumes.rerender`, each with its own DLX/DLQ/binding, plus `vacancies.parse` and `applications.submit`) as a definitions Secret - reviewable in git, loaded by `rabbitmq.yaml` |
+| `cv-tailoring-platform/templates/rabbitmq-credentials.yaml` | The one Secret holding username/password/url, shared by the broker, the worker and KEDA |
+| `cv-tailoring-scout/` | The scheduled intake: a `CronJob` (`python -m scout`, the worker's image) that fetches the feeds, creates a card per new vacancy in Scraped and sends one Telegram message each. No KEDA, no broker, no volume - it shares the worker's Secret for `DATABASE_URL` and the bot token |
+| `cv-tailoring-archiver/` | The scheduled housekeeping: a `CronJob` (`python -m archiver`) that refuses the Applied cards nobody touched for `config.afterDays` days, in place, with the board's own archive invariants. `startingDeadlineSeconds: 86400` is what makes a slot missed while the cluster was down run as soon as it is back; same image, same Secret, no KEDA, no broker |
+| `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe - and three more workloads (`cover-deployment.yaml` + `cover-scaledobject.yaml` for `python cover.py` on `resumes.cover`, `apply-deployment.yaml` + `apply-scaledobject.yaml` for `python apply.py` on `applications.draft`, and `rerender-deployment.yaml` + `rerender-scaledobject.yaml` for `python rerender.py` on `resumes.rerender`), which share the image, the ConfigMap, the Secret and the artifact volume (the rerender one is the only consumer that *writes* artifacts) |
+| `cv-tailoring-worker/values.schema.json` | Type/enum guard for the values Helm must accept before anything renders |
+| `infra/deploy/values/dev.yaml` | Local-cluster overrides: `localPostgres` on, dev broker password, `existingSecret: cv-tailoring-secrets`, `/data` mount, 0..3 replicas, and the two scheduled jobs (scout schedule + user id, archiver schedule + refusal policy) |
+| root `Dockerfile` | The image (LibreOffice + poppler + Carlito/Caladea fonts, plus the genuine Calibri files whenever `apps/worker/fonts/` holds them - `CONSTITUTION.md` D15; non-root uid 10001). There is no compose/no-cluster path: the only runtime is the local cluster |
+
+The umbrella vendors all three local charts (`helm dependency update` after any change inside
+one of them - a stale `.tgz` shadows the source, and a *new* dependency needs the lock rebuilt).
+
+Only KEDA comes from an upstream chart. The broker is ours, on the official
+`rabbitmq:3.13-management` image, because Bitnami moved its index behind
+`repo.broadcom.com` and emptied the free images (`CONSTITUTION.md` section 5).
+
+## Invariants
+
+- **Nothing is acked before `persist`.** Hence
+  `terminationGracePeriodSeconds: 120` (> the 15-45 s task) and
+  `cooldownPeriod: 300`, so scaling never kills work in flight.
+- **KEDA owns the replica count.** `replicaCount: 0`; the Deployment only renders
+  `replicas` when `keda.enabled=false`. `keda.mode: QueueLength` counts ready
+  **+ unacked**, with `queueLength: "1"` = one pod per vacancy.
+- **The interactive workers are kept warm, the batch one is not.** `cover.minReplicaCount`
+  and `apply.minReplicaCount` are `1`: a letter and a form draft are asked for by a *click*
+  (or by a move into Prepare), so KEDA's cold start - up to `pollingInterval` plus the pod
+  boot - was the largest single piece of that wait. The tailoring worker keeps
+  `keda.minReplicaCount: 0`, because it is the slow, batch-ish one and a cold pod costs it
+  proportionally little.
+- **Credentials exist once.** `rabbitmq-credentials` is consumed by the broker
+  StatefulSet, by the worker's `RABBITMQ_USERNAME`/`RABBITMQ_PASSWORD` env and by
+  the KEDA `TriggerAuthentication` (never inline in the ScaledObject).
+- **No secrets in values.** Use `existingSecret` (created by
+  `scripts/worker-secret.ps1`); `secrets.create` is a dev-only shortcut.
+- **Two different `keda:` keys on purpose**: the top-level one configures the KEDA
+  **operator subchart**, `cv-tailoring-worker.keda` configures the worker's
+  **ScaledObject**.
+- **Helm 4 needs `index .Values "cv-tailoring-worker"`** for the dashed key, and
+  every value a template reads needs a default in the chart's `values.yaml` or
+  `helm lint` dies with a nil pointer.
+- **A scheduled job owns its own values -> env mapping** (`cv-tailoring-scout/` and
+  `cv-tailoring-archiver/` each have a `configmap.yaml`), and every value its template reads needs
+  a default in that chart's `values.yaml` - Helm 4 lints with a nil pointer otherwise.
+- **A missed CronJob slot still runs.** `startingDeadlineSeconds` is the whole mechanism (there is
+  no in-app timer and no "is a run due?" logic): the jobs are idempotent, so a late run is
+  harmless while a silently skipped day would not be.
+- **"Run this at startup" is a Helm hook, not a second workload.** `cv-tailoring-scout` renders one
+  extra `Job` (`templates/startup-job.yaml`) annotated `post-install,post-upgrade` with
+  `--trigger startup`, from the *same* pod template as the CronJob (`_helpers.tpl`), so the two
+  triggers cannot drift; `hook-delete-policy: before-hook-creation,hook-succeeded` is what lets the
+  next deploy re-create it, and it renders only when the job is actually configured
+  (`config.userId`), because a hook that cannot succeed would fail the install. `local-deploy.ps1`
+  holds it back in its CRDs-only phase 1 so one deploy runs the intake once.
+- **`cv-tailoring-worker/templates/configmap.yaml` is the single values -> env
+  mapping.** Adding a knob means `config.py` (+ `.env.example`), then
+  `values.yaml`, `values.schema.json` and `configmap.yaml` - and a removed key
+  must not stay in `values.schema.json`'s `required` list.
+
+## Verification (never trust `helm lint` alone)
+
+```sh
+helm dependency update infra/charts/cv-tailoring-platform   # first: a stale .tgz shadows file://../cv-tailoring-worker
+helm lint infra/charts/cv-tailoring-worker
+helm lint infra/charts/cv-tailoring-scout
+helm lint infra/charts/cv-tailoring-archiver
+helm lint infra/charts/cv-tailoring-platform
+helm template cv-tailoring infra/charts/cv-tailoring-platform -f infra/deploy/values/dev.yaml > rendered.yaml
+kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 rendered.yaml
+```
+
+`helm lint` and `helm template` cannot see a null or invalid field value - that is
+how `secretKeyRef.key: null` once shipped and was caught by `kubeconform`. Offline
+validation is exactly this trio, because `kubectl apply --dry-run=client` needs a
+live API. `.github/workflows/ci.yml` runs the same steps.
+
+## Known inert / risky values
+
+- `config.queueRetryTtlMs` is **inert**: the worker uses
+  `RETRY_LADDER_SECONDS` (`CONSTITUTION.md` D5).
+- `config.storageBackend` (set in `infra/deploy/values/dev.yaml` and by
+  `helm-smoke.yml`) is **inert**: no template renders `STORAGE_BACKEND` and
+  `config.py` never reads it (`CONSTITUTION.md` D1).
+- `config.modelName` ships as a placeholder; a wrong id is a non-retryable 400
+  that would DLQ every task. Override it from `scripts/check_models.py --strict`.
+- A live deploy is `scripts/local-deploy.ps1`; when it fails read
+  `docs/RUNBOOK.md` before editing a template.

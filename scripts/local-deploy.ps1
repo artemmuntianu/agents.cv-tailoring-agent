@@ -16,7 +16,7 @@
 param(
     [string]$Release   = 'cv-tailoring',
     [string]$Namespace = 'default',
-    [string]$Values    = 'deploy/values/dev.yaml',
+    [string]$Values    = 'infra/deploy/values/dev.yaml',
     [string]$Image     = 'cv-tailoring-worker:dev',
     [string]$LocalDbUrl = 'postgresql://cvt:cvt@postgres:5432/cvt?sslmode=disable',
     [switch]$SkipBuild,
@@ -95,22 +95,22 @@ Step '4. build the worker image'
 if ($SkipBuild) {
     Warn 'skipped (-SkipBuild)'
 } else {
-    # The image bakes in the licensed Calibri files whenever they sit in deploy\fonts\
+    # The image bakes in the licensed Calibri files whenever they sit in apps\worker\fonts\
     # (Dockerfile). Warn, never fail: without them the build is still valid, LibreOffice
     # just renders Calibri Light as DejaVu Sans and the PDF differs from Word (D15).
-    $fontDir = Join-Path $repoRoot 'deploy\fonts'
+    $fontDir = Join-Path $repoRoot 'apps\worker\fonts'
     $fontCount = 0
     if (Test-Path -LiteralPath $fontDir) {
         $fontCount = (Get-ChildItem -LiteralPath $fontDir -Filter '*.ttf' -ErrorAction SilentlyContinue |
             Measure-Object).Count
     }
     if ($fontCount -eq 0) {
-        Warn 'deploy\fonts\ holds no Calibri files: Calibri Light will render as DejaVu Sans.'
+        Warn 'apps\worker\fonts\ holds no Calibri files: Calibri Light will render as DejaVu Sans.'
         Warn 'Run .\scripts\fetch-fonts.ps1 first if the PDF has to match Word.'
     } else {
         Ok ("fonts: $fontCount Calibri file(s) will be baked into the image")
     }
-    & docker build -t $Image .
+    & docker build -t $Image apps/worker
     if ($LASTEXITCODE -ne 0) { Fail 'docker build failed' }
     Ok ("image built: " + $Image)
 }
@@ -126,7 +126,7 @@ if ($nodes.Count -gt 0) { Ok ("node(s): " + ($nodes -join ', ')) }
 Ok 'shared image store - the freshly built image is already in-cluster'
 
 Step '6. chart dependencies'
-& helm dependency update charts/cv-tailoring-platform | Out-Null
+& helm dependency update infra/charts/cv-tailoring-platform | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail 'helm dependency update failed (network needed for the KEDA chart)' }
 Ok 'Chart.lock resolved'
 
@@ -163,7 +163,7 @@ if ($scaledObjectCrdPresent) {
     # in both would fetch the feeds twice within a minute (harmless, thanks to the dedupe, but
     # two ledger rows for one deploy). Phase 2 leaves the value at its default, so the run
     # happens exactly once.
-    & helm upgrade --install $Release charts/cv-tailoring-platform `
+    & helm upgrade --install $Release infra/charts/cv-tailoring-platform `
         --namespace $Namespace --create-namespace `
         -f $Values `
         --set "cv-tailoring-worker.image.repository=$imageRepository" `
@@ -176,7 +176,7 @@ if ($scaledObjectCrdPresent) {
     Ok 'KEDA CRDs installed; phase 2/2 adds the worker'
 }
 
-& helm upgrade --install $Release charts/cv-tailoring-platform `
+& helm upgrade --install $Release infra/charts/cv-tailoring-platform `
     --namespace $Namespace --create-namespace `
     -f $Values `
     --set "cv-tailoring-worker.image.repository=$imageRepository" `

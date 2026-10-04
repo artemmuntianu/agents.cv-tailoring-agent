@@ -57,12 +57,12 @@ of the same Secret, so the password still exists once.
 
 | Doc group | Live objects | Where |
 |---|---|---|
-| ① Broker | `StatefulSet/rabbitmq` → `pod/rabbitmq-0`, `Svc/rabbitmq` 5672+15672, `PVC/data-rabbitmq-0`, `CM/rabbitmq-config`, `Secret/rabbitmq-definitions`, `Secret/rabbitmq-credentials` | `charts/cv-tailoring-platform/templates/rabbitmq.yaml`, `.../definitions.yaml`, `.../rabbitmq-credentials.yaml` |
-| ② Workers | `Deployment/ai-agent-worker` (0 ⇄ N) + `ScaledObject/ai-agent-worker` + `TriggerAuthentication/ai-agent-worker-rabbitmq` + `CM/ai-agent-worker` | `charts/cv-tailoring-worker` |
+| ① Broker | `StatefulSet/rabbitmq` → `pod/rabbitmq-0`, `Svc/rabbitmq` 5672+15672, `PVC/data-rabbitmq-0`, `CM/rabbitmq-config`, `Secret/rabbitmq-definitions`, `Secret/rabbitmq-credentials` | `infra/charts/cv-tailoring-platform/templates/rabbitmq.yaml`, `.../definitions.yaml`, `.../rabbitmq-credentials.yaml` |
+| ② Workers | `Deployment/ai-agent-worker` (0 ⇄ N) + `ScaledObject/ai-agent-worker` + `TriggerAuthentication/ai-agent-worker-rabbitmq` + `CM/ai-agent-worker` | `infra/charts/cv-tailoring-worker` |
 | ③ Autoscaler | `keda-operator`, `keda-operator-metrics-apiserver`, `keda-admission-webhooks` | `kedacore/keda` subchart (the only upstream chart) |
-| ④ State | `Deploy/postgres` + `Svc/postgres` 5432 + `PVC/postgres-data` + `Secret/local-postgres` | `charts/cv-tailoring-platform/templates/local-postgres.yaml` |
-| ⑤ Artifacts | `PVC/cv-artifacts` (2 Gi, hostpath, `keep`) + `Deploy/cv-files` | `charts/cv-tailoring-platform/templates/storage.yaml` |
-| Scheduled jobs | `CronJob/cv-tailoring-cv-tailoring-scout` (every 30 min, 07:00-23:30) and `CronJob/cv-tailoring-cv-tailoring-archiver` (daily 09:00, `startingDeadlineSeconds: 86400`) - both on the worker's image and Secret, outside the queue; `Job/cv-tailoring-cv-tailoring-scout-startup` is the same intake once per **deploy** (a `post-install,post-upgrade` Helm hook, `--trigger startup`) | `charts/cv-tailoring-scout`, `charts/cv-tailoring-archiver` |
+| ④ State | `Deploy/postgres` + `Svc/postgres` 5432 + `PVC/postgres-data` + `Secret/local-postgres` | `infra/charts/cv-tailoring-platform/templates/local-postgres.yaml` |
+| ⑤ Artifacts | `PVC/cv-artifacts` (2 Gi, hostpath, `keep`) + `Deploy/cv-files` | `infra/charts/cv-tailoring-platform/templates/storage.yaml` |
+| Scheduled jobs | `CronJob/cv-tailoring-cv-tailoring-scout` (every 30 min, 07:00-23:30) and `CronJob/cv-tailoring-cv-tailoring-archiver` (daily 09:00, `startingDeadlineSeconds: 86400`) - both on the worker's image and Secret, outside the queue; `Job/cv-tailoring-cv-tailoring-scout-startup` is the same intake once per **deploy** (a `post-install,post-upgrade` Helm hook, `--trigger startup`) | `infra/charts/cv-tailoring-scout`, `infra/charts/cv-tailoring-archiver` |
 
 The producer in the source design is Chrome extension → Vercel gateway → AMQP. Locally
 scraping only *creates cards*: `POST /api/vacancies/batch` validates the batch and inserts
@@ -71,13 +71,13 @@ queue message is published when the operator drags a card into **Prepare**
 (`POST /api/board/move`), which is what keeps a scrape from spending Gemini; the other
 producer is the host-side smoke test.
 
-* `extension/` (Chrome MV3, loaded unpacked) scrapes every vacancy card on a listing
+* `apps/extension/` (Chrome MV3, loaded unpacked) scrapes every vacancy card on a listing
   page and posts the batch to the backoffice gateway. It is also loaded as a
   `content_scripts` entry on the listing page, where it injects a `Scrape` button into
   every card footer (a card the board already has shows `Scraped`, a link to
   `/?card=<job_id>`), and it asks `GET /api/vacancies/status` before rendering that state. It sends the page's site slug (`source`), so the board can tell djinni's 848944 from
   DOU's 848944. When the operator asks it to **fill** an application form (`Populate`, see
-  `extension/README.md`), it resolves the page to a card twice: the page's own vacancy id first,
+  `apps/extension/README.md`), it resolves the page to a card twice: the page's own vacancy id first,
   then the card's own **application URL** (`GET /api/vacancies/link?url=…` →
   `resume_board.apply_url`), which is how a DOU/Djinni vacancy that hands off to the employer's
   Greenhouse page still finds its card;
@@ -113,7 +113,7 @@ publish ─► resumes.generate ─► KEDA sees depth > 0 ─► HPA ─► rep
 ```
 
 Queue topology as declared (chart definitions, byte-identical in intent to
-`utils/messaging.py::_declare_topology`):
+`apps/worker/utils/messaging.py::_declare_topology`):
 
 | Entity | Kind | Arguments / routing |
 |---|---|---|
@@ -133,13 +133,13 @@ Queue topology as declared (chart definitions, byte-identical in intent to
 
 | Doc step | Code |
 |---|---|
-| a) fetch 1 task (`description_raw` + `cv_data.json`) | `worker.handle_delivery` → `utils/storage.prepare_task` |
-| b) LangGraph gap analysis (Gemini) | `agent/nodes.adapt_text` → `agent/tailoring_prompt.build_tailoring_prompt` + `agent/gemini.extract_role` |
-| c) AST/XML mutation of master `cv.docx` | `utils/docx_mutator.apply_text_replacements` |
-| d) render DOCX → PDF → images | `utils/renderer` (LibreOffice + poppler, per-job profile) |
-| e) Vision QA | `agent/vision.vision_check` (loop ≤ `MAX_REVISIONS`) |
-| f) store the result | `agent/persist.persist` → `utils.storage.LocalStorage` (the `cv-artifacts` volume) |
-| g) update PostgreSQL state | `agent/persist.persist` → `utils/db.PostgresDb` |
+| a) fetch 1 task (`description_raw` + `cv_data.json`) | `worker.handle_delivery` → `apps/worker/utils/storage.prepare_task` |
+| b) LangGraph gap analysis (Gemini) | `apps/worker/agent/nodes.adapt_text` → `apps/worker/agent/tailoring_prompt.build_tailoring_prompt` + `apps/worker/agent/gemini.extract_role` |
+| c) AST/XML mutation of master `cv.docx` | `apps/worker/utils/docx_mutator.apply_text_replacements` |
+| d) render DOCX → PDF → images | `apps/worker/utils/renderer` (LibreOffice + poppler, per-job profile) |
+| e) Vision QA | `apps/worker/agent/vision.vision_check` (loop ≤ `MAX_REVISIONS`) |
+| f) store the result | `apps/worker/agent/persist.persist` → `utils.storage.LocalStorage` (the `cv-artifacts` volume) |
+| g) update PostgreSQL state | `apps/worker/agent/persist.persist` → `apps/worker/utils/db.PostgresDb` |
 
 The message is acked only after (f) and (g) succeed.
 
@@ -147,13 +147,13 @@ The message is acked only after (f) and (g) succeed.
 
 | Step | Code |
 |---|---|
-| scrape the listing page | `extension/` (`div[id^="job-item-"]`, injected function; per-card `Scrape` buttons from `src/inject.js`) |
+| scrape the listing page | `apps/extension/` (`div[id^="job-item-"]`, injected function; per-card `Scrape` buttons from `src/inject.js`) |
 | has the board got it already? | `GET /api/vacancies/status` → `findExistingVacancies` (board scope) |
-| which card is this application page? (only on *Populate*) | `GET /api/vacancies/link?url=…` → `findCardByApplyUrl` (board scope, `resume_board.apply_url`, canonicalised by `backoffice/src/lib/applyUrl.ts`) |
-| authenticate, validate the whole batch | `POST /api/vacancies/batch` → `backoffice/src/lib/vacancies.ts` (pure) |
-| **create the board card** | `resumes` row, `status='submitted'` → `backoffice/src/lib/ingest.ts` |
+| which card is this application page? (only on *Populate*) | `GET /api/vacancies/link?url=…` → `findCardByApplyUrl` (board scope, `resume_board.apply_url`, canonicalised by `apps/backoffice/src/lib/applyUrl.ts`) |
+| authenticate, validate the whole batch | `POST /api/vacancies/batch` → `apps/backoffice/src/lib/vacancies.ts` (pure) |
+| **create the board card** | `resumes` row, `status='submitted'` → `apps/backoffice/src/lib/ingest.ts` |
 | *(nothing is queued yet - the card waits in Scraped)* | — |
-| **queue the tailoring** | the operator drags it into Prepare → `POST /api/board/move` → `lib/board.ts::tailoringRequest` → `backoffice/src/lib/queue.ts` (mirrors `utils/messaging.py`) |
+| **queue the tailoring** | the operator drags it into Prepare → `POST /api/board/move` → `lib/board.ts::tailoringRequest` → `apps/backoffice/src/lib/queue.ts` (mirrors `apps/worker/utils/messaging.py`) |
 
 The row *is* the card and it exists long before any message: the worker's claim **adopts**
 it (`job_id` unchanged) when the operator's drag finally queues it, because `submitted` is
@@ -170,7 +170,7 @@ An **archived** (refused) vacancy is a duplicate too, whatever its tailoring sta
 `findExistingVacancies` reads `resume_board.archived_at`, so re-scraping a page can never
 re-queue a card the operator has closed (invariant 19).
 
-## 5. Scaling and lifecycle invariants (values as deployed by `deploy/values/dev.yaml`)
+## 5. Scaling and lifecycle invariants (values as deployed by `infra/deploy/values/dev.yaml`)
 
 | Knob | Value | Why it matters here |
 |---|---|---|
@@ -188,7 +188,7 @@ re-queue a card the operator has closed (invariant 19).
 
 Provider selection (`QUEUE_BACKEND`, `DB_BACKEND`, `MODEL_STATE_BACKEND`) is what the
 hermetic test suite switches on; the deployed configuration is always
-amqp / postgres / postgres, as `deploy/values/dev.yaml` sets.
+amqp / postgres / postgres, as `infra/deploy/values/dev.yaml` sets.
 
 ## 6. Storage layout and ownership
 
@@ -214,9 +214,9 @@ amqp / postgres / postgres, as `deploy/values/dev.yaml` sets.
 
 | Object | Created by | Notes |
 |---|---|---|
-| Release + every namespaced object, `rabbitmq-credentials`, `rabbitmq-definitions`, `local-postgres` | `helm release cv-tailoring` | one `helm upgrade --install` of `charts/cv-tailoring-platform` |
+| Release + every namespaced object, `rabbitmq-credentials`, `rabbitmq-definitions`, `local-postgres` | `helm release cv-tailoring` | one `helm upgrade --install` of `infra/charts/cv-tailoring-platform` |
 | `Secret cv-tailoring-secrets` (`GEMINI_API_KEY`, `DATABASE_URL`) | `scripts/worker-secret.ps1` | values come from `.env`, never from git |
-| Worker non-secret env (`CM ai-agent-worker`) | `deploy/values/dev.yaml` → chart values → `configmap.yaml` | the single values→env mapping (`charts/AGENTS.md`) |
+| Worker non-secret env (`CM ai-agent-worker`) | `infra/deploy/values/dev.yaml` → chart values → `configmap.yaml` | the single values→env mapping (`infra/charts/AGENTS.md`) |
 | `resume_cover_letter` (one row per vacancy) | the **cover worker** (`cover.py`), requested by the board | the board only flips it to `queued` when it publishes, and reads it back through the card payload (`CONSTITUTION.md` invariant 24) |
 | `resume_application` (one row per vacancy) | the **apply worker** (`apply.py`), requested by the extension | keyed by `schema_hash`: the same rendered form is drafted once (`CONSTITUTION.md` invariant 29) |
 | `application_profile` (one row per operator) | the board (`PUT /api/profile`) | the candidate facts the form prompt may use and must never invent |

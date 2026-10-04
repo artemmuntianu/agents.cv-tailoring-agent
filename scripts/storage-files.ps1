@@ -3,14 +3,14 @@
 #   .\scripts\storage-files.ps1 -Action seed       # master CV + cv_data.json (+ any jd_*.txt)
 #   .\scripts\storage-files.ps1 -Action list       # what is on the volume
 #   .\scripts\storage-files.ps1 -Action download   # tailored PDFs + DOCX -> artifacts\output
-#   .\scripts\storage-files.ps1 -Action path       # print OUTPUT_DIR=... for backoffice/.env
+#   .\scripts\storage-files.ps1 -Action path       # print OUTPUT_DIR=... for apps/backoffice/.env
 #   .\scripts\storage-files.ps1 -Action purge      # delete the artifacts a removal queued
 #   .\scripts\storage-files.ps1 -Action shell      # interactive shell in the pod
 #
 # `path` is the alternative to mirroring: Docker Desktop keeps its PersistentVolumes on the
 # VM's disk, and Windows reaches that disk through WSL. Pointing the board's OUTPUT_DIR at it
 # means the board reads the worker's own files directly - nothing is copied, and a removal
-# deletes the real file (see backoffice/src/lib/artifacts.ts).
+# deletes the real file (see apps/backoffice/src/lib/artifacts.ts).
 #
 # `purge` finishes what the board cannot do itself: removing a vacancy deletes its database
 # row and the files it can reach, and queues every stored path it could not

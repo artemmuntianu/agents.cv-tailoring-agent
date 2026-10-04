@@ -35,7 +35,7 @@ foreign filesystem, so pick one:
    #   OUTPUT_DIR=\\wsl$\docker-desktop\...\pvc-<id>\output
    ```
 
-   Paste those two lines into `backoffice/.env` and restart the dev server. The path carries
+   Paste those two lines into `apps/backoffice/.env` and restart the dev server. The path carries
    the PVC's own id, so re-run the action if the PVC is ever recreated (`helm uninstall` keeps
    it: the claim is annotated `helm.sh/resource-policy: keep`). With this root the board is
    looking at the *worker's* volume, so removing a vacancy deletes the real file - no
@@ -66,7 +66,7 @@ for a click), `Ready` depth rises with a batch and returns to 0,
 
 `CronJob cv-tailoring-cv-tailoring-scout` fetches the DOU and Djinni feeds every 30 minutes between
 07:00 and 23:30 Lisbon time, creates one card per new vacancy in the board's **Scraped** column, and
-sends one Telegram message for each. Each feed is parsed by its own site's module (`scout/parsers/`,
+sends one Telegram message for each. Each feed is parsed by its own site's module (`apps/worker/scout/parsers/`,
 picked by the URL's host), and the card carries that site's slug (`dou`, `djinni`). It never queues
 tailoring - that is the operator's drag - so a run costs no Gemini request whatever it finds.
 
@@ -97,9 +97,9 @@ kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
   days ago (7 by default; `0` disables the rule) is refused before a card exists. The run's row on
   the Processes page says `max age days` and `stale dropped`, so a quiet intake is tellable from a
   feed whose window has simply moved on.
-- **A dry run** (writes nothing): `python -m scout --dry-run` on the host with `SCOUT_USER_ID`,
+- **A dry run** (writes nothing): `cd apps/worker && python -m scout --dry-run` on the host with `SCOUT_USER_ID`,
   `DATABASE_URL` pointed at a port-forward and `DATABASE_SSLMODE=disable` (the dev Postgres has no
-  TLS; trap 18 in the root `AGENTS.md`) - see `scout/AGENTS.md`.
+  TLS; trap 18 in the root `AGENTS.md`) - see `apps/worker/scout/AGENTS.md`.
 
 ## Filling an application form (the extension + `apply.py`)
 
@@ -124,7 +124,7 @@ kubectl exec rabbitmq-0 -- rabbitmqctl list_queues name messages | grep applicat
   The row says why; the payload is in `applications.draft.dlq`.
 - **A new site needs no deployment**: the picker stores a recipe per host in
   `chrome.storage.local`. A site whose upload widget is not a plain `input[type=file]` needs an
-  adapter in `extension/src/formfill.js` (`adapterFor`).
+  adapter in `apps/extension/src/formfill.js` (`adapterFor`).
 
 ## Scheduled housekeeping (the auto-archiver)
 
@@ -150,9 +150,9 @@ kubectl logs job/archiver-manual                           # ends with "refused=
   `--set cv-tailoring-archiver.suspend=true` to stop it entirely.
 - **Keep one card**: record an action on it (`➕ Add action`) - that bumps the card's activity
   date, which is exactly the clock the sweep reads.
-- **A dry run** (lists the candidates, writes nothing): `python -m archiver --dry-run` on the host
+- **A dry run** (lists the candidates, writes nothing): `cd apps/worker && python -m archiver --dry-run` on the host
   with `DATABASE_URL` pointed at a port-forward and `DATABASE_SSLMODE=disable` (the dev Postgres
-  has no TLS; trap 18 in the root `AGENTS.md`) - see `archiver/AGENTS.md`.
+  has no TLS; trap 18 in the root `AGENTS.md`) - see `apps/worker/archiver/AGENTS.md`.
 
 ## Queue is backing up (messages_ready grows, workers stay at 0)
 
@@ -186,7 +186,7 @@ The worker refuses to start when preflight fails (by design — fail fast):
 | readiness probe fails with `heartbeat is stale (...)` on a pod that is doing nothing | that consumer never started the idle heartbeat thread (the `apply`/`cover` pods run at `minReplicas: 1`, so they always idle) | fixed 2026-09-29: all three entry points call `utils.logging_setup.start_heartbeat_thread`; an old image still sits at `0/1` (and makes `helm upgrade --wait` time out, CONSTITUTION invariant 7) - redeploy |
 | task restarts from scratch, broker logs `missed heartbeats from client, timeout: 60s` | `AMQP_HEARTBEAT_SECONDS` below the task duration (the graph blocks pika's I/O loop) | keep it above the longest task (`--set cv-tailoring-worker.config.amqpHeartbeatSeconds=1800`) |
 | `rabbitmq-0` boots, then `BOOT FAILED: Please create virtual host "/" prior to importing definitions` | `load_definitions` is set but the definitions file declares no vhost/user | use the chart's definitions (they declare vhost+user+permissions); the broker only re-imports at boot, so restart it after editing them |
-| publish fails with `406 PRECONDITION_FAILED - inequivalent arg 'x-dead-letter-exchange'` | the pre-declared queue's arguments differ from `utils/messaging.py` | align `rabbitmqDefinitions.definitions.queues` with the code, delete the queue and restart the broker |
+| publish fails with `406 PRECONDITION_FAILED - inequivalent arg 'x-dead-letter-exchange'` | the pre-declared queue's arguments differ from `apps/worker/utils/messaging.py` | align `rabbitmqDefinitions.definitions.queues` with the code, delete the queue and restart the broker |
 | a long node (`adapt_text`, `vision_check`) with `transient API error - backing off` | Gemini quota: **20 requests/day per model on the free tier** | wait for the reset, switch `MODEL_NAME` to another model from `PREFERRED_MODELS` (own quota), or enable billing |
 | row ends `failed`/`dead_lettered` with `[Errno 13] Permission denied: '/data/output/...'` | `/data/output` is owned by root, not by the worker's uid | the `cv-files` pod chowns `/data/input` + `/data/output` to `fileManager.owner` (10001:10001) on start; redeploy with `-SkipBuild` |
 | `helm test` fails while the worker itself is healthy | the chart probe pod lacked the broker env (`RABBITMQ_HOST`, credentials) | upgrade the chart - the test hook now carries the same env as the Deployment |
@@ -199,7 +199,7 @@ vhost/user when definitions are loaded - the definitions Secret declares the one
 needs instead: `cvt` (`rabbitmqCredentials.username`), an administrator on vhost `/`. (The stock
 image would drop `guest` anyway the moment `RABBITMQ_DEFAULT_USER` is set.)
 
-The password is `rabbitmqCredentials.password` (`deploy/values/dev.yaml`: `dev-only-change-me`,
+The password is `rabbitmqCredentials.password` (`infra/deploy/values/dev.yaml`: `dev-only-change-me`,
 marked dev-only - production points the same key at an externally managed Secret). `rabbitmqctl`
 is the ground truth when the values file is not at hand:
 
@@ -250,14 +250,14 @@ All three Secrets in one idempotent step (values come from `.env`, never git):
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/worker-secret.ps1   # or: make worker-secret
-kubectl rollout restart deploy/ai-agent-worker
+kubectl rollout restart infra/deploy/ai-agent-worker
 ```
 
 ```bash
 kubectl create secret generic cv-tailoring-secrets \
   --from-literal=GEMINI_API_KEY=... --from-literal=DATABASE_URL=... \
   --dry-run=client -o yaml | kubectl apply -f -
-kubectl rollout restart deploy/ai-agent-worker
+kubectl rollout restart infra/deploy/ai-agent-worker
 ```
 
 ## Scale / cost controls
@@ -271,7 +271,7 @@ kubectl rollout restart deploy/ai-agent-worker
 
 ## After a schema change (the worker owns the DDL)
 
-`utils/db.py::SCHEMA_SQL` is the **only** DDL, and the worker executes it at start-up
+`apps/worker/utils/db.py::SCHEMA_SQL` is the **only** DDL, and the worker executes it at start-up
 (`PostgresDb.ensure_schema`). The board deliberately does not duplicate it, so after a
 schema change the database has to be upgraded once before the board can read the new
 columns:
@@ -295,7 +295,7 @@ plus `board_actions`.
 helm history cv-tailoring
 helm rollback cv-tailoring            # previous revision
 helm rollback cv-tailoring <rev>      # specific revision
-kubectl rollout status deploy/ai-agent-worker
+kubectl rollout status infra/deploy/ai-agent-worker
 ```
 
 Charts are `--atomic`: a failed upgrade already rolls itself back. In-flight

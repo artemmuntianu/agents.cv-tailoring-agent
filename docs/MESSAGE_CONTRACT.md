@@ -20,7 +20,7 @@ One AMQP message == one vacancy == one LangGraph run.
 | Queues | `resumes.rerender.retry.{60,300,900,1800,3600}s` | the same TTL ladder, declared by `rerender.py` |
 | Queues | `vacancies.parse`, `applications.submit` | declared for the gateway/extension side |
 
-Backpressure: the worker declares the topology on connect (`utils/messaging.py`),
+Backpressure: the worker declares the topology on connect (`apps/worker/utils/messaging.py`),
 so the queues exist even before the definitions Secret is loaded.
 
 ## Publishing (the board's move route, or `publisher.py` / `send-test-job.ps1`)
@@ -126,7 +126,7 @@ repoints `resumes.docx_path`/`pdf_url`, and records one row of
 ## Application drafts (`applications.draft`)
 
 The extension's *Populate* button: published by `POST /api/apply/<job_id>`
-(`backoffice/src/pages/api/apply/[jobId].ts`), consumed by `apply.py`.
+(`apps/backoffice/src/pages/api/apply/[jobId].ts`), consumed by `apply.py`.
 
 ```json
 {

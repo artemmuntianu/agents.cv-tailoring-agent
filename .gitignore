@@ -14,37 +14,37 @@ model_state.json
 *.pyc
 
 # `*.json` above must not hide versioned, non-secret descriptors.
-!charts/**/*.json
-!deploy/**/*.json
-!tests/**/*.json
+!infra/charts/**/*.json
+!infra/deploy/**/*.json
+!apps/worker/tests/**/*.json
 !**/values.schema.json
 !.github/**/*.json
-!backoffice/**/*.json
-# The MV3 manifest is source, not state: the extension is loaded unpacked from `extension/`
-# and `backoffice/src/lib/inject.test.ts` asserts against it - on CI a missing manifest used to
+!apps/backoffice/**/*.json
+# The MV3 manifest is source, not state: the extension is loaded unpacked from `apps/extension/`
+# and `apps/backoffice/src/lib/inject.test.ts` asserts against it - on CI a missing manifest used to
 # fail that test (the job has no checkout of an ignored file), 2026-09-29.
-!extension/manifest.json
+!apps/extension/manifest.json
 # The diagram source is a versioned descriptor, not runtime state.
 !docs/diagrams/*.archify.json
 
 # Backoffice (Astro): dependency and build output never enters git.
-backoffice/node_modules/
-backoffice/dist/
-backoffice/.astro/
+apps/backoffice/node_modules/
+apps/backoffice/dist/
+apps/backoffice/.astro/
 
 # Runtime data
 queue/
 heartbeat
 
 # Microsoft fonts are licensed and never enter git: `scripts/fetch-fonts.ps1` copies the
-# genuine Calibri files into `deploy/fonts/` for `docker build` to bake into the worker
-# image (CONSTITUTION.md D15). `deploy/fonts/README.md` stays tracked on purpose - the
-# directory must exist in the build context.
-deploy/fonts/*.ttf
+# genuine Calibri files into `apps/worker/fonts/` for `docker build` to bake into the
+# worker image (CONSTITUTION.md D15). `apps/worker/fonts/README.md` stays tracked on
+# purpose - the directory must exist in the build context, which is `apps/worker/`.
+apps/worker/fonts/*.ttf
 
 # Helm: keep Chart.lock (pins upstream versions) but not the vendored packages -
 # a stale .tgz silently shadows the local subchart source.
-charts/*/charts/*.tgz
+infra/charts/*/charts/*.tgz
 
 # Tooling caches
 .ruff_cache/

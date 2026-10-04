@@ -84,7 +84,7 @@ Ok 'kubectl, helm, python found'
 
 if ($Namespace -ne 'default') {
     Warn ("namespace '" + $Namespace + "': the ScaledObject host is pinned to " +
-        'rabbitmq.default.svc.cluster.local (deploy/values/dev.yaml), so KEDA will ' +
+        'rabbitmq.default.svc.cluster.local (infra/deploy/values/dev.yaml), so KEDA will ' +
         'not wake the worker. Deploy to `default` or override ' +
         'cv-tailoring-worker.keda.host.')
 }

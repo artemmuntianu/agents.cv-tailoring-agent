@@ -11,7 +11,7 @@ and the disagreement is recorded.
 |---|---|
 | `README.md` (root) | The user-facing quickstart, the configuration table and the repo layout |
 | `CONSTITUTION.md` | Canonical architecture, invariants and the discrepancy table - read it before the layer files |
-| `AGENTS.md` (root) + one file per layer | The map, plus the mechanical detail for `agent/`, `utils/`, `charts/`, `scripts/`, `tests/`, `docs/`, `.github/` |
+| `AGENTS.md` (root) + one file per layer | The map, plus the mechanical detail for `apps/worker/agent/`, `apps/worker/utils/`, `infra/charts/`, `scripts/`, `apps/worker/tests/`, `docs/`, `.github/` |
 | `docs/AGENTS.md` | This file: which document owns what, and what must not drift |
 | `docs/PROJECT_STATE.md` | A **point-in-time** session handoff (resume point for the first live deploy). Restored deliberately; its counts are already stale (D7), so never read it as live status |
 | `docs/ARCHITECTURE.md` | How the code maps onto the design documents: the verified cluster topology (pod groups, ports, scaling path), the per-task step table (a-g), scaling/storage invariants, what owns what, deliberate deviations |
@@ -20,7 +20,7 @@ and the disagreement is recorded.
 | `docs/diagrams/` | The runtime architecture diagram: `cv-tailoring-runtime.archify.json` is the authored source, the delivered `cv-tailoring-runtime.html` is the artifact. Dense `standard` profile by design - see the section below |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
 
-Do not restate a layer's rules here - link to `charts/AGENTS.md`, `tests/AGENTS.md` and
+Do not restate a layer's rules here - link to `infra/charts/AGENTS.md`, `apps/worker/tests/AGENTS.md` and
 the rest instead.
 
 ## The runtime architecture diagram
@@ -65,13 +65,13 @@ spec and re-delivers the HTML.
 
 ## One Postgres schema (D10, resolved)
 
-There is exactly one DDL: `utils/db.SCHEMA_SQL`, which the worker executes on startup -
+There is exactly one DDL: `apps/worker/utils/db.SCHEMA_SQL`, which the worker executes on startup -
 so it is what exists in the cluster. It creates the worker's tables (`resumes`,
 `model_availability`, `app_settings`) **and the backoffice's three** (`resume_board`,
 `resume_history`, `app_users` - the first two `on delete cascade` to `resumes(job_id)`),
 because the backoffice shares this database. `docs/postgres_schema.sql` was deleted on
 2026-09-25 (its only consumer, the docker-compose initdb path, was removed). Add tables to
-`SCHEMA_SQL` (and to `tests/test_postgres_store.py`) - never to a second file.
+`SCHEMA_SQL` (and to `apps/worker/tests/test_postgres_store.py`) - never to a second file.
 
 ## History: the docs set was deleted once, then restored
 

@@ -1,4 +1,4 @@
-# Put the *genuine* Calibri family into `deploy/fonts/`, so `docker build` can bake it
+# Put the *genuine* Calibri family into `apps/worker/fonts/`, so `docker build` can bake it
 # into the worker image and LibreOffice stops substituting it.
 #
 #   .\scripts\fetch-fonts.ps1                   # copy from C:\Windows\Fonts
@@ -9,7 +9,7 @@
 # the master CV's heading runs (`asciiTheme="majorHAnsi"`) rendered in DejaVu Sans -
 # different metrics, a PDF Word would never produce (CONSTITUTION.md D15). Only the real
 # outlines fix that. Calibri is Microsoft-licensed: the files stay in the untracked
-# `deploy/fonts/` (gitignored, `.dockerignore`-whitelisted) and are never committed or
+# `apps/worker/fonts/` (gitignored) and are never committed or
 # published inside the image.
 
 [CmdletBinding()]
@@ -38,7 +38,7 @@ $requiredFonts = @(
 )
 
 if ([string]::IsNullOrWhiteSpace($Destination)) {
-    $Destination = Join-Path $repoRoot 'deploy\fonts'
+    $Destination = Join-Path $repoRoot 'apps\worker\fonts'
 }
 if ([string]::IsNullOrWhiteSpace($Source)) {
     # A stripped environment drops %WINDIR%, and Join-Path would then build a path out of
@@ -99,7 +99,7 @@ if ($missing.Count -gt 0) {
     Ok ($copied.ToString() + ' of ' + $requiredFonts.Count + ' files in ' + $Destination)
 }
 Say ''
-Warn 'Calibri is Microsoft-licensed: deploy\fonts\*.ttf is gitignored, so never commit it'
+Warn 'Calibri is Microsoft-licensed: apps\worker\fonts\*.ttf is gitignored, so never commit it'
 Warn 'and never publish an image built with it.'
 Say ''
 Say 'Next:'

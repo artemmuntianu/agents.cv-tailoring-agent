@@ -140,4 +140,4 @@ if ($applyCode -ne 0) { Fail 'kubectl apply failed' }
 Ok ("Secret '" + $Name + "' applied in namespace " + $Namespace)
 Write-Host ''
 Write-Host 'Next:'
-Write-Host '  helm upgrade --install cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml --wait'
+Write-Host '  helm upgrade --install cv-tailoring infra/charts/cv-tailoring-platform -f infra/deploy/values/dev.yaml --wait'

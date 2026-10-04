@@ -28,8 +28,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+# The worker app lives under apps/worker after the monorepo move; its
+# packages (config, agent, utils) are importable only from there.
+APP_ROOT = os.path.join(REPO_ROOT, "apps", "worker")
+if APP_ROOT not in sys.path:
+    sys.path.insert(0, APP_ROOT)
 
 from utils import candidate as candidate_module  # noqa: E402
 from utils import db as db_module  # noqa: E402
@@ -69,7 +72,7 @@ def main(argv=None) -> int:
 
     clean = candidate_module.sanitize(raw)
     if not clean:
-        print("❌ nothing survived sanitizing - are the fact keys spelled as in utils/candidate.py?")
+        print("❌ nothing survived sanitizing - are the fact keys spelled as in apps/worker/utils/candidate.py?")
         return 2
 
     answers = clean.get("standing_answers") or {}

@@ -1,0 +1,97 @@
+# Default values for cv-tailoring-scout.
+# IMPORTANT: never put real secrets in this file. The bot token lives in `existingSecret`
+# (`scripts/worker-secret.ps1` adds SCOUT_TELEGRAM_TOKEN/_CHAT_ID when `.env` has them), and
+# the scout borrows the worker's Secret for DATABASE_URL - one place for credentials.
+
+enabled: true
+
+# The worker's image: the scout is `python -m scout` in the same build, so it carries the
+# same dependencies and needs no second Dockerfile.
+image:
+  repository: cv-tailoring-worker
+  tag: dev
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Twice an hour through the working day. The schedule is wall-clock on purpose: 07:30 in
+# Lisbon must stay 07:30 across a DST change, which is what `timeZone` is for.
+schedule: "0,30 7-23 * * *"
+timeZone: Europe/Lisbon
+# One run at a time: two scouts racing would both read the board before either inserts, and
+# while `upsert_job` makes that safe, the logs would be full of "someone got there first".
+concurrencyPolicy: Forbid
+suspend: false
+# A failed run retries twice, then waits for the next slot: the feeds will still be there, and
+# creating cards is idempotent.
+backoffLimit: 2
+activeDeadlineSeconds: 600
+successfulJobsHistoryLimit: 1
+failedJobsHistoryLimit: 3
+restartPolicy: OnFailure
+
+# The startup trigger: one run as part of `helm install`/`helm upgrade`, so a deploy does not
+# wait up to half an hour for the first CronJob slot. It is the same Job as a slot - the same
+# pod, one `--trigger startup` in the ledger - created as a Helm hook, so a run that fails fails
+# the release (`README.md` says why that is the honest answer). Turn it off with
+# `--set cv-tailoring-scout.startup.enabled=false`; it is not rendered at all while
+# `config.userId` is empty, because the preflight would refuse to run.
+startup:
+  enabled: true
+  hook: post-install,post-upgrade
+  hookDeletePolicy: before-hook-creation,hook-succeeded
+
+# The worker's Secret: DATABASE_URL, plus SCOUT_TELEGRAM_TOKEN / SCOUT_TELEGRAM_CHAT_ID.
+existingSecret: cv-tailoring-secrets
+
+config:
+  # Comma-separated feeds. Which parser reads a URL, and which `resumes.source` slug its cards
+  # carry, is decided by the URL's **host** (`apps/worker/scout/sources.py`) - so adding a site here is adding
+  # its feed and nothing else.
+  feeds: >-
+    https://jobs.dou.ua/vacancies/feeds/?remote&category=.NET&exp=5plus,
+    https://jobs.dou.ua/vacancies/feeds/?remote&category=Engineering%20Manager,
+    https://jobs.dou.ua/vacancies/feeds/?remote&category=Architect,
+    https://djinni.co/jobs/rss/?search_type=basic-search&primary_keyword=.NET&primary_keyword=Lead&primary_keyword=Python&primary_keyword=JavaScript&primary_keyword=Node.js&primary_keyword=CTO&primary_keyword=Engineering%20Manager&primary_keyword=Architect&salary=5000&exp_level=5y&employment=remote&english_level=pre&english_level=intermediate&english_level=upper,
+    https://landing.jobs/feed
+  # A provisioned `app_users.id` (in apps/backoffice/: `npm run user -- add ...`). Required - the
+  # drag publishes the row's own owner, so a different one would fork a second row.
+  userId: ""
+  # 0 = every new vacancy of the run; a new card costs nothing until the operator drags it.
+  maxPerRun: 0
+  # A vacancy the feed itself dated older than this is not scraped at all (0 disables the rule):
+  # a feed is a window, not a stream, and an old posting is a dead one (`apps/worker/scout/policy.py`).
+  maxAgeDays: 14
+  timeoutSeconds: 20
+  # telegram = one message per new card; none = create the cards silently.
+  notify: telegram
+  dbBackend: postgres
+  logLevel: INFO
+  logFormat: json
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false # /tmp is an emptyDir; the image chowns what it writes
+  capabilities:
+    drop:
+      - ALL

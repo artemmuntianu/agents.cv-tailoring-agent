@@ -1,0 +1,154 @@
+# Docker Desktop Kubernetes overrides - the only supported runtime
+# (Settings -> Kubernetes -> kubeadm, so the cluster shares Docker's image store).
+# Nothing here costs money and nothing talks to the cloud.
+#
+#   powershell -ExecutionPolicy Bypass -File .\scripts\local-deploy.ps1
+#
+# Everything runs inside your cluster: RabbitMQ, KEDA, Postgres AND the artifact
+# storage (a PersistentVolumeClaim). The only external dependency left is the
+# Gemini API.
+#
+# Files live on the `cv-artifacts` volume:
+#   /data/cv_data.json     structured CV model
+#   /data/input/cv.docx    master CV
+#   /data/output/*.pdf     tailored results
+# Push/pull them with:  .\scripts\storage-files.ps1 -Action seed | list | download
+
+# Local development Postgres: real Postgres, no cloud database needed.
+# The worker creates its own tables on startup.
+localPostgres:
+  enabled: true
+  image: postgres:16-alpine
+  secretName: local-postgres
+  serviceName: postgres
+  user: cvt
+  password: cvt
+  database: cvt
+  size: 1Gi
+
+rabbitmq:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 1Gi
+  # RabbitMQ's first boot (Erlang VM + plugins + loading the definitions) is
+  # CPU-hungry and every `rabbitmq-diagnostics` probe spawns another Erlang VM.
+  # 50m/250m starves it on Docker Desktop, so the broker never becomes Ready and
+  # the liveness probe restarts it forever. The chart default (100m/500m) is the
+  # floor; a local cluster can afford a whole core.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+rabbitmqCredentials:
+  create: true
+  # Dev-only password; production uses an externally managed Secret.
+  password: dev-only-change-me
+
+rabbitmqDefinitions:
+  create: true
+
+keda:
+  enabled: true
+
+# The scheduled intake. `userId` must be the **operator's** `app_users` row - the account whose
+# `application_profile` row grounds every prompt. Every prompt reads the candidate facts of the
+# card's OWNER (`candidate_module.load(store, row.user_id)`), while the board never reads the owner
+# (`CARD_SELECT` does not select `user_id`; both dedupe callers are board-scoped), so a separate
+# service account silently grounded every scouted card in *that* account's facts instead of the
+# operator's (Djinni 851326, 2026-10-03). `select id from app_users where email = '<you>'`.
+cv-tailoring-scout:
+  enabled: true
+  image:
+    repository: cv-tailoring-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  # The worker's Secret: DATABASE_URL plus SCOUT_TELEGRAM_TOKEN / SCOUT_TELEGRAM_CHAT_ID
+  # (`scripts/worker-secret.ps1` adds them when .env has them).
+  existingSecret: cv-tailoring-secrets
+  schedule: "0,30 7-23 * * *"
+  timeZone: Europe/Lisbon
+  config:
+    # The operator's own account: a scouted card must be the operator's, because the card's owner
+    # is whose candidate facts every prompt reads (CONSTITUTION.md invariant 25). There is no
+    # `source` value any more: a card's site slug comes from its feed's host (`apps/worker/scout/sources.py`).
+    userId: u-03ac63cd26651373
+    notify: telegram
+    maxPerRun: 0
+    logLevel: DEBUG
+    logFormat: text
+
+# The inactivity sweep: refuses the Applied cards nobody has touched for 10 days. Same image
+# and Secret as the worker; only the policy differs, and the board's Processes window shows
+# every run. It runs daily at 09:00 Lisbon, and a slot missed while the cluster was off is
+# started as soon as the cluster is back (`startingDeadlineSeconds`).
+cv-tailoring-archiver:
+  enabled: true
+  image:
+    repository: cv-tailoring-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  existingSecret: cv-tailoring-secrets
+  schedule: "0 9 * * *"
+  timeZone: Europe/Lisbon
+  config:
+    stages: applied
+    afterDays: 10
+    actor: Company
+    reason: No response
+    maxPerRun: 50
+    logLevel: DEBUG
+    logFormat: text
+
+cv-tailoring-worker:
+  enabled: true
+  image:
+    repository: cv-tailoring-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  # Created by .\scripts\worker-secret.ps1:
+  #   GEMINI_API_KEY, DATABASE_URL
+  # RABBITMQ_USERNAME/PASSWORD come from the broker Secret (shared with KEDA),
+  # so no AMQP URL is stored anywhere.
+  existingSecret: cv-tailoring-secrets
+  # Artifacts on the shared cluster volume.
+  persistence:
+    existingClaim: cv-artifacts
+    mountPath: /data
+  config:
+    logLevel: DEBUG
+    logFormat: text
+    storageBackend: local
+    artifactsDir: /data
+    dbBackend: postgres
+    modelStateBackend: postgres
+    # The chart default (gemini-3.5-flash) is a placeholder: an id this API key
+    # cannot use - or whose free-tier budget is spent (20 requests/day PER MODEL,
+    # and one CV needs 1-3 adaptations plus a vision check per rendered page) -
+    # sends every task to the DLQ. Pick ids with
+    # `python scripts/check_models.py --strict`, most preferred first; each model
+    # has its own daily budget, so a short ladder is the real fallback.
+    modelName: gemini-3.5-flash-lite
+    preferredModels: gemini-3.5-flash-lite,gemini-3.1-flash-lite
+  keda:
+    # Only the *tailoring* worker scales to zero: it is the slow, batch-ish one (it renders
+    # documents), so a cold start is a small share of a task that takes a minute or more. The two
+    # interactive workers - a form draft and a cover letter - are kept warm by the chart itself
+    # (`minReplicaCount: 1`), because there a cold pod was most of the visible wait.
+    minReplicaCount: 0
+    maxReplicaCount: 3
+    # 5s is how fast KEDA notices a waiting message; 5 minutes is how long a drained queue waits
+    # before tearing the pod down again - long enough to cover a session of cards back to back.
+    cooldownPeriod: 300
+    pollingInterval: 5
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi

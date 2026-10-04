@@ -1,0 +1,33 @@
+# Build context is `apps/worker/`. Charts, deployment values and docs are no
+# longer in this context (they live under `infra/`, `docs/`), so they need no rule
+# here. `fonts/` is intentionally NOT ignored: the Dockerfile COPYs it (D15).
+
+# Never bake secrets or local state into the image.
+.env
+*.env
+model_state.json
+
+# Local artifacts / scratch data
+artifacts/
+scratch/
+queue/
+temp/
+*.docx
+*.pdf
+*.png
+
+# VCS / tooling
+.git
+.gitignore
+.github
+.venv
+venv
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.idea/
+.vscode/
+
+# The hermetic suite is dev-only; CI runs it outside the image.
+tests/

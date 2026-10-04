@@ -4,7 +4,7 @@
 
   Why this exists: `python -m archiver` refuses a card in `applied` that no operator action has
   touched for `AUTO_ARCHIVE_AFTER_DAYS` (10) days, and its clock is `resume_board.updated_at` - the
-  board's own activity field (archiver/AGENTS.md). The import wrote the board's rows directly, so
+  board's own activity field (apps/worker/archiver/AGENTS.md). The import wrote the board's rows directly, so
   that column took its `now()` *default*: nine cards looked "touched" at 2026-09-26 23:18:23 (the
   same microsecond for all of them) although their real last activity is in `resume_history.at` -
   the date the import itself recorded from the sheet (dates only, so midnight, exactly like

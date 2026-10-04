@@ -36,7 +36,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install -r apps/worker/requirements-dev.txt
 
       - name: Ruff
         run: python -m ruff check .
@@ -66,25 +66,25 @@ jobs:
           version: v3.16.2
 
       - name: Lint worker chart
-        run: helm lint charts/cv-tailoring-worker
+        run: helm lint infra/charts/cv-tailoring-worker
 
       - name: Lint the scheduled-job charts
         # The umbrella lint below covers them too (once the dependency update has vendored
         # them), but a direct lint names the chart that broke.
         run: |
-          helm lint charts/cv-tailoring-scout
-          helm lint charts/cv-tailoring-archiver
+          helm lint infra/charts/cv-tailoring-scout
+          helm lint infra/charts/cv-tailoring-archiver
 
       - name: Resolve umbrella dependencies
-        run: helm dependency update charts/cv-tailoring-platform
+        run: helm dependency update infra/charts/cv-tailoring-platform
 
       - name: Lint umbrella chart
-        run: helm lint charts/cv-tailoring-platform
+        run: helm lint infra/charts/cv-tailoring-platform
 
       - name: Render manifests
         run: |
-          helm template cv-tailoring charts/cv-tailoring-platform \
-            -f deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci \
+          helm template cv-tailoring infra/charts/cv-tailoring-platform \
+            -f infra/deploy/values/dev.yaml --set cv-tailoring-worker.image.tag=ci \
             > /tmp/rendered-dev.yaml
           wc -l /tmp/rendered-dev.yaml
 
@@ -103,7 +103,7 @@ jobs:
     # `npm install` there (the same caveat is in .github/AGENTS.md).
     defaults:
       run:
-        working-directory: backoffice
+        working-directory: apps/backoffice
     steps:
       - uses: actions/checkout@v4
 
@@ -111,7 +111,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: backoffice/package-lock.json
+          cache-dependency-path: apps/backoffice/package-lock.json
 
       - name: Install dependencies
         run: npm ci

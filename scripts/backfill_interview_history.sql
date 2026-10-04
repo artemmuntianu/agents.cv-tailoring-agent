@@ -5,7 +5,7 @@
   Why this exists: `resume_interview` was deliberately the interview's only record, so the eight
   interviews created before 2026-10-01 have no `resume_history` line at all - and the operator's
   report that "adding an interview should be listed in History" was about exactly that. From now on
-  `backoffice/src/lib/db.ts::insertInterview` writes the line itself (through
+  `apps/backoffice/src/lib/db.ts::insertInterview` writes the line itself (through
   `recordCardActivity`); this file catches up the rows that predate it.
 
   What it writes, per interview row: one `kind='move'` line, actor `Candidate`, action
@@ -15,7 +15,7 @@
 
   What it deliberately does **not** touch: `resume_board.updated_at`. Bumping that clock now would
   claim the card was worked on today, which is exactly the kind of lie the archiver dates cards by
-  (archiver/AGENTS.md). The interviews' `scheduled_at` values that came from the sheet are
+  (apps/worker/archiver/AGENTS.md). The interviews' `scheduled_at` values that came from the sheet are
   midnight, like every other imported timestamp; the section's pencil is the way to fix one.
 
   Idempotent: the same action text is never inserted twice for a card, so a re-run (or a run after

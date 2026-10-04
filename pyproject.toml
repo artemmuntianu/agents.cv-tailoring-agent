@@ -5,13 +5,16 @@ description = "Event-driven CV tailoring worker (LangGraph + RabbitMQ on local K
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["apps/worker/tests"]
 addopts = "-q"
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["artifacts", "charts", "deploy"]
+# The Python app moved to apps/worker after the monorepo restructure: this is what
+# makes ruff treat `config`, `agent`, `utils`, `scout`, `archiver` as first-party.
+src = ["apps/worker"]
+extend-exclude = ["artifacts", "infra/charts", "infra/deploy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
@@ -21,4 +24,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]
+"apps/worker/tests/*" = ["B011"]

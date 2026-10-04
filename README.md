@@ -86,7 +86,7 @@ until the layout is approved or `MAX_REVISIONS` is reached.
 
 | Concern | Technology |
 |---|---|
-| Orchestration | LangGraph (`agent/graph.py`) |
+| Orchestration | LangGraph (`apps/worker/agent/graph.py`) |
 | LLM (the only external call) | Google Gemini via `google-genai` |
 | Document surgery | `python-docx` (AST / XML mutation) |
 | Rendering | LibreOffice `soffice` + poppler `pdftoppm` |
@@ -100,7 +100,7 @@ until the layout is approved or `MAX_REVISIONS` is reached.
 
 ### One pipeline, one runtime
 
-`agent/pipeline.py` is the single implementation of the flow. The supported runtime
+`apps/worker/agent/pipeline.py` is the single implementation of the flow. The supported runtime
 is the local Kubernetes cluster that `.\scripts\local-deploy.ps1` installs; the
 queue/database backends stay environment-selectable for the hermetic tests, but this
 repo ships no second run mode, so there is no parallel implementation to drift.
@@ -148,9 +148,9 @@ layout the reviewer sees is not the layout Word would produce.
 
 Provider-specific code sits behind an environment-selected backend and a `get_*()`
 factory with a matching `reset_*_cache()` test hook, so call sites never branch on
-the backend. Dependencies run one way (`agent/` -> `utils/` -> `config`),
+the backend. Dependencies run one way (`apps/worker/agent/` -> `apps/worker/utils/` -> `config`),
 configuration is read once in `config.py`, and Gemini-specific code is confined to
-`agent/gemini.py`.
+`apps/worker/agent/gemini.py`.
 
 ### Tests that need no network, no LLM and no LibreOffice
 
@@ -215,7 +215,7 @@ scout - nothing runs yet), **Prepare** (its sub-state follows the worker's statu
 card here is what queues tailoring), **Applied**, **Negotiating**, **Interviewing** and
 **Offer**. Every move asks for an actor
 (Candidate/Company) and a reason, and both are written to `resume_history` in the same Postgres
-the worker uses (`backoffice/AGENTS.md` documents the contract). A card the scrape left without a
+the worker uses (`apps/backoffice/AGENTS.md` documents the contract). A card the scrape left without a
 company gets a **Missing fields** section in the move dialog, and what the operator types there is
 stored with the move - only ever into a blank, since the site's own value always wins. The board re-reads the
 database every few seconds (the `● Live` toggle), so worker progress shows up on its
@@ -260,7 +260,7 @@ The board, the run log and (for an administrator) the vocabularies are **three p
 application**: the same left panel and page header, and each on its own URL - so a bookmark, a
 browser Back and a reload all do what they say.
 
-It is also where the scraper posts: `extension/` collects every vacancy card on a listing
+It is also where the scraper posts: `apps/extension/` collects every vacancy card on a listing
 page, and `POST /api/vacancies/batch` validates the batch and creates **one card per
 vacancy**. They land in **Scraped** and nothing is queued yet - scraping costs no Gemini
 request. Dragging a card into **Prepare** is what publishes the `resumes.generate` message
@@ -278,17 +278,17 @@ database's constraints and the board's own shape.
 ```powershell
 kubectl port-forward svc/postgres 5432:5432      # keep both running
 kubectl port-forward svc/rabbitmq 5672:5672
-cd backoffice
+cd apps/backoffice
 npm install
 Copy-Item .env.example .env                      # DATABASE_URL, BACKOFFICE_JWT_SECRET, RABBITMQ_URL
 npm run user -- add --email me@example.com --password=secret --name Me --admin
 npm run dev                                      # http://localhost:4321 -> sign in
 ```
 
-Then load `extension/` unpacked (`chrome://extensions` -> Developer mode -> Load
+Then load `apps/extension/` unpacked (`chrome://extensions` -> Developer mode -> Load
 unpacked), sign in there with the same account and press *Scrape & queue this page* -
 or, on any listing page, use the green `Scrape` button the extension has added to each
-card's footer. `extension/README.md` has the step-by-step.
+card's footer. `apps/extension/README.md` has the step-by-step.
 
 Refusing a vacancy is an **in-place archive**: the card keeps the column where it stopped
 and is only muted (rose accent, struck-through title, `⛔️ Rejected by Company • Salary
@@ -336,8 +336,8 @@ Regenerate `cv_data.json` whenever the master CV changes.
 
 ## Configuration
 
-Everything is environment-driven; `deploy/values/dev.yaml` supplies the cluster's
-values and `charts/cv-tailoring-worker/templates/configmap.yaml` renders them.
+Everything is environment-driven; `infra/deploy/values/dev.yaml` supplies the cluster's
+values and `infra/charts/cv-tailoring-worker/templates/configmap.yaml` renders them.
 For local CLI runs, copy `.env.example` to `.env`.
 
 | Variable | Default | Purpose |
@@ -374,11 +374,11 @@ duplicate / owned / re-claim), retry and dead-letter decisions, quota deferral,
 model-availability TTL, queue semantics, and a full worker smoke test (queue ->
 graph -> persist -> database row).
 
-The backoffice has its own gates (`cd backoffice; npm test; npx tsc --noEmit; npm run build`),
-and `tests/test_archiver.py` / `tests/test_process_runs.py` cover the scheduled jobs' policy
+The backoffice has its own gates (`cd apps/backoffice; npm test; npx tsc --noEmit; npm run build`),
+and `apps/worker/tests/test_archiver.py` / `apps/worker/tests/test_process_runs.py` cover the scheduled jobs' policy
 hermetically with an injected store.
 
-`tests/test_postgres_store.py` additionally runs against a **real** Postgres to
+`apps/worker/tests/test_postgres_store.py` additionally runs against a **real** Postgres to
 exercise the production schema, the claim SQL, the board's tables (interviews, the run ledger,
 the inactivity sweep's read + archive) and the shared model ledger:
 
@@ -389,17 +389,17 @@ make test-postgres
 ## Project layout
 
 ```
-agent/          contract, state, LangGraph nodes/graph, shared pipeline runner
-utils/          queue, storage, db, model-state, retry, docx mutator, renderer, logging
+apps/worker/agent/          contract, state, LangGraph nodes/graph, shared pipeline runner
+apps/worker/utils/          queue, storage, db, model-state, retry, docx mutator, renderer, logging
 worker.py       queue consumer (the pod entry point)
 publisher.py    dev stand-in for the API gateway (host-side publish)
 healthcheck.py  exec probes (liveness / readiness / render / amqp)
-scout/          the scheduled intake (`python -m scout`): feeds -> cards + Telegram
-archiver/       the scheduled housekeeping (`python -m archiver`): the inactivity sweep
-charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker + the two CronJobs
-deploy/values/  environment values (dev.yaml = local cluster)
+apps/worker/scout/          the scheduled intake (`python -m scout`): feeds -> cards + Telegram
+apps/worker/archiver/       the scheduled housekeeping (`python -m archiver`): the inactivity sweep
+infra/charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker + the two CronJobs
+infra/deploy/values/  environment values (dev.yaml = local cluster)
 scripts/        local-deploy.ps1, send-test-job.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
-tests/          hermetic suite (+ Postgres-gated production-store tests)
+apps/worker/tests/          hermetic suite (+ Postgres-gated production-store tests)
 docs/           architecture, contract, runbook + the layer map
 ```
 

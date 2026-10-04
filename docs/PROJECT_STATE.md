@@ -30,7 +30,7 @@ publisher / extension --> RabbitMQ (rabbitmq-0, resumes.generate)
               cv-artifacts volume (PDF/DOCX) + Postgres (status)
 ```
 
-Three ways to run the same pipeline (`agent/pipeline.py` is shared):
+Three ways to run the same pipeline (`apps/worker/agent/pipeline.py` is shared):
 
 | Mode | Command | Storage / DB |
 |---|---|---|
@@ -107,7 +107,7 @@ If step 2 fails, debug in this order: `kubectl get pods`,
 | 41 tests (6 skip without a DB) | `python -m pytest -q` -> all pass |
 | Lint/format | `python -m ruff check .` -> clean |
 | Charts are valid | `helm lint` (both charts) exit 0; `helm dependency update` fetches KEDA 2.15.2 |
-| Full platform renders | `helm template cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml` -> **45 resources**, all 13 expected pieces (RabbitMQ StatefulSet, Postgres, both PVCs, cv-files, worker + ScaledObject + TriggerAuthentication, ConfigMaps, Secrets, Services) plus KEDA's stack |
+| Full platform renders | `helm template cv-tailoring infra/charts/cv-tailoring-platform -f infra/deploy/values/dev.yaml` -> **45 resources**, all 13 expected pieces (RabbitMQ StatefulSet, Postgres, both PVCs, cv-files, worker + ScaledObject + TriggerAuthentication, ConfigMaps, Secrets, Services) plus KEDA's stack |
 | Render is parseable YAML | loaded with PyYAML and counted per kind |
 | Offline queue -> worker -> DB | `publisher.py --all` then `worker.py --once`: claim -> prepare_task -> Gemini 400 -> row `failed, attempts=1` -> message in `queue/retry/` |
 | Claim / re-claim / DLQ lifecycle | 3 consecutive runs: the same row is reused, `attempts` 1->2->3, then `dead_lettered` and the message moves to `queue/failed/` |
@@ -160,20 +160,20 @@ If step 2 fails, debug in this order: `kubectl get pods`,
 ## Repo map (which file to touch for what)
 
 ```
-agent/pipeline.py     shared runner used by worker.py and main.py
-agent/graph.py        adapt_text -> render -> vision_check -> persist
-agent/nodes.py        the four nodes (Gemini calls, DOCX mutation, upload, DB)
-agent/contracts.py    ResumeTaskMessage + JobStatus (job_id shape guard)
+apps/worker/agent/pipeline.py     shared runner used by worker.py and main.py
+apps/worker/agent/graph.py        adapt_text -> render -> vision_check -> persist
+apps/worker/agent/nodes.py        the four nodes (Gemini calls, DOCX mutation, upload, DB)
+apps/worker/agent/contracts.py    ResumeTaskMessage + JobStatus (job_id shape guard)
 worker.py             queue consumer: claim -> run -> ack/retry/DLQ
-utils/messaging.py    AmqpQueue + DirectoryQueue behind one contract
-utils/storage.py      LocalStorage over ARTIFACTS_DIR (+ prepare_task)
-utils/db.py           LocalDb + PostgresDb (claim/duplicate/owned semantics)
-utils/model_state.py  model-availability ledger (file or Postgres)
-utils/docx_mutator.py AST/XML replacements + cv_data <-> cv.docx sync validator
-utils/renderer.py     LibreOffice + poppler, per-job profile, hard timeout
-charts/cv-tailoring-platform/   RabbitMQ, KEDA, Postgres, PVC + cv-files, worker
-charts/cv-tailoring-worker/     Deployment, ScaledObject, TriggerAuthentication
-deploy/values/dev.yaml          the only values file (local cluster)
+apps/worker/utils/messaging.py    AmqpQueue + DirectoryQueue behind one contract
+apps/worker/utils/storage.py      LocalStorage over ARTIFACTS_DIR (+ prepare_task)
+apps/worker/utils/db.py           LocalDb + PostgresDb (claim/duplicate/owned semantics)
+apps/worker/utils/model_state.py  model-availability ledger (file or Postgres)
+apps/worker/utils/docx_mutator.py AST/XML replacements + cv_data <-> cv.docx sync validator
+apps/worker/utils/renderer.py     LibreOffice + poppler, per-job profile, hard timeout
+infra/charts/cv-tailoring-platform/   RabbitMQ, KEDA, Postgres, PVC + cv-files, worker
+infra/charts/cv-tailoring-worker/     Deployment, ScaledObject, TriggerAuthentication
+infra/deploy/values/dev.yaml          the only values file (local cluster)
 scripts/local-deploy.ps1        one-command deploy (+ -SkipBuild, -Uninstall)
 scripts/storage-files.ps1       seed | list | download | shell
 scripts/worker-secret.ps1       creates the worker Secret from .env
@@ -203,7 +203,7 @@ docs/RUNBOOK.md                 ops: backlog, DLQ, quota, rollback, cost knobs
 
 ## Hard-won gotchas (read before editing)
 
-1. **Editor line endings and escapes.** Some files are CRLF (`utils/db.py`) while
+1. **Editor line endings and escapes.** Some files are CRLF (`apps/worker/utils/db.py`) while
    others are LF, so exact-match edits fail on CRLF files. Worse, the editor's
    replace path processes template escapes: a dollar sign followed by a single
    quote, or a dollar sign followed by a backtick, gets substituted - it silently
@@ -227,7 +227,7 @@ docs/RUNBOOK.md                 ops: backlog, DLQ, quota, rollback, cost knobs
    stay in the `required` list of `values.schema.json`; and every value a template
    reads needs a default in the chart's `values.yaml` or `helm lint` dies with a
    nil pointer.
-6. **Vendored subcharts shadow local sources.** `charts/*/charts/*.tgz` is
+6. **Vendored subcharts shadow local sources.** `infra/charts/*/charts/*.tgz` is
    gitignored for that reason; always run `helm dependency update` before linting
    (both `local-deploy.ps1` and CI do it).
 7. **The Windows console is cp1252.** CLI scripts must call
@@ -239,7 +239,7 @@ docs/RUNBOOK.md                 ops: backlog, DLQ, quota, rollback, cost knobs
    so offline chart validation is `helm lint` + `helm template` + a YAML parse.
 9. **The sync rule is enforced at runtime**: every line of `cv_data.json` must
    appear verbatim in `cv.docx` (whitespace included). The validator lives in
-   `utils/docx_mutator.py`; the worker fails the task rather than guessing.
+   `apps/worker/utils/docx_mutator.py`; the worker fails the task rather than guessing.
 
 ## Session log (chronological, one line each)
 
@@ -276,8 +276,8 @@ cd E:\CVTailoringAgent
 git log --oneline -3                     # expect the merge on top
 python -m pytest -q                      # 35 pass, 6 skip
 python -m ruff check .
-helm lint charts/cv-tailoring-worker ; helm lint charts/cv-tailoring-platform
-helm template cv-tailoring charts/cv-tailoring-platform -f deploy/values/dev.yaml > rendered.yaml
+helm lint infra/charts/cv-tailoring-worker ; helm lint infra/charts/cv-tailoring-platform
+helm template cv-tailoring infra/charts/cv-tailoring-platform -f infra/deploy/values/dev.yaml > rendered.yaml
 kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 rendered.yaml
 kubectl get nodes                        # is the cluster up?
 ```

@@ -2,11 +2,11 @@
 # Windows users without `make` can copy the commands from the README.
 
 SHELL := /bin/bash
-CHART_WORKER := charts/cv-tailoring-worker
-CHART_PLATFORM := charts/cv-tailoring-platform
+CHART_WORKER := infra/charts/cv-tailoring-worker
+CHART_PLATFORM := infra/charts/cv-tailoring-platform
 RELEASE ?= cv-tailoring
 NAMESPACE ?= default
-VALUES ?= deploy/values/dev.yaml
+VALUES ?= infra/deploy/values/dev.yaml
 # The single supported runtime builds this image locally and runs it on Docker
 # Desktop Kubernetes (see scripts/local-deploy.ps1) - no registry in the loop.
 IMAGE_REPO ?= cv-tailoring-worker
@@ -23,7 +23,7 @@ help: ## Show this help
 # --------------------------------------------------------------------------- #
 .PHONY: install
 install: ## Install runtime + dev dependencies
-	pip install -r requirements-dev.txt
+	pip install -r apps/worker/requirements-dev.txt
 
 .PHONY: test
 test: ## Run the test suite
@@ -39,7 +39,7 @@ send-test-job: ## Publish one vacancy to the in-cluster broker (own port-forward
 
 .PHONY: docker-build
 docker-build: ## Build the worker image
-	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) apps/worker
 
 # --------------------------------------------------------------------------- #
 # helm
@@ -99,14 +99,14 @@ check-models: ## Verify MODEL_NAME against the models this Gemini key can use
 .PHONY: scout-dry-run
 scout-dry-run: ## Show what the scheduled intake would add (writes nothing)
 	# DATABASE_SSLMODE=disable: the dev Postgres serves plain TCP (trap 18 in AGENTS.md)
-	DB_BACKEND=postgres DATABASE_SSLMODE=disable python -m scout --dry-run
+	cd apps/worker && DB_BACKEND=postgres DATABASE_SSLMODE=disable python -m scout --dry-run
 
 .PHONY: archiver-dry-run
 archiver-dry-run: ## Show what the inactivity sweep would refuse (writes nothing)
-	DB_BACKEND=postgres DATABASE_SSLMODE=disable python -m archiver --dry-run
+	cd apps/worker && DB_BACKEND=postgres DATABASE_SSLMODE=disable python -m archiver --dry-run
 
 .PHONY: test-postgres
 test-postgres: ## Production-store tests against the cluster Postgres (needs a port-forward)
 	# kubectl port-forward svc/postgres 5432:5432   # in a second terminal
 	TEST_DATABASE_URL=postgresql://cvt:cvt@localhost:5432/cvt \
-		python -m pytest -q tests/test_postgres_store.py
+		python -m pytest -q apps/worker/tests/test_postgres_store.py
