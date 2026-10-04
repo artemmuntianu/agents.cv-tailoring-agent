@@ -191,7 +191,7 @@ kubectl get pods -w                              # 0 -> 1 -> 0
 .\scripts\storage-files.ps1 -Action path        # where the board can read the results directly
 ```
 
-`-Action path` prints the `ARTIFACTS_DIR`/`OUTPUT_DIR` lines for `backoffice\.env`: Docker
+`-Action path` prints the `ARTIFACTS_DIR`/`OUTPUT_DIR` lines for `apps/backoffice\.env`: Docker
 Desktop keeps its volumes on the VM disk, which Windows sees through WSL, so the board can read
 the worker's own documents instead of a copy (`-Action download` remains the mirror for any
 other cluster).
@@ -326,7 +326,7 @@ The board's *Tailored PDF / DOCX* links download through
 `GET /api/artifacts/<job_id>`, which resolves the worker's stored path
 (`/data/output/848944.pdf`) against `ARTIFACTS_DIR`/`OUTPUT_DIR`. A board running
 outside the cluster therefore either points those at the volume itself - `-Action path`
-prints the two lines for `backoffice\.env` - or mirrors it locally with `-Action download`.
+prints the two lines for `apps/backoffice\.env` - or mirrors it locally with `-Action download`.
 writes exactly where the default root points (`artifacts\output\`).
 
 **The hard sync rule:** every line of `cv_data.json` must exist verbatim in
@@ -388,19 +388,30 @@ make test-postgres
 
 ## Project layout
 
+The repo is a monorepo: `apps/` holds the independently deployable units, `infra/`
+everything applied to the cluster, `packages/` is the reserved shared-library slot (empty
+today - see `packages/AGENTS.md`), and the root keeps the cross-cutting tooling.
+
 ```
-apps/worker/agent/          contract, state, LangGraph nodes/graph, shared pipeline runner
-apps/worker/utils/          queue, storage, db, model-state, retry, docx mutator, renderer, logging
-worker.py       queue consumer (the pod entry point)
-publisher.py    dev stand-in for the API gateway (host-side publish)
-healthcheck.py  exec probes (liveness / readiness / render / amqp)
-apps/worker/scout/          the scheduled intake (`python -m scout`): feeds -> cards + Telegram
-apps/worker/archiver/       the scheduled housekeeping (`python -m archiver`): the inactivity sweep
-infra/charts/         Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker + the two CronJobs
-infra/deploy/values/  environment values (dev.yaml = local cluster)
-scripts/        local-deploy.ps1, send-test-job.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
-apps/worker/tests/          hermetic suite (+ Postgres-gated production-store tests)
-docs/           architecture, contract, runbook + the layer map
+apps/worker/           the Python image - the Docker build context (`apps/worker/Dockerfile`)
+  agent/               orchestration: contract, state, LangGraph nodes/graph, shared pipeline runner
+  utils/               adapters: queue, storage, db, model-state, retry, docx mutator, renderer, logging
+  scout/               the scheduled intake (`python -m scout`): feeds -> cards + Telegram
+  archiver/            the scheduled housekeeping (`python -m archiver`): the inactivity sweep
+  tests/               hermetic suite (+ Postgres-gated production-store tests)
+  worker.py            queue consumer (the pod entry point)
+  apply.py, cover.py, rerender.py   the per-queue consumers
+  publisher.py         dev stand-in for the API gateway (host-side publish)
+  healthcheck.py       exec probes (liveness / readiness / render / amqp)
+  config.py            every env-overridable setting
+  fonts/               the licensed Calibri input baked into the image (gitignored)
+apps/backoffice/       the Astro + React board and the authenticated batch gateway
+apps/extension/        the Chrome MV3 scraper that feeds the gateway
+infra/charts/          Helm charts: platform (RabbitMQ, KEDA, Postgres, storage) + worker + the two CronJobs
+infra/deploy/values/   environment values (dev.yaml = local cluster)
+packages/              reserved for shared libraries (empty today)
+scripts/               local-deploy.ps1, send-test-job.ps1, storage-files.ps1, worker-secret.ps1, check_models.py
+docs/                  architecture, contract, runbook + the layer map
 ```
 
 ## Deployment
@@ -418,9 +429,10 @@ make helm-test        # run the chart's in-cluster probe
 make check-models     # verify MODEL_NAME against the models this key can use
 ```
 
-CI runs two jobs on every push and pull request: `lint + tests` with a Postgres
-service container, and `helm lint + render` (both charts, then the rendered
-manifests checked with kubeconform).
+CI runs three jobs on every push and pull request: `lint + tests` with a Postgres
+service container (plus `tools/analyze.py validate-docs`), `helm lint + render`
+(every chart, then the rendered manifests checked with kubeconform), and the
+backoffice's own gates (`npx tsc --noEmit`, `npm test`, `npm run build`).
 
 ## Documentation map
 
