@@ -33,7 +33,7 @@ and the root keeps the cross-cutting tooling (`scripts/`, `docs/`, `.github/`, `
 - **`apps/worker/archiver/AGENTS.md`** - the scheduled housekeeping (`python -m archiver`): the inactivity sweep that refuses the Applied cards nobody touched for 10 days, the staleness clock it uses, and the run ledger both jobs write.
 - **`apps/worker/tests/AGENTS.md`** - the hermetic verification layer.
 - **`packages/AGENTS.md`** - the reserved shared-library slot and the rule for when a package earns a home there.
-- **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what; it also owns the runtime diagram spec + artifact in `docs/diagrams/`.
+- **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what; it also owns the runtime diagram spec + artifact in `docs/diagrams/` and the README screenshots in `docs/images/`.
 - **`.github/AGENTS.md`** - CI workflows.
 - **Root entry points** (`apps/worker/config.py`, `apps/worker/worker.py`,
   `apps/worker/publisher.py`, `apps/worker/healthcheck.py`) are

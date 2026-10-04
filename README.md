@@ -14,6 +14,10 @@ external call is the Gemini API.
 ![Packaging: Helm](https://img.shields.io/badge/packaging-Helm-0F1689?logo=helm&logoColor=white)
 ![CI](https://img.shields.io/badge/CI-ruff%20%2B%20pytest%20%2B%20helm-2088FF?logo=githubactions&logoColor=white)
 
+![The application board: each vacancy is a card that moves from Scraped through Prepare to Applied, with its tailored CV and cover letter attached.](docs/images/kanban-board.png)
+
+*The board at the centre of the system - every application is a card, and its tailored CV + cover letter live on it. Cards arrive Scraped (from the Chrome scraper or the scheduled feed intake); dragging a card into Prepare queues the tailoring; the tailored files land back on the card.*
+
 ## Contents
 
 - [What it does](#what-it-does)

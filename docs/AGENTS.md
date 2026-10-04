@@ -18,6 +18,7 @@ and the disagreement is recorded.
 | `docs/MESSAGE_CONTRACT.md` | The queue contract: payload fields, `job_id` semantics, the ack/retry/DLQ matrix, status lifecycle, idempotency key, directory-backend behaviour |
 | `docs/RUNBOOK.md` | Operations: daily checks, queue backlog, CrashLoop, DLQ, Gemini quota, secret rotation, scaling/cost knobs, rollback |
 | `docs/diagrams/` | The runtime architecture diagram: `cv-tailoring-runtime.archify.json` is the authored source, the delivered `cv-tailoring-runtime.html` is the artifact. Dense `standard` profile by design - see the section below |
+| `docs/images/` | Screenshots the root `README.md` embeds (e.g. `kanban-board.png`, the board hero image). Assets for the README, not documents |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
 
 Do not restate a layer's rules here - link to `infra/charts/AGENTS.md`, `apps/worker/tests/AGENTS.md` and
