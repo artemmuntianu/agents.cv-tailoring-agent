@@ -131,14 +131,35 @@ into a card's Application URL and populate from that page (the card is found by 
 
 - `host_permissions` covers **both sides**: the gateway origin (`localhost:4321` /
   `127.0.0.1:4321` - change it in `manifest.json` if you move the gateway) and the vacancy sites
-  (`djinni.co`, `jobs.dou.ua`/`dou.ua`, and the three `greenhouse.io` boards), which the per-card
-  button needs in order to inject the scraper into the tab it was clicked in. Dropping either one
-  shows up as a button that answers `Retry scrape`.
+  (`djinni.co`, `jobs.dou.ua`/`dou.ua`, the three `greenhouse.io` boards, and `*.indeed.com`), which
+  the per-card button needs in order to inject the scraper into the tab it was clicked in. Dropping
+  either one shows up as a button that answers `Retry scrape`.
 - **Greenhouse is read one job at a time.** Its boards have no listing cards - the job page itself
   *is* the vacancy - so **Scrape & queue this page** queues exactly that job; discovery across a
   whole board is the scheduled `scout` job's business. Two things on its apply form stay yours: the
   Cover Letter field only exists after the site's own *Enter manually* is clicked, and the form's
   dropdowns are React widgets the extension does not type into - it lists them in the report.
+- **Indeed is read one vacancy at a time, and it is the one site with no feed at all.** Its feed shows
+  the full description of the *selected* card only (the cards carry a snippet), it has no RSS/JSON
+  endpoint, and it refuses non-browser clients outright - so it can never be scheduled the way
+  DOU/Djinni are. Click the card you want, or let its `Scrape` button do it: the button selects the
+  card, waits for that vacancy's text to render in the right pane (up to 15 s - Indeed fills the pane
+  in stages, and the text is the last part), and only then queues **that one** vacancy. A pane that
+  never gets there is reported as a failure rather than filled with someone else's text.
+  **Scrape & queue this page** on Indeed therefore *walks* the feed instead of reading it in one go: it
+  visits every card the page has rendered, waits for each one's own description, and queues them all -
+  the status line counts them off (*Scraping vacancy 4 of 12…*). **It leaves alone the cards you already
+  have** (they show `Scraped`): walking them would flicker the feed through vacancies you do not need,
+  and the summary says how many it skipped for that reason. A card whose description never arrives is
+  skipped and reported too, never filled with the previous vacancy's text. Cards the feed adds later, as
+  you scroll, are not chased: scroll first, then press.
+- Manual check after a change to `indeed.js` - the one premise jsdom cannot prove: open
+  `pt.indeed.com`, confirm every card carries a `Scrape` button **centred at the bottom of the card**
+  (its own strip, under Indeed's save / dislike icons - whether the card's layout *clips* that strip is
+  the one thing a headless test cannot see), click one that is *not* currently selected, and watch the
+  right pane change to that vacancy just before the button turns `Scraped`. Then open the card on the
+  board: its text must be that vacancy's, and its link must be `…/viewjob?jk=<that card's id>`. If a
+  synthetic click never moves the pane, the fallback is the operator's own click first, then the button.
 - A change to `manifest.json` (a new host, a new permission, a version bump) is only visible after
   the extension is reloaded on `chrome://extensions`.
 - Cards without an id or without description text are skipped and reported; nothing is

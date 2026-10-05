@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MAX_APPLY_URL_LENGTH } from '../lib/applyUrl';
 import { artifactUrl, storedPathName } from '../lib/artifact-link';
 import { historyLine } from '../lib/board';
-import { coverBlockedReason, coverState, coverStateLabel } from '../lib/cover';
+import { coverState, coverStateLabel } from '../lib/cover';
 import {
   MAX_DOCX_UPLOAD_BYTES,
   RENDER_STATE_CHIP,
@@ -47,8 +47,6 @@ interface VacancyModalProps {
   onRestore?: (jobId: string) => void;
   /** Irreversible: the board confirms it in its own dialog. */
   onRemove?: (jobId: string) => void;
-  /** Ask the `resumes.cover` worker for a letter; the poll brings it back. */
-  onGenerateCover?: (jobId: string) => Promise<void>;
   /**
    * Upload the deliverable the operator edited by hand (`POST /api/board/docx/<job_id>`).
    * Offered only for a card that has a tailored DOCX, and the render comes back through the
@@ -117,15 +115,6 @@ function resultField(storedPath: string | null): string {
   return storedPathName(storedPath) ?? 'not stored yet';
 }
 
-/** The status chip of the cover-letter section. */
-const COVER_CHIP: Record<string, string> = {
-  completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  running: 'bg-amber-50 text-amber-800 ring-amber-200',
-  queued: 'bg-slate-100 text-slate-700 ring-slate-200',
-  failed: 'bg-rose-50 text-rose-700 ring-rose-200',
-  absent: 'bg-slate-100 text-slate-500 ring-slate-200',
-};
-
 /**
  * Everything known about one vacancy: the worker's state, the cover letter, the **interviews**
  * (for a card that reached Interviewing) and the full change history at the bottom.
@@ -139,7 +128,6 @@ export default function VacancyModal({
   onArchive,
   onRestore,
   onRemove,
-  onGenerateCover,
   onUploadDocx,
   onAddInterview,
   onEditInterview,
@@ -156,9 +144,7 @@ export default function VacancyModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Local-only state: the copy confirmation and whether a request is in flight.
-  const [copied, setCopied] = useState(false);
-  const [asking, setAsking] = useState(false);
+  // Local-only state: whether an interview write or a docx upload is in flight.
   // The interview being added (`interview: null`) or edited, plus the state of that write.
   const [interviewDraft, setInterviewDraft] = useState<{ interview: Interview | null } | null>(
     null,
@@ -181,7 +167,6 @@ export default function VacancyModal({
   const detailsDirty = detailsChanged(detailsDraft, card.details);
 
   const cover = coverState(card.coverLetter);
-  const coverBlocked = coverBlockedReason(card.hasDescription);
 
   // The *Update docx* upload: the chosen file, the message a refused upload produced, and whether
   // the request is in flight. The outcome itself comes from the card payload (`card.docxUpdate`),
@@ -219,28 +204,6 @@ export default function VacancyModal({
     const rejection = fileRejection(file.name, file.size);
     setDocxFile(rejection ? null : file);
     if (rejection) setDocxMessage(rejection);
-  }
-
-  async function copyLetter() {
-    const text = card.coverLetter?.text;
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  async function askForLetter() {
-    if (!onGenerateCover || asking || coverBlocked) return;
-    setAsking(true);
-    try {
-      await onGenerateCover(card.jobId);
-    } finally {
-      setAsking(false);
-    }
   }
 
   /** One interview write: the dialog stays open with the message when the API refuses. */
@@ -432,6 +395,34 @@ export default function VacancyModal({
                 Open the vacancy posting
               </a>
             )}
+            {/*
+              The parsed text itself (`resumes.description_raw`) - what the reader made of the posting,
+              and what the tailoring prompt is given. Its own page, because reading a job description
+              beside a card is not reading it.
+            */}
+            <a
+              href={`/vacancy/${encodeURIComponent(card.jobId)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50"
+            >
+              Parsed vacancy text
+            </a>
+            {/*
+              The letter itself. Application material, so it is offered for *any* card - any column,
+              archived or not - like the page it opens. The state stays on the label, so the card still
+              says at a glance whether a letter exists; the text and the *Generate* button now live on
+              that page (`/cover/<job_id>`), because asking for a letter belongs beside the letter.
+            */}
+            <a
+              href={`/cover/${encodeURIComponent(card.jobId)}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`Cover letter: ${coverStateLabel(cover)}`}
+              className="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50"
+            >
+              Cover letter{cover === 'absent' ? '' : ` · ${coverStateLabel(cover)}`}
+            </a>
             {card.details.applyUrl && (
               <a
                 href={card.details.applyUrl}
@@ -625,9 +616,11 @@ export default function VacancyModal({
           </p>
         </section>
 
-        {/* Cover letter: application material, so it is offered for *any* card - any column,
-            archived or not. The row it reads is written by the cover worker, and asking for one
-            goes to its own queue (`resumes.cover`), never to the tailoring workers. */}
+        {/* The cover letter has its own page (`/cover/<job_id>`), reached from the *Cover letter*
+            link in the actions row: reading a two-hundred-word letter and asking for a new one were
+            never the card's business, and the row it reads (`resume_cover_letter`) is untouched -
+            only the reader moved. */}
+
         {/* *Update docx* - the workflow the operator asked for: download the tailored DOCX,
             verify it, fix what the model could not, upload it back, and the PDF follows. Offered
             only when the card has a deliverable (`docxPath`), which is the same condition the
@@ -701,67 +694,6 @@ export default function VacancyModal({
             )}
           </section>
         )}
-
-        <section className="border-t border-slate-200 px-6 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Cover letter
-              </h3>
-              <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${COVER_CHIP[cover]}`}
-              >
-                {coverStateLabel(cover)}
-              </span>
-              {cover === 'completed' && card.coverLetter?.model && (
-                <span className="text-[11px] text-slate-400">{card.coverLetter.model}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {cover === 'completed' && card.coverLetter?.text && (
-                <button
-                  type="button"
-                  onClick={() => void copyLetter()}
-                  className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  {copied ? '✓ Copied' : 'Copy'}
-                </button>
-              )}
-              {onGenerateCover && (
-                <button
-                  type="button"
-                  onClick={() => void askForLetter()}
-                  disabled={asking || cover === 'running' || Boolean(coverBlocked)}
-                  title={coverBlocked ?? 'One Gemini call, on the resumes.cover queue'}
-                  className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                >
-                  {cover === 'absent' ? 'Generate' : cover === 'failed' ? 'Try again' : 'Regenerate'}
-                </button>
-              )}
-            </div>
-          </div>
-
-          {coverBlocked ? (
-            <p className="mt-2 text-xs text-amber-800">{coverBlocked}</p>
-          ) : cover === 'completed' && card.coverLetter?.text ? (
-            <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-sm text-slate-800">
-              {card.coverLetter.text}
-            </pre>
-          ) : cover === 'queued' || cover === 'running' ? (
-            <p className="mt-2 text-sm text-slate-500">
-              The cover-letter worker is on it - this panel refreshes every few seconds.
-            </p>
-          ) : cover === 'failed' ? (
-            <p className="mt-2 text-sm text-rose-700">
-              {card.coverLetter?.error || 'the letter could not be written'}
-            </p>
-          ) : (
-            <p className="mt-2 text-sm text-slate-500">
-              No cover letter yet. Generating one uses the stored job description and the master CV,
-              so it can only repeat what the CV already says.
-            </p>
-          )}
-        </section>
 
         {hasReachedInterviewing(card) && (
           <section className="border-t border-slate-200 px-6 py-4">

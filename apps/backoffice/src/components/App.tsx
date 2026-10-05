@@ -170,14 +170,6 @@ export default function App({ session }: AppProps) {
   }
 
   /**
-   * Ask for a cover letter. The only action that does not move a card, so it goes straight
-   * through `mutate` - the board's 5s poll then shows the letter as soon as it lands.
-   */
-  async function generateCover(jobId: string) {
-    await mutate(`/api/cover/${encodeURIComponent(jobId)}`, {});
-  }
-
-  /**
    * *Update docx*: the deliverable the operator edited by hand, uploaded as multipart.
    *
    * The route stores the bytes and asks `resumes.rerender` for a new PDF, so the board's own
@@ -514,7 +506,6 @@ export default function App({ session }: AppProps) {
           setOpenId(null);
           setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
         }}
-        onGenerateCover={generateCover}
         onUploadDocx={uploadDocx}
         onAddInterview={addInterview}
         onEditInterview={editInterview}

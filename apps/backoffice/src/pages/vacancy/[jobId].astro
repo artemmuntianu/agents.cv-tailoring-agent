@@ -1,0 +1,29 @@
+---
+import VacancyTextPage from '../../components/VacancyTextPage.tsx';
+import '../../styles/global.css';
+
+// The middleware guarantees a session on this route; `session` is name + email only.
+const session = Astro.locals.session!;
+// `/vacancy/<job_id>` - the id is validated by the API the component calls, not here.
+const jobId = Astro.params.jobId ?? '';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parsed vacancy text · CV tailoring backoffice</title>
+    <meta
+      name="description"
+      content="The parsed job description of one vacancy - exactly the text the tailoring prompt is given"
+    />
+  </head>
+  <body class="bg-slate-100 antialiased">
+    <VacancyTextPage
+      client:load
+      jobId={jobId}
+      session={{ email: session.email, name: session.name ?? null, admin: session.admin }}
+    />
+  </body>
+</html>

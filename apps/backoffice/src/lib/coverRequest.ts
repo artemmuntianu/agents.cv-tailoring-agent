@@ -7,7 +7,7 @@ import { publishCoverRequests } from './queue';
 /**
  * Asking for a cover letter - once, for both callers.
  *
- * The modal's *Generate* button (`POST /api/cover/<job_id>`) and a move into **Prepare** want
+ * The cover-letter page's *Generate* button (`POST /api/cover/<job_id>`) and a move into **Prepare** want
  * the same three steps: claim the row, publish to `resumes.cover`, and mark the row `failed` if
  * the broker refuses (`CONSTITUTION.md` invariant 24). They differ in exactly one thing, and
  * that is the `onlyIfMissing` flag: a click is the operator asking for a letter *now*, so it
@@ -22,7 +22,7 @@ import { publishCoverRequests } from './queue';
 export interface CoverRequestOptions {
   /**
    * True for the automatic request (a move into Prepare): leave an existing letter alone.
-   * False (the default) for the modal's *Generate*: regenerate, whatever is there.
+   * False (the default) for the page's *Generate*: regenerate, whatever is there.
    */
   onlyIfMissing?: boolean;
 }

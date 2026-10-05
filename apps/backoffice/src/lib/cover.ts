@@ -1,7 +1,8 @@
 import type { CoverLetterState } from './types';
 
 /**
- * What the modal shows for one card's cover letter - and why a button is unavailable.
+ * What the cover-letter page (`/cover/<job_id>`) shows for one card - and why the ask button is
+ * unavailable.
  *
  * Pure on purpose: the wording and the branch are unit tested, and the component stays a
  * rendering layer (`CONSTITUTION.md` invariant 23 is the server-side half of the same idea).
@@ -47,7 +48,7 @@ export type CoverOutcome = 'queued' | 'already' | 'busy' | 'failed' | 'skipped' 
  * Everything except "nothing here" and "the last attempt failed" counts as already asked for:
  * `queued` means *asked for* (invariant 24), so a letter that is written or on its way must not
  * be regenerated behind the operator's back - that would replace text they may have read, and
- * pay for a second Gemini call. A `completed` row without text is no exception: the modal
+ * pay for a second Gemini call. A `completed` row without text is no exception: the page
  * reads that as "on its way", and the operator's own *Generate* is what fixes it.
  */
 export function coverNeeded(letter: CoverLetterState | null): boolean {
@@ -65,7 +66,7 @@ export function coverOutcomeNote(outcome: CoverOutcome): string | null {
     case 'busy':
       return 'A cover letter is being written right now.';
     case 'failed':
-      return 'Cover letter could not be queued - use Generate in the card.';
+      return 'Cover letter could not be queued - use Generate on its page.';
     case 'unavailable':
       return 'No letter: this card has no stored job description (scrape the page again).';
     case 'skipped':
@@ -74,10 +75,31 @@ export function coverOutcomeNote(outcome: CoverOutcome): string | null {
 }
 
 /**
+ * What the *ask for a letter* button says in each state.
+ *
+ * It lived as a ternary inside the card modal's section; it is here because the page that owns the button
+ * should stay a rendering layer - the same reason `coverState` and the blocked reason are here.
+ */
+export function coverActionLabel(state: CoverState): string {
+  if (state === 'absent') return 'Generate';
+  if (state === 'failed') return 'Try again';
+  return 'Regenerate';
+}
+
+/** The page's status chip, one class string per state (`lib/docxUpload.ts` does the same for renders). */
+export const COVER_STATE_CHIP: Record<CoverState, string> = {
+  completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  running: 'bg-amber-50 text-amber-800 ring-amber-200',
+  queued: 'bg-slate-100 text-slate-700 ring-slate-200',
+  failed: 'bg-rose-50 text-rose-700 ring-rose-200',
+  absent: 'bg-slate-100 text-slate-500 ring-slate-200',
+};
+
+/**
  * Why *Generate* is unavailable, or null when it is available.
  *
  * A card without a stored job description cannot produce a letter at all - the worker refuses
- * such a message on purpose (invariant 23) - so the modal explains that instead of offering a
+ * such a message on purpose (invariant 23) - so the page explains that instead of offering a
  * button that must fail.
  */
 export function coverBlockedReason(hasDescription: boolean): string | null {

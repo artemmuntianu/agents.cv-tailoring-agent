@@ -71,6 +71,8 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/api/vacancies/batch.ts` | `POST` a scraped batch -> the cards + one AMQP message per vacancy |
 | `src/pages/api/vacancies/status.ts` | `GET` "has the board got this vacancy?" for the extension's injected per-card buttons |
 | `src/pages/api/vacancies/link.ts` | `GET` "which card is this page?" - the application-form filler's lookup by page URL against the cards' own `apply_url` |
+| `src/pages/api/vacancies/text.ts` | `GET` the **parsed** job description of one vacancy (`?job_id=`) - one row at a time, because the board's cards carry `has_description` and not the text |
+| `src/pages/api/cover/[jobId].ts` | `POST` write a letter (claim → `resumes.cover` → rollback, `lib/coverRequest.ts`) · `GET` the letter **and the card it belongs to** - the `vacancy` block is for the cover-letter page, and the extension's filler reads `text` |
 | `src/pages/api/artifacts/[jobId].ts` | `GET` the tailored PDF/DOCX (`?format=docx`), streamed from the artifact root |
 | `src/pages/api/auth/{login,token,logout,me}.ts` | Cookie login, bearer token (extension), logout, who-am-I |
 | `src/lib/auth.ts` | scrypt password hashing + HS256 session tokens + cookie/bearer extraction |
@@ -97,7 +99,10 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the five states the modal shows) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
 | `src/pages/sources.astro`, `src/components/SourcesPage.tsx`, `src/pages/api/sources.ts` | The **Sources of truth** page (`/sources`): *what a generated CV or cover letter is built from* - the master CV model (`cv_data.json`, rendered as the sections the prompt and the document share), the master document (`input/cv.docx`) and the model rotation state (`model_state.json`) read through the artifact mirror, plus the operator's candidate facts row (`application_profile`, sanitized exactly as `apps/worker/utils/candidate.py` does). Read-only: `src/lib/sources.ts` resolves the paths from `artifacts.ts`'s root, reports a file this machine does not have as **absent with its path** (never as empty), and never writes |
 | `src/lib/missing.ts` | The *Missing fields* section: which card fields the scrape left empty, the request fragment they become, and the fill-only company rule (`resolveCompany`) |
-| `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
+| `src/pages/vacancy/[jobId].astro`, `src/components/VacancyTextPage.tsx` | The **parsed vacancy text** (`/vacancy/<job_id>`), opened from a card's *Parsed vacancy text* button: `resumes.description_raw` verbatim with the site, id, posting link, board state and its size. Read-only |
+| `src/pages/cover/[jobId].astro`, `src/components/CoverLetterPage.tsx` | The **cover letter** (`/cover/<job_id>`), opened from a card's *Cover letter* link: the text an application sends, its state/model/when, and the *Generate*/*Regenerate* button - the letter's only writer. The card keeps the state as that link's label |
+| `src/lib/vacancyText.ts` | The parsed-vacancy page's pure rules: the `job_id` shape guard (`resumes_job_id_shape`, invariant 4) and the text's size (characters / non-blank lines / words) |
+| `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `VacancyTextPage` · `CoverLetterPage` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
 ## Vocabulary admin (`/admin`)
@@ -222,10 +227,15 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   best effort (never a rollback, never a failed move) and reports
   `queued`/`already`/`busy`/`failed`/`unavailable` as the response's `note`, which the board
   shows above the columns (`coverOutcomeNote`, pure and unit tested).
-- The result comes back through the **card payload** (`coverLetter`, a `LEFT JOIN` in
-  `CARD_SELECT`) and the existing 5s poll: no push channel, no second request. `lib/cover.ts`
-  decides what the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and it is
-  unit tested, so the component stays a rendering layer.
+- The letter has **its own page** (`/cover/<job_id>`, reached from the card's *Cover letter* link):
+  `GET /api/cover/<job_id>` returns the row (`status`/`text`/`model`/`error`/`updatedAt`) plus a
+  `vacancy` block naming the card, and *Generate* lives there too - asking for a letter belongs beside
+  the letter. The page polls itself while the row says `queued`/`running` (the board's 5s poll used to
+  carry that, and a page with no board has to carry it alone), and the card keeps the state as that
+  link's label, so a letter's existence is still visible at a glance. The board still reads the letter
+  through its **card payload** (`coverLetter`, a `LEFT JOIN` in `CARD_SELECT`): nothing about the row
+  changed, only where it is read. `lib/cover.ts` decides the five states, the ask button's wording and
+  the unavailable reason, and it is unit tested, so both components stay rendering layers.
 
 ## Hand-edited deliverables (`POST /api/board/docx/<job_id>`)
 
@@ -588,6 +598,34 @@ to that page yet (a normal answer, not a 404).
   `now`. The cap is not a page: a card past it is **absent** from the UI, which is why the
   constant carries the story of the 2026-09-26 import that outgrew the old value of 200.
 
+## The parsed vacancy text (`/vacancy/<job_id>`)
+
+The board shows a card and the prompt is handed `resumes.description_raw`; in between there was nowhere
+to look at what the parser actually produced. `GET /api/vacancies/text?job_id=` fills that gap, and
+`/vacancy/<job_id>` - opened from the card's **Parsed vacancy text** button, in a new tab - renders it:
+
+- **the text verbatim**, whitespace and line breaks kept and nothing re-flowed, because the question is
+  whether the reader produced sane prose and a prettified view cannot be judged;
+- **its size**: characters, non-blank lines, words (`lib/vacancyText.ts`). A description that parses to a
+  single line looks perfectly healthy on a card and ruins a tailored CV - that is the failure this page
+  exists to catch;
+- **where it came from**: the site slug through the same `cardMeta.sourceLabel` the card face uses, the
+  vacancy id, the posting link, and the board's own state (`stage · status · cv_version`).
+
+Two rules are worth keeping:
+
+- **One row at a time, and `taskMessageRow` is the read.** The board's cards carry `has_description`
+  rather than the text (`lib/db.ts::CARD_SELECT`: a hundred cards must not carry a hundred job
+  descriptions), and `taskMessageRow` is the row a drag into *Prepare* turns into a queue message - so the
+  page shows the very text the worker is given rather than a re-derivation of it.
+- **An empty text is a fact, not a 404.** A row created before the column existed (2026-09-26) answers
+  `text: null` with the rest of the row intact, and the page says why and what to do.
+
+Neither this page nor the cover letter's (`/cover/<job_id>`) is in the `NavBar` - both need a vacancy to
+render at all - so they simply omit `active` and nothing is highlighted (`NavSection` is the panel's own
+vocabulary; the cover-letter page links back here beside the posting link). The planned *Vacancies* nav
+item is a different thing: a list with filters.
+
 ## Deliberately missing (it is a POC)
 
 - No `applications.submit` producer: the design's third queue is declared in the chart
@@ -637,6 +675,11 @@ to that page yet (a normal answer, not a 404).
 - **No server-side paging or sorting for the run log** (the newest 100 rows, `GET /api/processes`),
   and no filtering by process or status.
 - Not deployed in-cluster yet (`CONSTITUTION.md` D11) - run it against port-forwards.
+- **The parsed text is read-only, and there is no raw-mark-up view.** Only the *parsed* text is stored
+  (`resumes.description_raw`) - a posting's HTML is never kept - so "why did the parser miss this?" is
+  answered by re-reading the posting, not by a diff. Editing the text is not offered either: a bad parse
+  is fixed by re-scraping the vacancy, or at the parser itself (`apps/extension/src/sites/` for a page,
+  `apps/worker/scout/parsers/` for a feed), never by hand on one card.
 - **No automatic link between a card and the page its Apply button lands on**: the operator pastes
   the ATS URL into the card's *Application URL* (see `apps/extension/AGENTS.md`), because the redirect
   exists only after the click. The lookup that uses it (`GET /api/vacancies/link`) matches that one

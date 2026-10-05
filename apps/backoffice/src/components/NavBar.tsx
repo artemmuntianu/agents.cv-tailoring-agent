@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react';
 import { STAGES } from '../lib/stages';
 import type { StageId } from '../lib/types';
 
-/** The four pages this panel links to - the only thing it knows about routing. */
+/**
+ * The panel's four links - the only routing it knows about. A page that is **not** in the panel (the
+ * parsed vacancy text, one vacancy's cover letter - pages that need a vacancy to render at all) simply
+ * does not pass `active`, and nothing is highlighted.
+ */
 export type NavSection = 'board' | 'sources' | 'processes' | 'vocabularies';
 
 interface NavBarProps {
-  /** Which of the three the page being rendered is; it decides the highlighted item. */
-  active: NavSection;
+  /** Which of the four the page being rendered is; it decides the highlighted item. */
+  active?: NavSection;
   session: { email: string; name: string | null; admin: boolean };
   /**
    * The Pipeline summary is **board** state: the board passes the counts of the cards its

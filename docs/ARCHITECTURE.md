@@ -80,7 +80,14 @@ producer is the host-side smoke test.
   `apps/extension/README.md`), it resolves the page to a card twice: the page's own vacancy id first,
   then the card's own **application URL** (`GET /api/vacancies/link?url=…` →
   `resume_board.apply_url`), which is how a DOU/Djinni vacancy that hands off to the employer's
-  Greenhouse page still finds its card;
+  Greenhouse page still finds its card. Four sites are read today - `djinni`, `dou`, `greenhouse`
+  and `indeed` - and Indeed is the one whose feed is a card list *plus* a pane that holds a single
+  description at a time: its `Scrape` button selects the card, waits for the pane, and only then asks
+  the worker to extract, because a snippet filed as a description would tailor a CV against marketing
+  copy (invariant 34). What a page is read with is a **plugin**, not a branch: one module per site in
+  `apps/extension/src/sites/` binds a slug, its hosts and a *strategy* (selector data, because the
+  reader is injected into the page and only data survives that trip), and the registry routes by host -
+  it mirrors `scout/sources.py`, and nothing else in the extension names a site (invariant 35);
 * `publisher.py` (driven by `scripts/send-test-job.ps1`) publishes a single job from
   the host, which is what a smoke test needs.
 

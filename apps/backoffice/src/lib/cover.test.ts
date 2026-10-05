@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  coverActionLabel,
   coverBlockedReason,
   coverNeeded,
   coverOutcomeNote,
@@ -42,6 +43,15 @@ describe('cover-letter state (what the modal shows)', () => {
   it('blocks the button, with a reason, when there is no stored job description', () => {
     expect(coverBlockedReason(true)).toBeNull();
     expect(coverBlockedReason(false)).toMatch(/no job description stored/);
+  });
+
+  it('words the ask button by what the card already has', () => {
+    expect(coverActionLabel('absent')).toBe('Generate');
+    expect(coverActionLabel('failed')).toBe('Try again');
+    // Written, on its way, or a `completed` row with no text: asking again replaces it.
+    expect(coverActionLabel('completed')).toBe('Regenerate');
+    expect(coverActionLabel('queued')).toBe('Regenerate');
+    expect(coverActionLabel('running')).toBe('Regenerate');
   });
 });
 

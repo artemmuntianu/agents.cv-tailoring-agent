@@ -306,7 +306,8 @@ automation         .github/workflows/
     module per site in `apps/worker/scout/parsers/` exports a `FeedSource` (slug, hosts, pure parser), the
     registry (`apps/worker/scout/sources.py`) routes every fetched URL by **host**, and the slug it decides is
     what completes the business key (`resumes_job_key_idx`) - deliberately the same slug the
-    browser scrape derives from its page URL (`apps/extension/src/background.js::sourceForUrl`,
+    browser scrape derives from its page URL (`apps/extension/src/sites/index.js::siteForUrl` - one
+    plugin per site, invariant 35,
     invariant 16), so a vacancy the intake found and the same vacancy scraped by hand are one card.
     A feed no parser claims fails preflight (`collect` skips it) instead of being guessed at, and
     the suite requires a fixture for every discovered source and a parser for every configured feed
@@ -419,6 +420,48 @@ automation         .github/workflows/
     `core.autocrlf=true`, which had rewritten 276 tracked files to CRLF and made
     exact-match edits silently miss. After changing line-ending attributes,
     renormalise with `git add --renormalize .` then `git checkout-index -f -a`.
+
+34. **A site the feed intake cannot reach is browser-scraped only, and one of them is not a list.**
+    The registry (`apps/extension/src/sites/index.js`, invariant 35) is what derives `resumes.source`
+    from the page's own host, and that is what keeps a browser scrape and a scouted card on one row (`resumes_job_key_idx`,
+    invariants 16/17/25). Four slugs exist today - `djinni`, `dou`, `greenhouse`, and `indeed`, the
+    last of which **only the browser can produce**: Indeed serves no feed and no API. Verified
+    2026-10-05: `pt.indeed.com/rss` returns no feed and `robots.txt` disallows `/rss` and `/*?rss`
+    for `User-agent: *`; the old Publisher Job Search API host `api.indeed.com` no longer resolves;
+    and every HTML path - the homepage, `/jobs`, `/viewjob` - answers 403/401 to a client that is
+    not a browser. So there is deliberately **no `scout` parser for it**, and nothing unattended may
+    touch it: the extension is the operator's own session, one page at a time. Its shape is also the
+    one exception to "a card is a vacancy": Indeed's feed is a card list *plus* a pane, and **exactly
+    one description exists on the page at a time** (the selected card's), so `extractVacancies`
+    returns that single *selected* vacancy (`mode: 'indeed-pane'`) and `src/indeed.js` is what
+    selects a card and waits for the pane - "ready" being *both* the pane's own `fromjk` naming that
+    job *and* its description having rendered, because the highlight and the pane's links move before
+    the text does (a 3 s wait on the highlight alone handed the worker an empty pane, which surfaced
+    as "that card is not on this page any more", live, 2026-10-05). A pane-less Indeed page therefore
+    yields **nothing** rather than twelve snippet-only cards: a snippet is not a job description, and
+    filing one would tailor a CV against marketing copy. The popup's **Scrape & queue this page** is
+    therefore a *walk* on Indeed (`apps/extension/src/indeed/sweep.js`, driven by the worker because a
+    popup cannot hold a thirty-second loop): it selects each card the page has rendered, reads that
+    card's own pane, and publishes the lot in batches of 25 - skipping, and counting, any card whose
+    description never rendered. One slug covers every country site on
+    purpose - Indeed's `jk` is unique across them, so `pt`/`www`/`uk` are one id space.
+
+35. **A site is a plugin, and one registry names them.** Every scraped site is one module in
+    `apps/extension/src/sites/` binding a slug (`resumes.source`), the hosts it owns, the content-script
+    behaviour it needs, and the **strategy** its pages are read with; `sites/index.js` routes a URL by
+    host (`siteForUrl`, or the lenient `siteForPage` with its `other` fallback) and `validate()` refuses a
+    duplicated slug or host at load. Nothing else in the extension names a site - `background.js`,
+    `popup.js` and `indeed/sweep.js` all ask the registry, which mirrors
+    `apps/worker/scout/sources.py` (one module per site, routed by host, validated at load) deliberately.
+    The strategy is **data, not code**, and that is a constraint rather than a preference:
+    `chrome.scripting.executeScript({ func })` serialises the injected function's *source*, so a reader
+    cannot close over a module, and `args` are structured-cloned, so a function cannot be passed either.
+    One executor (`apps/extension/src/extract.js`, which is why its DOM toolkit lives inside that
+    function) interprets the three kinds - `cards`, `job-page`, `pane` - so a new **shape** is a new
+    reader there, while a new **site** on a known shape is a binding and nothing else. The manifest's
+    host wiring and the board's own slug labels (`apps/backoffice/src/lib/cardMeta.ts`) cannot be derived
+    from the registry - neither file can import it - so `sites.test.ts` pins both against it in both
+    directions.
 
 ## 5. Known discrepancies, dead code and legacy paths
 

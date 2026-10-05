@@ -3,8 +3,8 @@ import NavBar, { type NavSection } from './NavBar';
 import type { StageId } from '../lib/types';
 
 interface AppShellProps {
-  /** Which page this is - the panel highlights that item. */
-  active: NavSection;
+  /** Which page this is - the panel highlights that item. Omitted by a page that is not in the panel. */
+  active?: NavSection;
   title: string;
   subtitle: string;
   /** The page's own controls, right-aligned in the header (the board's Live/Reload, …). */

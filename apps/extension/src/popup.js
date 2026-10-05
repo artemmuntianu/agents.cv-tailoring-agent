@@ -1,6 +1,7 @@
 import { extractVacancies } from './extract.js';
 import { phaseLabel } from './form/phases.js';
 import { describeReport } from './form/plan.js';
+import { siteForPage } from './sites/index.js';
 
 /**
  * Popup: scrape the active tab, drive the application-form filler. No credential ever reaches this
@@ -73,6 +74,48 @@ async function signIn() {
   status('Signed in.', 'ok');
 }
 
+const SWEEP_TICK_MS = 800;
+const SWEEP_DEADLINE_MS = 6 * 60 * 1000;
+
+/**
+ * Follow a sweep the worker is driving, and report how it ended.
+ *
+ * The walk itself is the worker's (`indeed/sweep.js`) - the popup can vanish mid-run and must not take
+ * the walk with it - so this only reports. Closing the popup loses the report, not the cards.
+ */
+async function followSweep() {
+  const started = Date.now();
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, SWEEP_TICK_MS));
+    const answer = await send({ type: 'scrapeProgress' });
+    const progress = (answer && answer.progress) || {};
+
+    if (progress.running) {
+      // The walk is one card at a time, so name the card: on a slow feed a frozen label is
+      // indistinguishable from a hang.
+      const at = Math.min(progress.done + 1, progress.total || 1);
+      status(`Scraping vacancy ${at} of ${progress.total}…`);
+      if (Date.now() - started > SWEEP_DEADLINE_MS) {
+        return status('The sweep is taking too long - check the Indeed tab.', 'error');
+      }
+      continue;
+    }
+
+    if (progress.error) return status(progress.error, 'error');
+    const parts = [`Created ${progress.created} card(s) in Scraped.`];
+    if (progress.duplicates) parts.push(`${progress.duplicates} already on the board.`);
+    if (progress.already) {
+      // The sweep never selects these, so the feed does not flicker through vacancies nobody needs.
+      parts.push(`${progress.already} card(s) already on the board - not visited.`);
+    }
+    if (progress.skipped) {
+      parts.push(`${progress.skipped} card(s) skipped - their description never loaded.`);
+    }
+    if (progress.created > 0) parts.push('Drag a card into Prepare to have the worker tailor it.');
+    return status(parts.join('\n'), 'ok');
+  }
+}
+
 async function scrapeAndQueue() {
   $('scrape').disabled = true;
   try {
@@ -80,9 +123,19 @@ async function scrapeAndQueue() {
     if (!tab || !tab.id) return status('No active tab to scrape.', 'error');
 
     status('Scraping…');
+    // Indeed's feed holds one description at a time, so "this page" there is a *walk* the worker
+    // drives: it selects each card, waits for that card's pane and reads it, then publishes the lot
+    // as one batch. Anything else (`notPage`) is the one-shot card read below.
+    const swept = await send({ type: 'scrapePage' });
+    if (swept.ok) return await followSweep();
+
     const injection = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: extractVacancies,
+      // The *strategy* this page is read with, chosen by host in the registry - the injected function
+      // cannot see the registry, and `activeTab` is what lets this work on a page whose content script
+      // was never injected (an unlisted site, or an extension reloaded under an open tab).
+      args: [null, { plan: siteForPage(tab.url).plan }],
     });
     const result = (injection && injection[0] && injection[0].result) || {
       vacancies: [],
@@ -91,6 +144,15 @@ async function scrapeAndQueue() {
 
     if (result.error) return status(result.error, 'error');
     if (result.vacancies.length === 0) {
+      // Indeed's feed is recognised even while its pane is still filling: "no vacancy cards" would be
+      // a lie there - the cards are on the page, this vacancy's *description* is just not rendered.
+      if (result.mode === 'pane') {
+        return status(
+          'Indeed is still filling the right pane for this vacancy - wait for its description to ' +
+            'appear, then press again (or use the card’s own Scrape button, which waits for you).',
+          'error',
+        );
+      }
       return status(
         `No vacancy cards found on this page${result.skipped ? ` (${result.skipped} skipped)` : ''}.`,
         'error',
@@ -108,6 +170,17 @@ async function scrapeAndQueue() {
     const parts = [`Created ${created} card(s) in Scraped.`];
     if (response.duplicates) parts.push(`${response.duplicates} already on the board.`);
     if (result.skipped) parts.push(`${result.skipped} card(s) skipped (no id or no text).`);
+    // Indeed's feed holds one description at a time, so this page is one vacancy rather than a
+    // list: say so, and name it - "1 card(s)" next to a page showing twelve cards reads like a bug,
+    // and the pane is the only thing that says *which* job was queued.
+    if (result.mode === 'indeed-pane') {
+      const first = result.vacancies[0] || {};
+      parts.push(
+        'Indeed shows one job\u2019s description at a time: this queued "' +
+          (first.title || 'the vacancy') +
+          '" - the one the right pane was showing.',
+      );
+    }
     if (created > 0) parts.push('Drag a card into Prepare to have the worker tailor it.');
     status(parts.join('\n'), 'ok');
   } catch (error) {

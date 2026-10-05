@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { requestCoverLetter } from '../../../lib/coverRequest';
 import type { CoverRequestResult } from '../../../lib/coverRequest';
 import { coverLetter, taskMessageRow } from '../../../lib/db';
+import type { CoverLetterRow, TaskMessageRow } from '../../../lib/db';
 import { errorMessage, json } from '../../../lib/http';
 import { coverQueueName } from '../../../lib/queue';
 
@@ -15,12 +16,12 @@ const JOB_ID = /^[A-Za-z0-9_.:-]{4,80}$/;
  * Available for **any** card, whatever column it is in and whether it is archived: a letter is
  * application material, not a stage of the funnel. The work happens on the `resumes.cover`
  * queue with its own worker and its own ScaledObject, so asking for a letter can never wake a
- * tailoring task - and the card's own row (`resume_cover_letter`, read by the board's card
- * payload) is how the modal sees the result.
+ * tailoring task - and the card's own row (`resume_cover_letter`, read by the board's card payload) is
+ * how the board's cards and the cover-letter page see the result.
  *
  * The claim/publish/rollback order itself lives in `lib/coverRequest.ts`, which the move route
  * shares: a claim that is refused means a letter is *being written right now* - two clicks must
- * not queue two generations, and the modal's polling will show the first one landing. Unlike the
+ * not queue two generations, and the page's polling will show the first one landing. Unlike the
  * automatic request this route passes no `onlyIfMissing`: a click means "write it again".
  */
 export const POST: APIRoute = async ({ params, locals }) => {
@@ -78,12 +79,14 @@ export const POST: APIRoute = async ({ params, locals }) => {
 };
 
 /**
- * GET /api/cover/<job_id> - the letter itself, for the extension's form filler.
+ * GET /api/cover/<job_id> - the letter itself, plus the card it belongs to.
  *
- * The board reads the letter through its card payload; a browser extension that has to paste the
- * text into an application form needs just this one card, so this is the narrow read that keeps a
- * form fill from fetching the whole board. The letter is never sent to a model: the extension
- * inserts it verbatim, and `apps/worker/agent/application.py` only ever says *where* it goes.
+ * The extension's form filler needs just this one card: a form fill pastes the letter verbatim, so
+ * this is the narrow read that keeps it from fetching the whole board, and the letter is never sent
+ * to a model (`apps/worker/agent/application.py` only ever says *where* it goes).
+ *
+ * The `vacancy` block is for the cover-letter *page* (`/cover/<job_id>`), which has to say whose
+ * letter it is showing without a second request; the filler ignores it and reads `text`.
  */
 export const GET: APIRoute = async ({ params, locals }) => {
   if (!locals.session) return json({ ok: false, error: 'authentication required' }, 401);
@@ -91,12 +94,41 @@ export const GET: APIRoute = async ({ params, locals }) => {
   const jobId = String(params.jobId ?? '').trim();
   if (!JOB_ID.test(jobId)) return json({ ok: false, error: 'invalid job_id' }, 400);
 
-  let row;
+  let letter: CoverLetterRow | null;
+  let card: TaskMessageRow | null;
   try {
-    row = await coverLetter(jobId);
+    const both = await Promise.all([coverLetter(jobId), taskMessageRow(jobId)]);
+    letter = both[0];
+    card = both[1];
   } catch (error) {
     return json({ ok: false, error: `job store unavailable: ${errorMessage(error)}` }, 503);
   }
-  if (!row) return json({ ok: true, status: 'none', text: null, model: null, error: null });
-  return json({ ok: true, ...row });
+
+  const vacancy = card
+    ? {
+        jobId: card.jobId,
+        source: card.source,
+        externalId: card.externalId,
+        title: card.title,
+        company: card.company,
+        sourceUrl: card.sourceUrl,
+        // Whether a letter *can* be written at all (invariant 24): a card scraped before the column
+        // existed has none, and the page disables the button with that reason rather than queueing a
+        // message the worker would refuse.
+        hasDescription: Boolean(card.descriptionRaw),
+      }
+    : null;
+
+  if (!letter) {
+    return json({
+      ok: true,
+      status: 'none',
+      text: null,
+      model: null,
+      error: null,
+      updatedAt: null,
+      vacancy,
+    });
+  }
+  return json({ ok: true, ...letter, vacancy });
 };

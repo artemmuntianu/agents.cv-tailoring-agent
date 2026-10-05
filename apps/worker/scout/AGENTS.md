@@ -14,7 +14,8 @@ No module outside `parsers/` names a site, so adding one is local:
 1. `apps/worker/scout/parsers/<site>.py` - copy the closest module and export
    `SOURCE = FeedSource(name="<slug>", hosts=("<host>",), parse_feed=parse_feed, label="<Label>")`.
    The slug has to be the one the browser scrape of that site sends
-   (`apps/extension/src/background.js::sourceForUrl`), or the two writers fork one vacancy into two
+   (`apps/extension/src/sites/index.js::siteForUrl` - one plugin per site), or the two writers fork one
+   vacancy into two
    cards (`resumes_job_key_idx`).
 2. One URL in `SCOUT_FEEDS` (`config.py`, and the scout chart's `config.feeds`) - the host is
    enough; nothing maps URLs to parsers by hand.

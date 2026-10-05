@@ -22,13 +22,16 @@ export const RELATIVE_DAYS = 9;
 
 /**
  * The `resumes.source` slugs in use today. `scout` produces the first two from its feeds
- * (`apps/worker/scout/sources.py`), and `apps/extension/src/background.js::sourceForUrl` produces all three from
- * the host of the page it is injected into.
+ * (`apps/worker/scout/sources.py`), and the extension's site registry
+ * (`apps/extension/src/sites/index.js`, one plugin per site) produces all four from the host of the page
+ * it is injected into. `indeed` is the browser scrape's alone: Indeed serves no
+ * feed at all (`/rss` is gone and `robots.txt` disallows it), so no parser can ever emit that slug.
  */
 const SOURCE_LABELS: Record<string, string> = {
   djinni: 'Djinni',
   dou: 'DOU',
   greenhouse: 'Greenhouse',
+  indeed: 'Indeed',
 };
 
 /**

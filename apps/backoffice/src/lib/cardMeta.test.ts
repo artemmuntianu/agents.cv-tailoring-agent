@@ -19,6 +19,7 @@ describe('the site chip names the site, not the stored slug', () => {
     expect(sourceLabel('djinni')).toBe('Djinni');
     expect(sourceLabel('dou')).toBe('DOU');
     expect(sourceLabel('greenhouse')).toBe('Greenhouse');
+    expect(sourceLabel('indeed')).toBe('Indeed');
   });
 
   it('tolerates the case and the whitespace of a stored value', () => {

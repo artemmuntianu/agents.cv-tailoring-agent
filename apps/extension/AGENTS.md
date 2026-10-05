@@ -16,7 +16,49 @@ It has two entry points, and both end in the same gateway call:
 Read `CONSTITUTION.md` first. The batch contract it must satisfy is documented in
 `apps/backoffice/AGENTS.md`; the worker that consumes the result is `apps/worker/agent/AGENTS.md`.
 
-## Greenhouse boards (a third page shape)
+## Scrapers are plugins (the site registry)
+
+A **site is a plugin**: one module in `src/sites/` binding a slug, the hosts it owns, the content-script
+behaviour it needs, and the **strategy** its pages are read with. `src/sites/index.js` is the registry - it
+routes a URL to a plugin (`siteForUrl` / `siteForPage`), answers by stored slug (`siteForSlug`), and
+validates the whole set at load. Nothing else in the extension names a site: `background.js` asks it for
+`resumes.source` and for the plan to inject, `popup.js` for the plan to read the operator's page with,
+`indeed/sweep.js` for both.
+
+```js
+// src/sites/djinni.js - a binding, in full
+export const djinni = {
+  slug: 'djinni',         // resumes.source: half of the vacancy's business key
+  hosts: ['djinni.co'],   // exact match, plus any '.'-suffix subdomain
+  buttons: 'cards',       // which content script the manifest wires ('cards' | 'pane' | 'none')
+  sweep: false,           // does "Scrape & queue this page" walk the page? (Indeed is the only yes)
+  plan: CARD_LIST,        // the strategy (src/sites/plans.js)
+};
+```
+
+**The strategy is data, and that is forced rather than chosen.** The reading happens *inside the page*,
+and the only way in is `chrome.scripting.executeScript({ func })`, which serialises the function's
+**source** - so an injected reader cannot close over a module - while `args` are structured-cloned, so a
+function cannot be handed to it either. Selectors travel; code does not. One executor (`src/extract.js`,
+which is why its DOM toolkit stays *inside* that function) interprets the plan, and the plugin is what
+supplies it. `sites.test.ts` runs `structuredClone` over every plan for exactly this reason.
+
+Three kinds exist (`src/sites/plans.js`); a new **shape** is a new reader in `extract.js`, while a new
+**site** on a shape we know is a binding and nothing else:
+
+| kind | the page | used by |
+|---|---|---|
+| `cards` | a listing whose cards *are* the vacancies | `djinni`, `dou`, and the fallback for an unlisted site (`other`) |
+| `job-page` | the whole vacancy is on the job page | `greenhouse` |
+| `pane` | the cards carry a snippet and one pane holds the selected vacancy's text | `indeed` |
+
+Adding a site costs: the module (bind an existing strategy when the mark-up is one we already know, as
+`dou.js` does) + a manifest entry and host permission if it declares `buttons` + nothing else - two guards
+in `sites.test.ts` fail until the manifest matches the declaration and the board can name the slug. The
+registry is the extension's copy of `apps/worker/scout/sources.py`: one module per site, routed by host,
+validated at load.
+
+## Greenhouse boards (the `job-page` strategy)
 
 `job-boards.greenhouse.io`, its EU twin `job-boards.eu.greenhouse.io` and the older
 `boards.greenhouse.io` behave unlike the two Ukrainian sites, in both halves of the extension:
@@ -25,7 +67,8 @@ Read `CONSTITUTION.md` first. The batch contract it must satisfy is documented i
   back to `greenhouseJobPage`: the id comes from the URL (`/<board>/jobs/<id>`, the same shape the
   gateway derives from a pasted link), the title from the `h1`, the company from the `<title>`'s
   "... at <company>" (falling back to the board's path segment) and the text from
-  `.job__description`. `sourceForUrl` answers `greenhouse`, which is a legal `resumes.source` slug.
+  `.job__description`. The registry routes these hosts to the `greenhouse` plugin, whose slug is a legal
+  `resumes.source` value.
 - **Its application form carries no `name` attribute anywhere** and drives four react-select
   dropdowns, which is why the annotator keys on `id` as well and gives a `role="combobox"` a kind
   of its own (the rules below). The labels are real (`label[for]`) - except on the two upload
@@ -44,6 +87,74 @@ Read `CONSTITUTION.md` first. The batch contract it must satisfy is documented i
   (`source: "greenhouse"`, id = the numeric job id) for a page the operator queued by hand; a
   board-wide feed is a parser module in `apps/worker/scout/parsers/` plus its URL in `SCOUT_FEEDS`, not a
   scraper here.
+
+## Indeed's job feed (a fourth page shape, and the only pane-driven one)
+
+`*.indeed.com` cannot be read like the others, because **the cards carry no description**. The feed
+is two panes - a card list on the left, the selected vacancy in a pane on the right - and exactly one
+description exists on the page at a time (live page 2026-10-05: 12 `div.cardOutline` cards, one
+`[data-testid="viewjob-main-content"]`):
+
+- **`extractVacancies` reads the *selected* vacancy, not a list.** The id comes from the **pane's own
+  `fromjk`** (the highlight - `div.cardOutline.vjs-highlight` → `a[data-jk]` - is only the fallback for
+  a layout that renders no `fromjk`), the prose from `div.simple-job-description-html`, and the
+  title/company from whichever element *named* the vacancy: the pane, or the card when the fallback
+  was used. That order is load-bearing - the highlight moves a beat before the pane's text does, so an
+  id taken from the card can end up over the previous vacancy's body. `source_url` is rebuilt as the
+  stable `/viewjob?jk=<jk>`. The result says which shape it read: `mode` is `cards` | `greenhouse-job` |
+  `indeed-pane` | `none`.
+- **This is the one shape where a snippet must never become a description.** The cards would each
+  yield a snippet (`attribute_snippet_testid`, `salary-snippet-container`), so a pane-less Indeed page
+  yields **nothing** instead of twelve half-vacancies - `scraper.test.ts` pins that, and it is why the
+  popup says *"this queued the vacancy in the right pane"* rather than reporting one card as if the
+  page had been scraped.
+- **`src/indeed.js` is its own content script** (a second manifest entry, not `src/inject.js`:
+  different site, different mechanic, and `inject.js` is already Djinni/DOU's card markup). Its button
+  selects the card - a *synthetic* click on `a[data-jk]`, because that link is `target="_blank"` and a
+  trusted click would open a tab - then waits (250 ms polls, up to 15 s) for the pane to be **ready to
+  read** before asking the worker to extract. "Ready" is two things at once, and both are load-bearing:
+  the pane must **name that job itself** (its own `fromjk`), and it must have **rendered its
+  description**. Waiting on the highlight alone was this shape's first live bug - Indeed moves the
+  highlight and re-renders the pane's links *before* the text arrives, so a 3 s wait handed the worker
+  an empty pane and it answered *"that card is not on this page any more - reload and retry"*
+  (2026-10-05). **A pane that never becomes ready is a reported error, never a scrape of the wrong
+  job** - the order is what makes the result trustworthy.
+- **That click may only ever select.** Indeed's own handler has to run - it is what swaps the pane - but
+  it is equally free to open the posting, which is right for a human's click and a tab per card for a
+  sweep. So `select()` cancels the anchor's own action (`preventDefault` on the dispatched event) *and*
+  mutes `window.open` for the duration of the dispatch: the second guard is what covers the handler,
+  which `preventDefault` cannot reach (live bug 2026-10-05: "the autoscraper opens vacancies"). Both are
+  pinned by a test that spies on `window.open` and on the event.
+- **The button gets its own strip at the bottom of the card** (`placeButton`): a full-width flex row
+  (`div.cvt-scrape-row`, `justify-content:center`) appended to the block that holds the site's own action
+  row. It used to sit *inside* `.ctaContainer` with `margin-left:auto` - the right end of Indeed's
+  save / not-interested icon row, the far corner from where the card's text ends (operator request
+  2026-10-05). `.ctaContainer` is now only what *finds* that block, which stays locale-independent
+  unlike the icons' `aria-label`s (`Guardar oferta` exists only in a translation table, never as an
+  element to key on). The strip is **appended**, never inserted before Indeed's empty trailing
+  placeholder, so it is the last thing in the card's content: the test asserts both `lastElementChild`
+  and that the button is not inside `.ctaContainer`.
+- **The `indeed` plugin owns every `*.indeed.com`.** One slug on purpose: Indeed's `jk` is
+  unique across the country sites, so `pt`/`www`/`uk` are a single id space, and a per-country slug
+  would fork one vacancy into as many cards.
+- **There is no feed to read, and that is not an oversight.** `/rss` serves nothing and `robots.txt`
+  disallows `/rss` and `/*?rss` for `User-agent: *`; the old Publisher Job Search API host
+  (`api.indeed.com`) no longer resolves; every HTML path answers 403/401 to a non-browser client. So
+  Indeed is browser-scrape-only: no `scout` parser can exist for it, and nothing unattended may touch
+  it (`CONSTITUTION.md` invariant 34).
+- **"Scrape & queue this page" walks the feed.** One description at a time is exactly why the popup's
+  one-shot read cannot serve Indeed, so there it becomes a *sweep*: `src/indeed/sweep.js` walks the
+  page's cards - the content script selecting each one over `indeedCards`/`indeedSelect` - reads each
+  pane with the same `extractVacancies`, and publishes the lot as one batch, chunked at the endpoint's
+  25-card cap. The walk lives in the **service worker** (a popup closes the moment it loses focus, and
+  a dozen cards take tens of seconds): the popup starts it and then polls `scrapeProgress` once a
+  second, exactly as it follows a form fill. A card whose pane never becomes readable is counted and
+  skipped, never guessed at - and `sweep.js` knows no selector at all.
+- **The sweep skips the cards the board already has** (`knownIds`, the board's own status lookup): it
+  never selects them, because doing so flickers the feed through vacancies nobody needs and would only
+  re-publish them as duplicates. That is the rule a per-card button already follows - a `Scraped` card
+  offers no scrape (live bug 2026-10-05). A lookup that fails walks everything rather than refusing to
+  run: the publish that follows reports the real problem.
 
 ## The form filler (`Populate`)
 
@@ -134,8 +245,13 @@ for `fetch` from a service worker without it).
 | Path | Owns |
 |---|---|
 | `manifest.json` | MV3 declaration: `activeTab` + `scripting` + `storage`, gateway host permission, popup, service worker, the `content_scripts` entry for the listing page. **Tracked source** (`.gitignore` negates `*.json` for it): a clone must load unpacked, and `apps/backoffice/src/lib/inject.test.ts` asserts `host_permissions` covers every `content_scripts` match - a manifest that is only on one machine fails that test on CI |
-| `src/extract.js` | `extractVacancies(root)` - the DOM contract (`div[id^="job-item-"]`) |
-| `src/inject.js` | The listing-page content script: the per-card `Scrape`/`Scraped` buttons. **Classic script** (no imports/exports) |
+| `src/extract.js` | `extractVacancies(root, options)` - the **one page reader**, which is why it is a single self-contained function. Takes a strategy (`options.plan`) and interprets its `kind`; the result echoes it in `mode` (`cards` \| `job-page` \| `pane` \| `none`) |
+| `src/sites/index.js` | The **registry**: routes a URL to a plugin, answers by slug, and validates the set at load (a duplicated slug or host is refused) |
+| `src/sites/plans.js` | The three **strategies** - `CARD_LIST`, `JOB_PAGE`, `PANE` - as selector data, because a plan crosses into the page and a function cannot |
+| `src/sites/<site>.js` | One **plugin** per site: slug + hosts + content-script behaviour + the strategy it binds to (`djinni`, `dou`, `greenhouse`, `indeed`) |
+| `src/inject.js` | The listing-page content script (classic): the per-card `Scrape`/`Scraped` buttons for the `cards` sites (Djinni/DOU, and Greenhouse's filler) |
+| `src/indeed.js` | The Indeed content script (classic, its own `content_scripts` entry): the same buttons, but a click first selects the card and waits for the pane - the only shape where the text is not in the card. Also answers the sweep's two messages (`indeedCards`, `indeedSelect`) |
+| `src/indeed/sweep.js` | The whole-feed walk behind the popup's **Scrape & queue this page** on Indeed: select each card, read its pane, publish one batch. Runs in the worker (the popup cannot hold a 30-second loop) and knows no selector |
 | `src/formfill.js` | The form filler (a second `content_scripts` entry, also classic): the HITL picker, the deterministic annotator, the snapshot, the applier and the per-site adapters |
 | `src/form/plan.js` | Pure plan plumbing: the pins overriding the model, which documents a plan needs, and the popup's report |
 | `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply, recording the phase of each step |
@@ -231,8 +347,20 @@ vitest, with jsdom:
 ```sh
 cd apps/backoffice; npm test
 #   src/lib/scraper.test.ts   <- extract.js,            fixtures djinni-listing.html,
-#                                                       greenhouse-job.html
+#                                                       greenhouse-job.html, indeed-feed.html
+#                                 (each page read with the plan of the site that owns it, so the
+#                                  tests exercise the real plugins)
+#   src/lib/sites.test.ts     <- the registry: routing, validate(), structured-cloneable plans, the
+#                                 manifest wiring and the board's labels (both pinned against it)
 #   src/lib/inject.test.ts    <- inject.js, window.eval, fixture djinni-card-footer.html
+#   src/lib/indeed.test.ts    <- indeed.js, window.eval, fixture indeed-feed.html (the whole live
+#                                 feed: 12 cards + the one pane, so the select-then-wait rule, the
+#                                 refusal to scrape the wrong vacancy and the sweep's two messages
+#                                 are all pinned)
+#   src/lib/sweep.test.ts     <- indeed/sweep.js with a fake chrome + publish: the walk's order, the
+#                                 card it must never file the previous pane's text under, the batch
+#                                 cap (asserted against the gateway's own MAX_BATCH_SIZE) and the
+#                                 `running` flag that must never latch
 #   src/lib/formfill.test.ts  <- formfill.js (eval too), fixture greenhouse-application-form.html
 #   src/lib/form-worker.test.ts <- form/worker.js with a fake chrome + fetch: which card a page
 #                                 resolves to (its own vacancy id, else its Application URL)
@@ -262,9 +390,14 @@ cd apps/backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browse
 
 ## Deliberately missing (it is a POC)
 
-- Two page shapes, not two engines: Djinni's/DOU's card markup and Greenhouse's job page. A third
-  site needs its own selectors - never a generic "config-driven" engine.
+- **Three strategies, not a general engine.** A plugin binds its site to one of the three readers above -
+  it does not describe a site in the abstract, and a shape we have never seen is a new reader in
+  `extract.js`, not a new key in a config. The one thing a plugin supplies itself is its selectors
+  (`plans.js`), because that is the part only its own mark-up can answer for.
 - No pagination/infinite-scroll walking: it scrapes what is rendered on the page.
+- **The sweep walks what the page had when it was pressed.** Indeed's feed lazily renders more cards as
+  the list scrolls, and the walk deliberately does not chase them - that would be a crawl, not a page.
+  Scroll first, then press; the popup reports how many cards it skipped.
 - **No automatic capture of where the Apply button lands.** The redirect only appears *after* the
   click (a new tab, a different host), so the connection is the operator's: paste the ATS URL into
   the card's *Application URL* and Populate works there from then on. A `tabs.onUpdated` +
@@ -297,3 +430,11 @@ cd apps/backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browse
   patterns are the same trap in reverse: without a `content_scripts.matches` entry the filler is
   never injected, and without the host permission the popup cannot read the page at all.
 - Loosen the payload shape the gateway validates (see `apps/backoffice/src/lib/vacancies.ts`).
+- Scrape an Indeed card where it stands, or read the pane "as it happens to be": the card has no
+  description and the page holds exactly one, so the wrong read files another vacancy's text under
+  this card's id. Select the card, wait for the pane (`src/indeed.js`), then extract.
+- Put Indeed's buttons in `src/inject.js`, or give `src/indeed.js` a second copy of the scraping
+  selectors: the content scripts only *select* a card and send a message - `extract.js` is the one
+  place that reads a vacancy, and the worker is the one that runs it.
+- Give `src/indeed/sweep.js` a selector, or let it build a vacancy by hand: it walks and publishes, and
+  every read goes through `extractVacancies` in the tab.
