@@ -1,3 +1,11 @@
+## 🚨 MANDATORY PRE-EXECUTION CHECKLIST
+Before using any file-editing tool (`replace_in_file`, `write_to_file`) or running terminal commands, you MUST briefly output a 3-point compliance check in your output:
+1. What project rule applies to this change?
+2. How does the planned change strictly adhere to that rule?
+3. Did I verify there are no negative constraints violated (e.g., prohibited imports or patterns)?
+
+If you cannot confirm 100% compliance, stop and re-evaluate your plan.
+
 # Agent Behavior & Execution Rules
 
 - **Always respond in English**, regardless of the language used in the input (the operator may write in Russian; outputs are always in English).
