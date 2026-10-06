@@ -1,4 +1,4 @@
-"""The CV model as text: rendering (including the read-only projects block) and loading."""
+"""The CV model as text: rendering (experience + the read-only projects block) and loading."""
 
 import os
 import tempfile
@@ -35,6 +35,20 @@ def test_cv_data_to_text_renders_four_lines_per_experience_entry():
         assert f"\n{experience[key]}\n" in text
     # The old composite "company | context | period" line is gone for good.
     assert experience["company_info"] + " | " not in text
+
+
+def test_experience_lines_matches_the_rendered_dump():
+    """`experience_lines()` returns the very lines `cv_data_to_text()` emits (four + its bullets),
+    because the read-only guard compares those lines to keep the block out of the replacement set."""
+    experience = SAMPLE_CV_DATA["professional_experience"][0]
+    assert cv_text.experience_lines(experience) == [
+        experience["role"],
+        experience["company_info"],
+        experience["context"],
+        experience["dates"],
+        "• Led the migration of 50 desktop screens to a web platform.",
+        "• Cut report generation time by 80%.",
+    ]
 
 
 def test_extract_doc_text_accepts_cv_data_and_legacy_path():

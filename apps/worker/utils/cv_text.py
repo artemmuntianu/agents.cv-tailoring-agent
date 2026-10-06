@@ -6,8 +6,10 @@ later task stale data, which is why `cv_data` is an explicit argument everywhere
 prompt receives - and every replacement target is matched against - while the normalisers below
 are the comparison form shared with `utils.docx_mutator` and `utils.cv_replacements`.
 
-The PET PROJECTS block is part of that dump: the model has to see it to draw on it, and
-`utils.cv_replacements.drop_read_only_replacements()` is what keeps it out of the replacement set.
+The read-only blocks (PROFESSIONAL EXPERIENCE and PET PROJECTS) are part of that dump: the model has
+to see them to draw on them, and `utils.cv_replacements.drop_read_only_replacements()` is what keeps
+both out of the replacement set. Only the header title, the SUMMARY and the RELEVANT SKILLS are
+rewritten.
 """
 
 import json
@@ -67,6 +69,24 @@ def split_lines(text):
     ]
 
 
+def experience_lines(experience):
+    """One experience entry as the single-line-per-paragraph text the master DOCX carries.
+
+    The document lays an entry out as `role | context` beside `period | employer`, so those are four
+    separate DOCX paragraphs (invariant 5 is a verbatim per-line substring test), followed by the
+    entry's highlight bullets. The first line is the role; `cv_data_to_text()` prefixes exactly that
+    line with a newline to keep the section's blank-line separation, while the read-only guard
+    (`utils.cv_replacements.read_only_lines`) compares the bare lines.
+    """
+    lines = [experience["role"]]
+    for key in ("company_info", "context", "dates"):
+        value = experience.get(key)
+        if value:
+            lines.append(str(value))
+    lines.extend(f"• {highlight}" for highlight in experience.get("highlights") or [])
+    return lines
+
+
 def project_lines(project):
     """One project as the single-line-per-paragraph text the master DOCX carries.
 
@@ -99,9 +119,10 @@ def cv_data_to_text(cv_data):
     cell and period + employer in the other) - followed by its bullets, so anything the model
     copies back is a line the DOCX actually carries and a replacement can match.
 
-    The PET PROJECTS block (the JSON key keeps the model's name, `personal_projects`) is rendered
-    too - the model has to see it to draw on it - but it is *read-only context*:
-    `drop_read_only_replacements()` is what keeps a replacement from targeting its lines.
+    The read-only blocks - PROFESSIONAL EXPERIENCE and PET PROJECTS (the JSON key keeps the model's
+    name, `personal_projects`) - are rendered too: the model has to see them to draw on them, but
+    neither is a target. `drop_read_only_replacements()` is what keeps a replacement from targeting
+    any of their lines.
     """
     cv_data = as_plain_dict(cv_data)
     if not cv_data:
@@ -119,13 +140,11 @@ def cv_data_to_text(cv_data):
 
     lines.append("\nPROFESSIONAL EXPERIENCE:")
     for experience in cv_data["professional_experience"]:
-        lines.append(f"\n{experience['role']}")
-        for key in ("company_info", "context", "dates"):
-            value = experience.get(key)
-            if value:
-                lines.append(str(value))
-        for highlight in experience["highlights"]:
-            lines.append(f"• {highlight}")
+        entry_lines = experience_lines(experience)
+        # The role opens the block, so it keeps the blank-line separation; `experience_lines()`
+        # returns the bare line the read-only guard compares, so the prefix is added here only.
+        lines.append(f"\n{entry_lines[0]}")
+        lines.extend(entry_lines[1:])
 
     projects = cv_data.get("personal_projects") or []
     if projects:

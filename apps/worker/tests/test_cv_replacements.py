@@ -1,4 +1,4 @@
-"""The rules a replacement must satisfy: one clean line, and never the read-only projects block."""
+"""The rules a replacement must satisfy: one clean line, and never a read-only block (experience or projects)."""
 
 from tests.helpers import SAMPLE_CV_DATA
 from utils import cv_replacements
@@ -42,3 +42,26 @@ def test_read_only_replacements_are_a_noop_without_projects():
     """An older cv_data.json (no projects block) keeps every replacement."""
     replacements = [(SAMPLE_CV_DATA["summary"], "New summary")]
     assert cv_replacements.drop_read_only_replacements(replacements, {"summary": "x"}) == replacements
+
+
+def test_read_only_replacements_leave_the_experience_block_alone():
+    """Only the title, the summary and the skills are rewritten - an experience line is dropped."""
+    experience = SAMPLE_CV_DATA["professional_experience"][0]
+    title = (SAMPLE_CV_DATA["header"]["title"], "Platform Engineering Lead (.NET / Azure)")
+    summary = (SAMPLE_CV_DATA["summary"], "Platform Engineering Lead with Azure delivery record.")
+    skills = ("Languages", "Languages (ATS)")
+    replacements = [
+        title,
+        summary,
+        skills,
+        (experience["role"], "Hacked role"),
+        (experience["company_info"], "Hacked employer"),
+        (experience["context"], "Hacked context"),
+        (experience["dates"], "2018 - 2026"),
+        (experience["highlights"][0], "Hacked highlight"),
+    ]
+    assert cv_replacements.drop_read_only_replacements(replacements, SAMPLE_CV_DATA) == [
+        title,
+        summary,
+        skills,
+    ]

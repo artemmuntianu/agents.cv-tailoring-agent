@@ -33,7 +33,7 @@ describe('the CV model as the page shows it', () => {
       'Header',
       'Summary',
       'Relevant skills',
-      'Professional experience',
+      'Professional experience (read-only context)',
       'Personal projects (read-only context)',
     ]);
     expect(sections[0].lines).toEqual(['NAME: Jane Doe', 'TITLE: Senior Engineer']);

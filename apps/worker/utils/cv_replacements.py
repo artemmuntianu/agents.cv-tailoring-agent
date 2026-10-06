@@ -5,13 +5,16 @@ Both rules are enforced here rather than trusted to the prompt:
 * `normalize_replacements()` keeps one replacement to ONE clean line. The model returns a SKILLS
   label concatenated with its value (two paragraphs in the DOCX, so unmatchable), a leading
   bullet marker (Word renders its own, so a double bullet appears) or a no-op.
-* `drop_read_only_replacements()` keeps the projects block out of the replacement set. Those
-  paragraphs are *context* for the SUMMARY and RELEVANT SKILLS - a project stack is proof
-  of a technology - and rewriting them costs the entry layout and the URLs.
+* `drop_read_only_replacements()` keeps the read-only blocks out of the replacement set: the
+  PROFESSIONAL EXPERIENCE block (role, employer, context, period and every highlight bullet) and
+  the projects block. Both are *context* for the SUMMARY and RELEVANT SKILLS - a project stack is
+  proof of a technology - so only the header title, the SUMMARY and the RELEVANT SKILLS are
+  rewritten.
 """
 
 from utils.cv_text import (
     as_plain_dict,
+    experience_lines,
     normalize_text,
     project_lines,
     split_lines,
@@ -82,26 +85,30 @@ def normalize_replacements(items):
 
 
 def read_only_lines(cv_data):
-    """The rendered lines of the read-only context block (the document's PET PROJECTS block)."""
+    """The rendered lines of the read-only blocks (PROFESSIONAL EXPERIENCE and PET PROJECTS)."""
     cv_data = as_plain_dict(cv_data)
     if not cv_data:
         return []
     lines: list[str] = []
+    for experience in cv_data.get("professional_experience") or []:
+        lines.extend(experience_lines(experience))
     for project in cv_data.get("personal_projects") or []:
         lines.extend(project_lines(project))
     return lines
 
 
 def drop_read_only_replacements(replacements, cv_data):
-    """Drop any replacement that targets the read-only projects block (PET PROJECTS).
+    """Drop any replacement that targets a read-only block (PROFESSIONAL EXPERIENCE or PET PROJECTS).
 
-    Projects are *context*: they tell the model which technologies the candidate really has so
-    the SUMMARY and RELEVANT SKILLS rewrites can draw on them (a project stack is proof, not a
-    claim). The project paragraphs themselves are never rewritten - the title/year row carries
-    the entry layout and the Website/Repo/YT Video lines carry the URLs, so a rewrite there
-    costs layout and links for nothing. The prompt states the rule; this is what enforces it.
+    Both blocks are *context*: the experience block carries every role, employer, context, period
+    and highlight the CV is built from, and a project stack tells the model which technologies the
+    candidate really has, so the SUMMARY and RELEVANT SKILLS rewrites can draw on them (a project
+    stack is proof, not a claim). Neither block is rewritten - the experience wording, dates and
+    metrics must survive the run, and a project's title/year row carries the entry layout while its
+    Website/Repo/YT Video lines carry the URLs, so a rewrite there costs layout and links for
+    nothing. The prompt states the rule; this is what enforces it.
 
-    A target matches when it *is* a project line, or when it is a fragment of one (at least
+    A target matches when it *is* one of those lines, or when it is a fragment of one (at least
     `READ_ONLY_FRAGMENT_MIN_CHARS` long - a shorter fragment such as "Stack" would only produce
     false drops). Items are `(original, tailored[, reason])`, like `normalize_replacements()`.
     """
@@ -119,7 +126,7 @@ def drop_read_only_replacements(replacements, cv_data):
             or (len(target) >= READ_ONLY_FRAGMENT_MIN_CHARS and target in block)
         ):
             log.warning(
-                "dropped a replacement targeting the read-only projects block",
+                "dropped a replacement targeting a read-only block",
                 original=original,
             )
             continue

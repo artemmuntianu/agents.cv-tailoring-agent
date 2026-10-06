@@ -48,7 +48,7 @@ never mutate in place.
 
 | Node | Does | Writes |
 |---|---|---|
-| `adapt_text` | sync-checks `cv_data` vs `cv.docx`, loads the candidate facts, extracts the target role, asks Gemini for replacements, drops any that target the read-only projects block, applies the rest to the DOCX | `target_role_title`, `current_cv_text`, `modifications`, `revision_count`; `is_approved=True` + `status_hint=skipped` when nothing applied |
+| `adapt_text` | sync-checks `cv_data` vs `cv.docx`, loads the candidate facts, extracts the target role, asks Gemini for replacements, drops any that target a read-only block (PROFESSIONAL EXPERIENCE or PET PROJECTS), applies the rest to the DOCX | `target_role_title`, `current_cv_text`, `modifications`, `revision_count`; `is_approved=True` + `status_hint=skipped` when nothing applied |
 | `render` | DOCX -> PDF -> page PNGs in `temp_dir` (per-job LibreOffice profile) | `image_paths`, `pdf_path` |
 | `vision_check` | sends the page images to Gemini with the layout prompt | `is_approved`, `layout_feedback` |
 | `persist` | uploads PDF + DOCX, computes `duration_ms`, writes the final row | `pdf_url`, `docx_url`, `status_hint` |
@@ -79,12 +79,19 @@ The adaptation prompt is part of the product, not a comment - it lives in
 3. **Verbatim `original_text`**, copied from the CV text dump.
 4. **No fabrication**: never invent employers, titles, dates, technologies or
    metrics; never change a real figure.
-5. **Keep count and order** of experience entries and bullets; keep replacements
-   roughly the same length as the original.
-6. **PET PROJECTS is read-only context.** The model sees the block and may back
-   a SUMMARY or SKILLS claim with it, but it must never return one of its lines as
-   `original_text`: `drop_read_only_replacements()` enforces exactly that, so the
-   prompt rule and the code state the same thing.
+5. **Tailor three sections only.** The header TITLE, the SUMMARY and the RELEVANT
+   SKILLS; keep each replacement roughly the same length as the original and never
+   split one target into several entries.
+6. **PROFESSIONAL EXPERIENCE and PET PROJECTS are read-only context.** The model
+   sees both blocks and may back a SUMMARY or SKILLS claim with them, but it must
+   never return one of their lines as `original_text`:
+   `drop_read_only_replacements()` enforces exactly that (the experience block
+   carries the roles, employers, dates and metrics that must survive the run; the
+   projects block carries the entry layout and the URLs), so the prompt rule and
+   the code state the same thing. The scope is the point:
+   `utils.cv_text.experience_lines()` + `utils.cv_text.project_lines()` are the very
+   lines `drop_read_only_replacements()` compares, so the guard reasons about the
+   text the prompt received.
 7. **The candidate facts are evidence, not document text.** The prompt carries the
    `application_profile` digest as ground truth (a fact-backed technology or number
    is admissible, see `apps/worker/agent/verification.py::evaluate_fabrications(ground_truth=...)`)

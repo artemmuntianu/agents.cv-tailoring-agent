@@ -122,7 +122,8 @@ def adapt_text(state: State) -> State:
     # Normalise so the model can never pass a concatenated (multi-line) label+value
     # as a single replacement - those live in separate paragraphs and can never match.
     replacements = normalize_replacements(clean_raw_replacements)
-    # Projects are context, not targets: the prompt states it, this is the enforcement.
+    # Experience and projects are read-only context, not targets: the prompt states it, this
+    # is the enforcement (only the header title, the SUMMARY and the RELEVANT SKILLS are rewritten).
     replacements = drop_read_only_replacements(replacements, cv_data)
 
     applied_count = apply_text_replacements(

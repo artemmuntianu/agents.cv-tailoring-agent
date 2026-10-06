@@ -17,8 +17,8 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `test_candidate_facts.py` | The candidate-facts block: one renderer for the facts + standing answers, the two caps (`MAX_VALUE_CHARS` / `MAX_ANSWER_CHARS`), both stored shapes, and a missing row/user as an empty block rather than an error |
 | `test_contracts.py` | `ResumeTaskMessage` defaults, the `job_id` shape guard, `key()`, `to_job_row()`, `new_job_id()` |
 | `test_cover_letter.py` | The letter prompt (only what the CV and the candidate facts state), the digest (projects deliberately excluded), and `cover.handle_delivery`: written / duplicate / quota-deferred / dead-lettered, plus the two queues never sharing storage |
-| `test_cv_replacements.py` | The rules a replacement must satisfy: concatenated label+value splitting, misaligned/duplicate/no-op dropping, and the read-only projects block |
-| `test_cv_text.py` | The CV model as text: every section rendered (projects included), and the legacy path-string call |
+| `test_cv_replacements.py` | The rules a replacement must satisfy: concatenated label+value splitting, misaligned/duplicate/no-op dropping, and the read-only blocks (PROFESSIONAL EXPERIENCE and the projects block - only the title, the summary and the skills are ever targeted) |
+| `test_cv_text.py` | The CV model as text: every section rendered (experience + projects included), `experience_lines()` matching the dump, and the legacy path-string call |
 | `test_db_claim.py` | Claim outcomes `claimed` / `duplicate` / `owned` and the re-claim of a failed row (local backend) |
 | `test_docx_mutator.py` | The AST surgery that must never regress: the paragraph rewritten and the master left untouched, and the sync validator detecting drift |
 | `test_heartbeat.py` | The idle heartbeat thread: it refreshes the readiness file with no messages in flight, and it is a daemon that a `STOP_EVENT` ends |
@@ -72,7 +72,7 @@ and the removal purge (`artifact_purge` + the cascade).
   where `render` calls them. Pass a dict as `calls` to count LLM invocations -
   that is how "a duplicate never pays for Gemini twice" is asserted - and a list as
   `prompts` to capture the tailoring prompt, which is how "the candidate facts and the
-  read-only projects block reached the model" is asserted.
+  read-only blocks reached the model" is asserted.
 - `reset_caches()` calls `db.reset_db_cache()`, `storage.reset_storage_cache()`,
   `messaging.reset_queue_cache()` and `model_state.reset_store_cache()`.
   **A new cached `get_*()` factory in `apps/worker/utils/` must be added here too** (see

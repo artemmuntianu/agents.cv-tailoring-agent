@@ -129,7 +129,9 @@ export function cvModelSections(model: Record<string, unknown> | null): CvSectio
     ...((entry.highlights ?? []) as string[]).map((highlight) => `• ${highlight}`),
   ]);
   if (experienceLines.length) {
-    sections.push({ title: 'Professional experience', lines: experienceLines });
+    // Only the title, the summary and the skills are ever rewritten, so the experience block is
+    // read-only context too - the same note the projects section carries.
+    sections.push({ title: 'Professional experience (read-only context)', lines: experienceLines });
   }
 
   const projects = (model.personal_projects ?? []) as Record<string, unknown>[];

@@ -1,8 +1,8 @@
 """The mechanical half of the document surgery: walk the DOCX, match a line, write it back.
 
 Nothing here decides *whether* a replacement is allowed. That is `utils.cv_replacements` (one
-clean line, never a read-only projects line) plus `validate_cv_data_against_docx()` below, which
-proves the model describes the document it is about to be applied to.
+clean line, never a read-only experience or projects line) plus `validate_cv_data_against_docx()`
+below, which proves the model describes the document it is about to be applied to.
 
 Tables are the trap: the master CV is built almost entirely out of them - a profile table, and a
 two-column table that holds every role and project as a `content | meta` row pair - so

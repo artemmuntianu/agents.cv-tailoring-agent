@@ -118,17 +118,19 @@ def test_master_cv_drift_fails_the_task_and_requests_a_retry():
             assert "out of sync" in job["error"]
 
 
-def test_projects_are_read_only_and_the_facts_reach_the_prompt():
+def test_projects_and_experience_are_read_only_and_the_facts_reach_the_prompt():
     """The master CV gained a PET PROJECTS section and the operator a facts row.
 
     Both are now inputs to the tailoring prompt: the facts as ground-truth evidence, the
     projects as read-only context - a replacement that targets a project line is dropped, so
-    the heading and the bullets come out of the run exactly as they went in.
+    the heading and the bullets come out of the run exactly as they went in. Only the title,
+    the summary and the skills are rewritten: an experience line is read-only too.
     """
     with tempfile.TemporaryDirectory() as tmp:
         with isolated_config(tmp):
             seed_candidate("user-1")
             project = SAMPLE_CV_DATA["personal_projects"][0]
+            experience = SAMPLE_CV_DATA["professional_experience"][0]
             payload = sample_task(user_id="user-1", include_cv_data=True)
 
             prompts = []
@@ -137,6 +139,8 @@ def test_projects_are_read_only_and_the_facts_reach_the_prompt():
                     (SAMPLE_CV_DATA["summary"], TAILORED_SUMMARY),
                     (project["heading"], "1) Hacked heading"),
                     (project["highlights"][0], "Hacked bullet"),
+                    (experience["role"], "Hacked role"),
+                    (experience["highlights"][0], "Hacked highlight"),
                 ],
                 prompts=prompts,
             ):
@@ -145,6 +149,7 @@ def test_projects_are_read_only_and_the_facts_reach_the_prompt():
             assert result.outcome == Outcome.ACK
             assert "STANDING ANSWER - Redis and RabbitMQ experience" in prompts[0]
             assert "PET PROJECTS:" in prompts[0]
+            assert "PROFESSIONAL EXPERIENCE:" in prompts[0]
 
             paragraphs = [
                 paragraph.text
@@ -155,8 +160,12 @@ def test_projects_are_read_only_and_the_facts_reach_the_prompt():
             assert TAILORED_SUMMARY in paragraphs
             assert project["heading"] in paragraphs
             assert project["highlights"][0] in paragraphs
+            assert experience["role"] in paragraphs
+            assert experience["highlights"][0] in paragraphs
             assert "Hacked heading" not in paragraphs
             assert "Hacked bullet" not in paragraphs
+            assert "Hacked role" not in paragraphs
+            assert "Hacked highlight" not in paragraphs
 
 
 def test_quota_exhaustion_defers_the_task_instead_of_blocking():

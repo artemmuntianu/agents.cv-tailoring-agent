@@ -29,47 +29,23 @@ Everything runs **on one machine, in a local Kubernetes cluster**. There is no
 cloud account, no object storage and no managed database. The only outbound call
 is to the Gemini API.
 
+Chrome extension / scheduled scout --> board (one card per vacancy, "Scraped")
+    the operator drags a card to "Prepare" (tailoring) or clicks Generate (letter / fill)
+                                 |
+                                 v
+    RabbitMQ: resumes.generate . resumes.cover . resumes.rerender . applications.draft
+                                 |   KEDA scales the queue's consumers 0 -> N -> 0
+                                 v
+    worker pods (prefetch = 1, one task per message)
+      adapt_text -> render -> vision_check -> persist
+                                 |
+    cv-artifacts volume (DOCX/PDF) + Postgres (status, board, candidate facts)
 ```
-Chrome extension / scout --> backoffice board (one card per vacancy, column "Scraped")
-                                     |  the operator drags a card into "Prepare"
-                                     v
-                     RabbitMQ (rabbitmq-0, resumes.generate)
-                                     |  KEDA: queue depth -> replicas (0 -> M -> 0)
-                                     v
-                     ai-agent-worker pod (prefetch = 1, one vacancy per message)
-                     adapt_text -> render -> vision_check -> persist
-                                     |
-                  cv-artifacts volume (PDF/DOCX) + Postgres (status)
-
-the board (a card's "Generate" button) --> RabbitMQ (resumes.cover)
-                                     |  KEDA: queue depth -> replicas (0 -> N -> 0)
-                                     v
-                     ai-agent-worker-cover pod (one Gemini call per letter)
-                                     |
-                    resume_cover_letter (text) + the master cv_data.json
-                    + the candidate facts (application_profile row)
-
-the board (an "Update docx" upload) --> RabbitMQ (resumes.rerender)
-                                     |  KEDA: queue depth -> replicas (0 -> N -> 0)
-                                     v
-                     ai-agent-worker-rerender pod (LibreOffice, no model)
-                                     |
-                    cv-artifacts volume (the uploaded DOCX + its new PDF)
-                    + resume_docx_update (bytes in, status out)
-
-the extension (a "Populate" click)  --> RabbitMQ (applications.draft)
-                                       |  KEDA: queue depth -> replicas (0 -> N -> 0)
-                                       v
-                     ai-agent-worker-apply pod (one Gemini call per rendered form)
-                                       |
-                    resume_application (the plan: which field gets what) + application_profile
-
-the scout (CronJob, twice an hour)  --> resumes rows (cards in the board's "Scraped")
-        (+ once per deploy: the startup hook Job, `chart: infra/charts/cv-tailoring-scout`)
-the archiver (CronJob, once a day)  --> resume_board + resume_history (the Applied cards
-                                       nobody touched for 10 days are refused *in place*)
-          both write one row per run to process_runs -> the board's "Processes" window
-```
+Four queues, four consumers: `resumes.generate` -> `worker.py` (tailoring), `resumes.cover` ->
+`cover.py`, `resumes.rerender` -> `rerender.py` (LibreOffice, no model), `applications.draft` ->
+`apply.py`. The scout and the archiver are CronJobs that write board rows directly - no queue, no
+model - and each records one row per run in `process_runs`. Queue topology and payloads:
+`docs/ARCHITECTURE.md`; the runtime diagram: `docs/diagrams/`.
 
 ## 2. One way to run the pipeline
 
@@ -118,6 +94,9 @@ automation         .github/workflows/
 
 ## 4. Invariants (do not break these silently)
 
+The numbers are **stable addresses**: code, charts, SQL and the layer docs cite them
+(`invariant 33`), so renumbering one means updating every reference. Append; never renumber.
+
 1. **One pipeline.** `apps/worker/agent/pipeline.run_cv_tailoring()` / `run_task()` are the
    only ways to run the graph; `worker.py` calls them (and so do the tests).
 2. **Ack only after `persist`.** The queue message is acknowledged after the
@@ -135,12 +114,16 @@ automation         .github/workflows/
    fails rather than mutating the wrong paragraph. Two properties are easy to
    forget: it is **one-directional** (it proves the JSON mirrors the DOCX, not that
    the DOCX is fully modelled - adding a section to `cv.docx` alone stays green and
-   silently never reaches the prompt, which is how the PET PROJECTS section
-   went unnoticed), and a line ending in `:` is a label, not data, so it is skipped.
+   silently never reaches the prompt), and a line ending in `:` is a label, not data, so it
+   is skipped.
 6. **Replacements are single-line and marker-free.** `normalize_replacements()`
    splits concatenated label+value pairs, drops misaligned lines and no-ops, and
    strips leading bullet characters; `apply_text_replacements()` additionally
-   skips any `original_text` containing a newline.
+   skips any `original_text` containing a newline. A replacement may target **only
+   three sections** - the header TITLE, the SUMMARY and the RELEVANT SKILLS: the
+   PROFESSIONAL EXPERIENCE and PET PROJECTS blocks are read-only context, and
+   `drop_read_only_replacements()` discards any replacement whose target is a line
+   of either (invariant 30).
 7. **No fabrication (hard rule).** The adaptation prompt may rephrase and
    re-weight only what is already on the CV - no invented employers, titles,
    dates, technologies or metrics. Two sources count as *already known*: the
@@ -415,11 +398,70 @@ automation         .github/workflows/
     `resume_interview` rows stay where they are. The `/admin` vocabulary surface still never
     rewrites history - only the operator's own pencil does.
 
-30. **The repo is LF-only.** `.gitattributes` (`* text=auto eol=lf`) stores *and*
-    checks out every text file with LF - it overrides a system-level
-    `core.autocrlf=true`, which had rewritten 276 tracked files to CRLF and made
-    exact-match edits silently miss. After changing line-ending attributes,
-    renormalise with `git add --renormalize .` then `git checkout-index -f -a`.
+30. **PROFESSIONAL EXPERIENCE and `personal_projects` are read-only context.** Only three sections
+    are tailored - the header TITLE, the SUMMARY and the RELEVANT SKILLS (invariant 6). The
+    **experience** block (`utils.cv_text.experience_lines`) and the **projects** block - the
+    document's own **PET PROJECTS** heading, the JSON key keeps the model's name - are rendered
+    into the CV text (`utils.cv_text.project_lines`) so the model can draw on them: a project stack
+    is *proof* of a technology, and `apps/worker/agent/verification.py` admits those terms. They may
+    inform the SUMMARY and RELEVANT SKILLS **only**: `drop_read_only_replacements()` discards any
+    replacement whose target is one of their lines - the experience wording, dates and metrics must
+    survive the run, and a project's title/year row carries the entry layout while the
+    `Website:`/`Repo:`/`YT Video` lines carry the URLs. Every project `title`, `year` and `stack` is
+    stored verbatim (one field per DOCX paragraph) because invariant 5 is a per-line substring test.
+
+    The master CV was refactored on 2026-10-06 into the shape this invariant describes: two
+    top-level tables (a profile table and a two-column roles/projects table), where every entry is
+    a `content | meta` row pair - role + context on the left, period + employer on the right - followed by
+    a merged body row (`Key Highlights:` / `Responsibilities:` / `Tech Stack:`). The earlier
+    layout kept the whole page in one table-in-a-table and right-aligned the project years with
+    tab runs; there are no tab runs left in the document.
+
+31. **One candidate-facts document grounds every prompt.** `application_profile` (one jsonb row per
+    operator; `apps/worker/utils/candidate.py`, mirrored by `apps/backoffice/src/lib/candidate.ts`) is the half of
+    the candidate that a CV does not carry. The CV tailoring prompt, the cover letter and the form
+    prompt all receive the same rendered digest, and `apps/worker/agent/verification.py` accepts it as an
+    admissible source (`ground_truth=`) so a fact-backed technology or number is not dropped as a
+    fabrication. It is **evidence, never document text**: no prompt may write contacts, salary,
+    availability, work format, location or job-search status into the CV or the letter. Facts cap at
+    `MAX_VALUE_CHARS`, standing answers at `MAX_ANSWER_CHARS` (a project deep-dive does not fit in a
+    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` still
+    merges `standing_answers` so a partial save cannot wipe the question/answer set. The row that
+    grounds a card is its **owner's** (invariant 25), and the extension no longer edits facts at
+    all: the one maintenance surface is this row (`/sources` renders it, `seed_profile.py` loads it).
+
+32. **The deliverable can be replaced by hand, and the PDF follows.** The operator downloads the
+    tailored DOCX, verifies it, edits what the model could not, and uploads it back through the
+    card modal (`POST /api/board/docx/<job_id>`, the *Update docx* button - offered only for a card
+    that has a `docx_path`, refused with 409 otherwise). Its own queue (`resumes.rerender`, its own
+    worker `rerender.py`, its own DLX/DLQ/ScaledObject and the same four-declarer agreement) renders
+    the upload with the image's LibreOffice and repoints `resumes.docx_path`/`pdf_url` **in place**,
+    so the board's existing artifact links are the new pair with no new concept. The bytes travel in
+    Postgres (`resume_docx_update.content`): the POC board runs outside the cluster and cannot write
+    the `cv-artifacts` volume, which is the same reason it *reads* artifacts through the mirror. One
+    row per vacancy is the audit trail (`queued` -> `running` -> `completed`/`failed`), the claim
+    refuses while a render is `running` (two clicks cannot replace the bytes a conversion is
+    reading), `MAX_DOCX_UPLOAD_BYTES` is enforced on both ends, and a card that never went through
+    tailoring is refused by the route *and* dead-lettered by the worker.
+
+33. **The job description is a target, never evidence.** Nothing a vacancy asks for authorises a
+    claim about the candidate (invariants 7, 31). The tailoring answer is checked by
+    `apps/worker/agent/verification.py::invented_technologies` against those two sources only - the JD is passed
+    in for diagnostics ("the vacancy asks for it, which is a reason to leave it out"), never as
+    evidence - and detection runs on a curated vocabulary *plus* the shape of a name (an internal
+    capital like `FastAPI`/`FastMCP`/`PyTorch`, or a digit like `GPT-4`/`n8n`), because no list can
+    contain tomorrow's tool. Three layers enforce it: the prompt states the rule (tailoring rule 12),
+    `self_heal_replacements` hands a violating answer back with the violations spelled out up to
+    `MAX_FABRICATION_RETRIES` (3) times and keeps the best draft it saw, and whatever is still
+    offending is *dropped* - the CV keeps its own wording, so nothing unbacked reaches the file. The
+    guarantee covers the file too: the `verify_document` node (`apps/worker/agent/document_gate.py`) reads the
+    produced DOCX back and **fails the task** rather than upload a CV whose text claims something no
+    evidence backs. It runs **before the visual check** - straight after `adapt_text`, ahead of
+    `render`/`vision_check` - so a lying document costs nothing to reject and never occupies the
+    renderer or the vision model, and each pass of the vision retry loop re-verifies because the
+    loop comes back through `adapt_text`. 2026-10-01 is why all of it exists:
+    `FastAPI` and `FastMCP` shipped in a tailored CV for `851224` because the job description was one
+    of the admissible sources and neither token was in the pattern the check searched for.
 
 34. **A site the feed intake cannot reach is browser-scraped only, and one of them is not a list.**
     The registry (`apps/extension/src/sites/index.js`, invariant 35) is what derives `resumes.source`
@@ -463,6 +505,35 @@ automation         .github/workflows/
     from the registry - neither file can import it - so `sites.test.ts` pins both against it in both
     directions.
 
+36. **The extension fills application forms, and it never submits them.** The second half of
+    `apps/extension/` (`src/formfill.js`, `src/form/`) puts the operator's *Populate* click through one
+    round trip: the page annotates every fillable control inside a **picked** form root with a
+    deterministic `data-cvt-id`, the board queues that snapshot on `applications.draft`
+    (`apply.py`, its own ScaledObject), and the plan comes back keyed by those ids. Two rules are
+    the point of the design. First, **the generated documents never travel**: the model is asked
+    *which element* the cover letter and the tailored PDF belong in (`cover_letter` /
+    `resume_file`, always with an empty value) and the extension inserts both itself, from
+    `GET /api/cover/<job_id>` and `GET /api/artifacts/<job_id>`. Second, **a missing fact is
+    skipped, never invented**: the prompt may use the vacancy, the CV digest and the candidate
+    facts (`application_profile`, one jsonb row per operator, because the board edits it on the
+    host while the worker reads it in the cluster), and everything else comes back as
+    `skip` + a reason for the review panel. The snapshot's hash is the cache key, so re-filling the
+    same rendered form costs no Gemini call while a changed form re-drafts; the extension never
+    clicks submit, a consent checkbox or a site preference control, and never touches a
+    `hidden`/`password`/disabled field. **Which card a page belongs to is resolved twice, and
+    never guessed**: the page's own vacancy id first (`GET /api/vacancies/status`, the lookup the
+    injected buttons use), and when that finds nothing, the page URL against the cards' own
+    application URLs (`GET /api/vacancies/link`, invariant 28's `apply_url`) - the only way to
+    reach a card scraped on Djinni/DOU whose Apply button opened the employer's form. Neither
+    match stops the flow with "this page is not linked to a card yet" instead of filling a form
+    from the wrong vacancy.
+
+37. **The repo is LF-only.** `.gitattributes` (`* text=auto eol=lf`) stores *and*
+    checks out every text file with LF - it overrides a system-level
+    `core.autocrlf=true`, which had rewritten 276 tracked files to CRLF and made
+    exact-match edits silently miss. After changing line-ending attributes,
+    renormalise with `git add --renormalize .` then `git checkout-index -f -a`.
+
 ## 5. Known discrepancies, dead code and legacy paths
 
 These were verified against the working tree on 2026-09-19. They are **not**
@@ -472,22 +543,18 @@ so that a change which depends on them is a conscious one.
 | # | What | Reality | Status |
 |---|---|---|---|
 | D1 | `Dockerfile` line 48 comment ("persist to Supabase") and line 51 `ENV STORAGE_BACKEND=supabase` | There is no `STORAGE_BACKEND` in `config.py`, and `apps/worker/utils/storage.py` has no backend selection - storage is unconditionally `LocalStorage`. `infra/deploy/values/dev.yaml` (`config.storageBackend: local`) and `.github/workflows/helm-smoke.yml` (`--set config.storageBackend=local`) set a value that `infra/charts/cv-tailoring-worker/templates/configmap.yaml` never renders, so both are inert as well | **Dead** (leftover from the removed Supabase era). Harmless at runtime, misleading to readers. |
-| D2 | `pyproject.toml` description: "...LangGraph + RabbitMQ + Supabase" | Supabase was removed; storage is a PVC | **Fixed 2026-09-25** (description now names local Kubernetes) |
-| D3 | `requirements.txt`: `pypdf>=4.0.0` | Not imported anywhere in the repo | **Unused dependency** |
-| D4 | `config.RABBITMQ_MANAGEMENT_URL` | Defined in `config.py` (and formerly passed by the removed `docker-compose.yml`), but never read by application code - KEDA reaches the management API through the broker Secret's `rabbitmq-management-url` key instead | **Unused config** |
-| D5 | `config.QUEUE_RETRY_TTL_MS` and chart key `config.queueRetryTtlMs` | `apps/worker/utils/messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS = (60, 300, 900, 1800, 3600)`; the env var is never read, so the chart knob is **inert** | **Unused config** |
+| D2 | `pyproject.toml` description named Supabase | Supabase was removed; storage is a PVC | **Fixed 2026-09-25** |
+| D3, D9 | Unused leftovers: `pypdf` in `requirements.txt` (never imported) and the Supabase keys the gitignored `.env` may still hold | Neither is read | **Dead** |
+| D4, D5 | Unused config: `config.RABBITMQ_MANAGEMENT_URL` (KEDA reaches the management API through the broker Secret's `rabbitmq-management-url`) and `config.QUEUE_RETRY_TTL_MS` / the chart's `config.queueRetryTtlMs` (`messaging.py` uses the hard-coded `RETRY_LADDER_SECONDS`) | Never read by application code, so the chart knob is **inert** | **Unused config** |
 | D6 | `apps/worker/utils/renderer.convert_docx_to_pdf` fallback `from docx2pdf import convert` | `docx2pdf` is not in `requirements*.txt`; Windows-only, unexercised | **Untested fallback** |
-| D7 | Test counts in `docs/PROJECT_STATE.md` ("41 tests", "35 pass, 6 skip") | Actual: **150 collected, 28 skipped, 122 passed** (`python -m pytest`, 2026-09-29, after the module split), plus the backoffice's **250 tests in 24 files** (`npm test`) | **Stale doc** |
-| D8 | `docs/PROJECT_STATE.md` claims the image was never built and `helm install` never ran | It is a session handoff, not live status. CI does run `helm-smoke.yml` on chart changes, but do not assume a live cluster was ever exercised - re-check before relying on it | **Possibly stale** |
-| D9 | `.env` may still contain Supabase keys | They are unused | **Cleanup candidate** |
-| D10 | `docs/postgres_schema.sql` vs `apps/worker/utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path; it is deleted, so `apps/worker/utils/db.SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth. The extra objects it created (`vacancies`, `applications`, `resumes_status_idx`, `resumes_created_at_idx`, `set_updated_at()`) were never used by the runtime | **Resolved - one source of truth** |
+| D7, D8 | Test counts and the "image never built / `helm install` never ran" claims in `docs/PROJECT_STATE.md` | It is a point-in-time session handoff, not live status: its counts are stale and nothing in it may be read as current | **Stale doc** |
+| D10 | `docs/postgres_schema.sql` vs `apps/worker/utils/db.SCHEMA_SQL` | **Resolved 2026-09-25**: the `.sql` file existed only for the removed docker-compose initdb path and is deleted, so `SCHEMA_SQL` - what the worker executes on startup, and therefore what exists in the cluster - is the single source of truth | **Resolved** |
 | D11 | `apps/backoffice/` (the kanban POC) | Shares the worker's Postgres: it reads `resumes` and owns `resume_board` + `resume_history` + `app_users` (all in `SCHEMA_SQL`, the vacancy-linked ones `on delete cascade`), one transaction per manual move (`actor` + reason recorded). It never writes `resumes.status` - the `created` sub-state is derived from it. Authentication: admin-provisioned accounts, HS256 session cookie or bearer token, no signup route. Its batch gateway *creates* the card (`resumes` row, `status='submitted'`) before publishing, so a scraped vacancy is on the board at once (invariant 17), its `GET /api/vacancies/status?external_ids=...` answers "already on the board?" for the extension's injected per-card buttons (the same lookup, board-scoped), and its artifact links are served by the board (`GET /api/artifacts/<job_id>`) because the stored values are paths on the `cv-artifacts` volume (invariant 18). Refusals are an in-place soft delete with an audited reason (invariant 19) and the Action vocabulary lives in `board_actions` (invariant 20); the top bar's Filters panel is where archived cards, columns and actions are selected. **Roles are enforced for the vocabulary admin surface only** (`/admin` + `/api/admin/*` need the `is_admin` claim, invariant 21) - the board itself is still all-users, and the remaining `app_users` management is the CLI. A refused card can also be **removed for good** (invariant 22): the row, its board state, its whole history and its artifacts - with whatever the board cannot reach queued in `artifact_purge` for `scripts/storage-files.ps1 -Action purge` | **POC gap** - still not deployed in-cluster; run it locally against `kubectl port-forward svc/postgres 5432:5432` (and `svc/rabbitmq 5672:5672` for the batch endpoint) |
 | D12 | The source design's Supabase + Vercel hop | Both providers are out (`Supabase` = legacy, `Vercel` = never part of the local runtime), so their *functions* were implemented locally instead: **auth** = `app_users` + `apps/backoffice/src/lib/auth.ts` + `scripts/user.mjs` (manual provisioning, no signup); **storage** = the `cv-artifacts` PVC (`apps/worker/utils/storage.py`); **API gateway** = `POST /api/vacancies/batch`; **realtime push** = the board's 5s live poll (`App.tsx`), not WebSockets. `applications.submit` has no producer yet and `vacancies.parse` has no consumer (parsing is client-side in `apps/extension/`, and `apps/worker/scout/` parses in-process rather than through that queue) | **Substituted by design** - do not reintroduce the providers; `apps/extension/` is the real replacement for the design's "Chrome extension" box (it scrapes before the gateway; and its loading `content_scripts` entry injects a `Scrape`/`Scraped` button into every listing card, the `Scraped` link deep-linking to `/?card=<job_id>` on the board) |
-| D13 | `scripts/archive_not_applicable.sql`, which `scripts/AGENTS.md` described as the written record of the 2026-09-26 spreadsheet import | **The file does not exist and never did**: `git log --all -- scripts/archive_not_applicable.sql` is empty and the path is not tracked in any revision, so that description was prose-only. The import it documented is real - 828 `resume_history` rows carry the `Imported: ` prefix and 121 cards are refused as `Candidate` / `Not applicable` (`resume_board` archive columns, stage untouched) | **Doc fixed 2026-09-27** - `scripts/AGENTS.md` now says the script is absent; re-add one if that import ever has to be replayed. **Fallout found 2026-10-01**: the same import wrote `resume_board` rows directly, so `updated_at` kept its `now()` default and nine `applied` cards carried a *fresh* ten-day clock - the archiver ran every morning and honestly reported `candidates: 0` while cards silent since 2026-09-18 stayed put (`373908`, `373812` reported by the operator). Repaired with `scripts/backdate_imported_clocks.sql` (back-dates exactly the import-only cards; the rule is now in `apps/worker/archiver/AGENTS.md`) |
-| D14 | `apps/worker/utils/db.SCHEMA_SQL` created `application_profile` (which references `app_users (id)`) **before** `app_users` | The script is applied top-down, so a *fresh* database died at `relation "app_users" does not exist` and the documented bootstrap could never work - invisible because every database in use already carried the account table from an earlier boot. The gated Postgres suite hit it as soon as its `store` fixture dropped `app_users` too; that drop list was itself stale (no `resume_application`, `application_profile`, `app_users`), so a run left dependants behind and failed its own teardown with `DependentObjectsStillExist` | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 `SCHEMA_SQL` tables (verified: 28/28 gated tests green on a database built from scratch) |
-| D15 | Fonts inside the container: the rendered PDF vs what Word shows | Carlito is metric-compatible with Calibri, so the **body** wraps and paginates exactly as Word does. It has no *Light* weight, so the master CV's heading runs (`asciiTheme="majorHAnsi"` -> Calibri Light) were rendered in **DejaVu Serif** (Serif Bold for the section headings) - a different design *and* different metrics. Verified 2026-09-29 by rendering `artifacts/input/cv.docx` inside the worker image and reading `pdffonts`, next to an A/B on that same image with the Calibri layer hidden: without it the PDF embeds `DejaVuSerif`, `DejaVuSerif-Bold`, `Carlito-Regular/Bold/Italic`, `OpenSymbol` and `LiberationMono`; with it `Calibri`, `Calibri-Bold`, `Calibri-Italic`, `Calibri-Light`, `OpenSymbol` and `LiberationMono` - Carlito and DejaVu gone entirely. `fc-match 'Calibri Light'` **on its own** reports DejaVu *Sans* (the generic fallback for a name nothing claims), which is not the face the document render picks - never treat that alone as the evidence. `Times New Roman` never appears in the master `document.xml`; only as per-script theme fallbacks, the `NormalWeb` style and a `fontTable` entry, and no serif substitute reaches the PDF | **Mitigated 2026-09-29** - `scripts/fetch-fonts.ps1` copies the genuine (licensed) Calibri family from Windows into the untracked `apps/worker/fonts/`, which `docker build` installs to `/usr/share/fonts/truetype/ms-calibri/` + `fc-cache -f`, so a locally built image embeds real Calibri/Calibri Light. CI builds the same Dockerfile with that directory empty (README only) and keeps the substitution on purpose - the `COPY` names the directory, not a glob, so a font-less build stays valid. The files are Microsoft-licensed: never committed and never published |
-
-| D16 | `candidate_profile.json`, named in `apps/worker/agent/application.py`, `apps/worker/agent/contracts.py`, the `apply` deployment comment and the extension's popup hint (removed 2026-10-03) | There is no such file: the candidate facts are the `application_profile` **row** (`apps/worker/utils/candidate.py`, `apps/backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` now exists as the *seed input* of `scripts/seed_profile.py`, which is what made the old wording look plausible | **Doc fixed 2026-09-29** - all four call sites name the row; the file is described as a seed |
+| D13 | `scripts/archive_not_applicable.sql` (described as the 2026-09-26 spreadsheet import's written record) | The file does not and never did exist; the import it documented is real, and the *fresh* `updated_at` it left on nine `applied` cards (which made the sweep report `candidates: 0` every morning) was repaired by `scripts/backdate_imported_clocks.sql` | **Doc fixed 2026-09-27** |
+| D14 | `SCHEMA_SQL` created `application_profile` (which references `app_users`) **before** `app_users` | A *fresh* database died at `relation "app_users" does not exist`, invisible while every database already carried the account table; the gated fixture's stale drop list hid it too | **Fixed 2026-09-29** - `app_users` is created first and the fixture drops all 13 tables |
+| D15 | Fonts in the container: the rendered PDF vs what Word shows | Carlito is metric-compatible with Calibri, so the **body** wraps and paginates exactly as Word does; it has no *Light* weight, so the master CV's Calibri-Light headings rendered in **DejaVu Serif** - a different design *and* different metrics. Verified 2026-09-29 by `pdffonts` on `artifacts/input/cv.docx` inside the worker image, A/B against that image with the Calibri layer hidden (`fc-match 'Calibri Light'` **alone** reports DejaVu *Sans*, which is not the face the render picks - never treat it as the evidence); `Times New Roman` appears only as theme fallbacks, and no serif substitute reaches the PDF | **Mitigated 2026-09-29** - `scripts/fetch-fonts.ps1` copies the licensed Calibri family from Windows into the untracked `apps/worker/fonts/`, which `docker build` installs + `fc-cache -f`; CI builds the same Dockerfile with that directory empty and keeps the substitution on purpose. Microsoft-licensed: never committed, never published |
+| D16 | `candidate_profile.json`, named in the code and the extension popup (until 2026-10-03) | There is no such file: the facts are the `application_profile` **row** (`utils/candidate.py`, mirrored by `apps/backoffice/src/lib/candidate.ts`), and a row is deliberate - the board edits it on the host while the workers read it in the cluster. `artifacts/candidate_profile.json` is only the *seed input* of `scripts/seed_profile.py` | **Doc fixed 2026-09-29** |
 
 ### Legacy / removed (do not reintroduce)
 
@@ -562,6 +629,12 @@ npx tsc --noEmit     # types (no mypy equivalent on this side)
 npm run build        # SSR bundle must build
 ```
 
+## 8. When code and prose disagree
+
+The **code wins**, and the disagreement belongs in section 5 of this file in the
+same change. Documentation that is allowed to drift silently is worse than no
+documentation.
+
 ## 9. What the first live deploy established (2026-09-25)
 
 Facts only a real install could reveal. All were fixed in the same change - keep them true.
@@ -592,116 +665,17 @@ Facts only a real install could reveal. All were fixed in the same change - keep
    default 600). pika cannot service heartbeats while the graph runs, so the old 60s
    heartbeat let the broker drop the connection mid-task and requeue the message -
    the task then restarted from scratch, indefinitely.
-7. **Every consumer writes a periodic heartbeat while idle**
-   (`utils.logging_setup.start_heartbeat_thread`), so readiness no longer fails after
-   five idle minutes (which also made `helm upgrade --wait` time out). All three
-   entry points start it: `worker.py`, `cover.py` and `apply.py` - the last two run
-   at `minReplicas: 1`, so they always idle and would otherwise sit at `0/1` forever.
-8. **`helm uninstall` can leave KEDA CRDs behind** - delete them before re-installing.
-9. **One Gemini model = 20 requests/day on the free tier.** A single CV can consume a
-   whole model's budget (3 revisions + vision checks per page), so the
-   `PREFERRED_MODELS` ladder (each model has its own quota) is the real fallback, and
-   a long `adapt_text`/`vision_check` node is usually quota backoff, not a hang.
-10. **The `cv-files` helper owns `/data/input` and `/data/output` as `10001:10001`**
+7. **Items the root `AGENTS.md` already carries are not repeated here**: the idle
+   heartbeat and the `0/1` readiness probe (its trap 20), the KEDA CRDs `helm uninstall`
+   leaves behind (trap 14) and the free tier's 20-requests/day model quota
+   (`docs/RUNBOOK.md`, `python scripts/check_models.py --strict`).
+
+
+8. **The `cv-files` helper owns `/data/input` and `/data/output` as `10001:10001`**
     (`fileManager.owner`). The worker runs unprivileged (`runAsUser: 10001`), so
     root-owned directories made the first task die at `persist` with
     `[Errno 13] Permission denied: '/data/output/<name>.pdf'`.
-11. **The `helm test` pod needs the same broker env as the Deployment**
+9. **The `helm test` pod needs the same broker env as the Deployment**
     (`RABBITMQ_HOST/PORT/VHOST` + the credentials from the broker Secret): those are
     injected in the Deployment only, so the probe used to compose `guest@localhost:5672`
     and always failed.
-
----
-
-29. **The extension fills application forms, and it never submits them.** The second half of
-    `apps/extension/` (`src/formfill.js`, `src/form/`) puts the operator's *Populate* click through one
-    round trip: the page annotates every fillable control inside a **picked** form root with a
-    deterministic `data-cvt-id`, the board queues that snapshot on `applications.draft`
-    (`apply.py`, its own ScaledObject), and the plan comes back keyed by those ids. Two rules are
-    the point of the design. First, **the generated documents never travel**: the model is asked
-    *which element* the cover letter and the tailored PDF belong in (`cover_letter` /
-    `resume_file`, always with an empty value) and the extension inserts both itself, from
-    `GET /api/cover/<job_id>` and `GET /api/artifacts/<job_id>`. Second, **a missing fact is
-    skipped, never invented**: the prompt may use the vacancy, the CV digest and the candidate
-    facts (`application_profile`, one jsonb row per operator, because the board edits it on the
-    host while the worker reads it in the cluster), and everything else comes back as
-    `skip` + a reason for the review panel. The snapshot's hash is the cache key, so re-filling the
-    same rendered form costs no Gemini call while a changed form re-drafts; the extension never
-    clicks submit, a consent checkbox or a site preference control, and never touches a
-    `hidden`/`password`/disabled field. **Which card a page belongs to is resolved twice, and
-    never guessed**: the page's own vacancy id first (`GET /api/vacancies/status`, the lookup the
-    injected buttons use), and when that finds nothing, the page URL against the cards' own
-    application URLs (`GET /api/vacancies/link`, invariant 28's `apply_url`) - the only way to
-    reach a card scraped on Djinni/DOU whose Apply button opened the employer's form. Neither
-    match stops the flow with "this page is not linked to a card yet" instead of filling a form
-    from the wrong vacancy.
-
-30. **`personal_projects` is read-only context.** The projects block - the document's own
-    **PET PROJECTS** heading, the JSON key keeps the model's name - is rendered into the CV text
-    (`utils.cv_text.project_lines`) so the model can draw on it: a project stack is *proof*
-    of a technology, and `apps/worker/agent/verification.py` admits those terms. It may inform the SUMMARY
-    and RELEVANT SKILLS **only**: `drop_read_only_replacements()` discards any replacement whose
-    target is one of its lines, because the title/year row carries the entry layout and the
-    `Website:`/`Repo:`/`YT Video` lines carry the URLs. Its `title`, `year` and `stack` are stored
-    verbatim (one field per DOCX paragraph) because invariant 5 is a per-line substring test.
-
-    The master CV was refactored on 2026-10-06 into the shape this invariant describes: two
-    top-level tables (a profile table and a two-column roles/projects table), where every entry is
-    a `content | meta` row pair - role + context on the left, period + employer on the right - followed by
-    a merged body row (`Key Highlights:` / `Responsibilities:` / `Tech Stack:`). The earlier
-    layout kept the whole page in one table-in-a-table and right-aligned the project years with
-    tab runs; there are no tab runs left in the document.
-
-31. **One candidate-facts document grounds every prompt.** `application_profile` (one jsonb row per
-    operator; `apps/worker/utils/candidate.py`, mirrored by `apps/backoffice/src/lib/candidate.ts`) is the half of
-    the candidate that a CV does not carry. The CV tailoring prompt, the cover letter and the form
-    prompt all receive the same rendered digest, and `apps/worker/agent/verification.py` accepts it as an
-    admissible source (`ground_truth=`) so a fact-backed technology or number is not dropped as a
-    fabrication. It is **evidence, never document text**: no prompt may write contacts, salary,
-    availability, work format, location or job-search status into the CV or the letter. Facts cap at
-    `MAX_VALUE_CHARS`, standing answers at `MAX_ANSWER_CHARS` (a project deep-dive does not fit in a
-    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` still
-    merges `standing_answers` so a partial save cannot wipe the question/answer set. The row that
-    grounds a card is its **owner's** (invariant 25), and the extension no longer edits facts at
-    all: the one maintenance surface is this row (`/sources` renders it, `seed_profile.py` loads it).
-
-32. **The deliverable can be replaced by hand, and the PDF follows.** The operator downloads the
-    tailored DOCX, verifies it, edits what the model could not, and uploads it back through the
-    card modal (`POST /api/board/docx/<job_id>`, the *Update docx* button - offered only for a card
-    that has a `docx_path`, refused with 409 otherwise). Its own queue (`resumes.rerender`, its own
-    worker `rerender.py`, its own DLX/DLQ/ScaledObject and the same four-declarer agreement) renders
-    the upload with the image's LibreOffice and repoints `resumes.docx_path`/`pdf_url` **in place**,
-    so the board's existing artifact links are the new pair with no new concept. The bytes travel in
-    Postgres (`resume_docx_update.content`): the POC board runs outside the cluster and cannot write
-    the `cv-artifacts` volume, which is the same reason it *reads* artifacts through the mirror. One
-    row per vacancy is the audit trail (`queued` -> `running` -> `completed`/`failed`), the claim
-    refuses while a render is `running` (two clicks cannot replace the bytes a conversion is
-    reading), `MAX_DOCX_UPLOAD_BYTES` is enforced on both ends, and a card that never went through
-    tailoring is refused by the route *and* dead-lettered by the worker.
-
-33. **The job description is a target, never evidence.** Nothing a vacancy asks for authorises a
-    claim about the candidate: the evidence is the master CV text and the candidate facts
-    (invariants 7, 31). The tailoring answer is checked by
-    `apps/worker/agent/verification.py::invented_technologies` against those two sources only - the JD is passed
-    in for diagnostics ("the vacancy asks for it, which is a reason to leave it out"), never as
-    evidence - and detection runs on a curated vocabulary *plus* the shape of a name (an internal
-    capital like `FastAPI`/`FastMCP`/`PyTorch`, or a digit like `GPT-4`/`n8n`), because no list can
-    contain tomorrow's tool. Three layers enforce it: the prompt states the rule (tailoring rule 12),
-    `self_heal_replacements` hands a violating answer back with the violations spelled out up to
-    `MAX_FABRICATION_RETRIES` (3) times and keeps the best draft it saw, and whatever is still
-    offending is *dropped* - the CV keeps its own wording, so nothing unbacked reaches the file. The
-    guarantee covers the file too: the `verify_document` node (`apps/worker/agent/document_gate.py`) reads the
-    produced DOCX back and **fails the task** rather than upload a CV whose text claims something no
-    evidence backs. It runs **before the visual check** - straight after `adapt_text`, ahead of
-    `render`/`vision_check` - so a lying document costs nothing to reject and never occupies the
-    renderer or the vision model, and each pass of the vision retry loop re-verifies because the
-    loop comes back through `adapt_text`. 2026-10-01 is why all of it exists:
-    `FastAPI` and `FastMCP` shipped in a tailored CV for `851224` because the job description was one
-    of the admissible sources and neither token was in the pattern the check searched for.
-
-## 8. When code and prose disagree
-
-The **code wins**, and the disagreement belongs in section 5 of this file in the
-same change. Documentation that is allowed to drift silently is worse than no
-documentation.
-

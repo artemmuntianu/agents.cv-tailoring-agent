@@ -39,8 +39,8 @@ add it there too.**
 | `storage.py` | Local artifact IO + per-task materialisation | `get_storage`, `TaskContext`, `LocalStorage`, `output_key_for` |
 | `model_state.py` | Model-availability ledger + fallback ladder | `init_model_state`, `advance_after_failure`, `next_available_model`, `preferred_available` |
 | `retry.py` | Gemini backoff + quota handling | `retry_with_exponential_backoff`, `RetryLater`, `wait_until_midnight_utc` |
-| `cv_text.py` | `cv_data.json` as text: loading (never cached), the string normalisers every matcher shares, and the single-line-per-paragraph render - the read-only projects block included | `load_cv_data`, `cv_data_to_text`, `extract_doc_text`, `project_lines`, `normalize_text`, `strip_leading_bullet`, `split_lines` |
-| `cv_replacements.py` | What a proposed replacement must be (ONE clean line) and what it must never touch (the read-only projects block) | `normalize_replacements`, `read_only_lines`, `drop_read_only_replacements` |
+| `cv_text.py` | `cv_data.json` as text: loading (never cached), the string normalisers every matcher shares, and the single-line-per-paragraph render - the read-only experience and projects blocks included | `load_cv_data`, `cv_data_to_text`, `extract_doc_text`, `experience_lines`, `project_lines`, `normalize_text`, `strip_leading_bullet`, `split_lines` |
+| `cv_replacements.py` | What a proposed replacement must be (ONE clean line) and what it must never touch (the read-only PROFESSIONAL EXPERIENCE and PET PROJECTS blocks - only the title, the summary and the skills are targeted) | `normalize_replacements`, `read_only_lines`, `drop_read_only_replacements` |
 | `docx_mutator.py` | The mechanical DOCX AST surgery: walk (nested tables included), check the model against the document, rewrite one line | `apply_text_replacements`, `validate_cv_data_against_docx`, `iter_all_paragraphs` |
 | `renderer.py` | LibreOffice -> PDF -> PNG | `convert_docx_to_pdf`, `convert_pdf_to_images`, `render_tools_status`, `assert_render_tools_available` |
 
@@ -76,7 +76,11 @@ add it there too.**
   `description`, `highlights`, `stack`, `links`) - the refactored document has no tab runs.
 - **One experience entry is four paragraphs, not one.** The master CV lays a role out as
   `role | context` beside `period | employer`, so `CvExperience` carries four single-line fields
-  (`role`, `company_info`, `context`, `dates`) and all four are replacement targets.
+  (`role`, `company_info`, `context`, `dates`). The whole block is read-only context too
+  (`utils.cv_text.experience_lines` -> `drop_read_only_replacements()`): only the header title, the
+  SUMMARY and the RELEVANT SKILLS are rewritten, so those four fields and every highlight survive
+  the run verbatim. `docx_mutator` still substring-matches a target, so the guard drops a fragment
+  of an experience line (>= 20 chars) as well as the whole line.
 - **Renderer hardening**: one LibreOffice user profile per job
   (`-env:UserInstallation=...`), a hard timeout (`CONVERSION_TIMEOUT_SECONDS = 240`),
   and isolated output dirs, so two conversions on one node cannot fight over the

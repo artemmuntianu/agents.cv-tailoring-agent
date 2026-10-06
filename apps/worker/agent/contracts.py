@@ -52,9 +52,11 @@ class CvExperience(BaseModel):
 
     The refactored master CV lays a role out as a two-cell row - the role and its context in the
     left cell, the period and the employer in the right one - so those are four separate DOCX
-    paragraphs and therefore four separate single-line fields. Each one is a replacement target,
-    and `utils.docx_mutator.validate_cv_data_against_docx()` is a verbatim per-line substring
-    test, so a value that is not a line of the document fails the task.
+    paragraphs and therefore four separate single-line fields. The whole block is **read-only
+    context** (only the title, the summary and the skills are tailored; see
+    `utils.cv_replacements.drop_read_only_replacements`), and
+    `utils.docx_mutator.validate_cv_data_against_docx()` is a verbatim per-line substring test, so a
+    value that is not a line of the document fails the task.
     """
 
     model_config = ConfigDict(extra="allow")
