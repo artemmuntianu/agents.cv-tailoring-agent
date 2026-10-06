@@ -4,9 +4,10 @@ Nothing here decides *whether* a replacement is allowed. That is `utils.cv_repla
 clean line, never a read-only projects line) plus `validate_cv_data_against_docx()` below, which
 proves the model describes the document it is about to be applied to.
 
-Nested tables are the trap: the master CV keeps its entire first page inside a table in a table,
-so `iter_all_paragraphs()` recurses into cells and `python-docx`'s own `document.paragraphs` is
-never enough on its own.
+Tables are the trap: the master CV is built almost entirely out of them - a profile table, and a
+two-column table that holds every role and project as a `content | meta` row pair - so
+`iter_all_paragraphs()` recurses into cells (nested tables included) and `python-docx`'s own
+`document.paragraphs` is never enough on its own (it saw a single paragraph of the whole CV).
 """
 
 import os

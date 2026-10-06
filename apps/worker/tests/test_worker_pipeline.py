@@ -119,7 +119,7 @@ def test_master_cv_drift_fails_the_task_and_requests_a_retry():
 
 
 def test_projects_are_read_only_and_the_facts_reach_the_prompt():
-    """The master CV gained a PERSONAL PROJECTS section and the operator a facts row.
+    """The master CV gained a PET PROJECTS section and the operator a facts row.
 
     Both are now inputs to the tailoring prompt: the facts as ground-truth evidence, the
     projects as read-only context - a replacement that targets a project line is dropped, so
@@ -144,7 +144,7 @@ def test_projects_are_read_only_and_the_facts_reach_the_prompt():
 
             assert result.outcome == Outcome.ACK
             assert "STANDING ANSWER - Redis and RabbitMQ experience" in prompts[0]
-            assert "PERSONAL PROJECTS:" in prompts[0]
+            assert "PET PROJECTS:" in prompts[0]
 
             paragraphs = [
                 paragraph.text

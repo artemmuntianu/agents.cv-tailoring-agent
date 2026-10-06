@@ -105,7 +105,7 @@ def test_the_digest_leaves_the_projects_out():
     """The projects block is tailoring context (SUMMARY/SKILLS), not letter material."""
     digest = cover_module.cv_digest(SAMPLE_CV_DATA)
     assert SAMPLE_CV_DATA["personal_projects"][0]["heading"] not in digest
-    assert "PERSONAL PROJECTS" not in digest
+    assert "PET PROJECTS" not in digest
 
 
 def test_the_prompt_carries_the_candidate_facts():

@@ -15,11 +15,26 @@ def test_cv_data_to_text_contains_every_section():
     assert "Languages" in text
     assert "• Led the migration of 50 desktop screens to a web platform." in text
     # The projects block is rendered too (read-only context for SUMMARY and SKILLS).
-    assert "PERSONAL PROJECTS:" in text
+    assert "PET PROJECTS:" in text
     assert SAMPLE_CV_DATA["personal_projects"][0]["heading"] in text
     assert "• Shipped a queue-backed ingestion pipeline using RabbitMQ." in text
     assert "Repo: https://example.invalid/analytics" in text
-    assert "Stack: Python, RabbitMQ, Kubernetes, Postgres." in text
+    # The labels and the body order are the document's own: bullets, then the stack, then the links.
+    assert "Key Highlights:" in text
+    assert "Tech Stack:" in text
+    project = SAMPLE_CV_DATA["personal_projects"][0]
+    assert f"\n{project['year']}\n" in text
+    assert f"\n{project['stack']}\n" in text
+
+
+def test_cv_data_to_text_renders_four_lines_per_experience_entry():
+    """The document splits a role into role + context | period + employer: four targets, not one."""
+    text = cv_text.cv_data_to_text(SAMPLE_CV_DATA)
+    experience = SAMPLE_CV_DATA["professional_experience"][0]
+    for key in ("role", "company_info", "context", "dates"):
+        assert f"\n{experience[key]}\n" in text
+    # The old composite "company | context | period" line is gone for good.
+    assert experience["company_info"] + " | " not in text
 
 
 def test_extract_doc_text_accepts_cv_data_and_legacy_path():

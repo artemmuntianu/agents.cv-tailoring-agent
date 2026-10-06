@@ -6,7 +6,7 @@ later task stale data, which is why `cv_data` is an explicit argument everywhere
 prompt receives - and every replacement target is matched against - while the normalisers below
 are the comparison form shared with `utils.docx_mutator` and `utils.cv_replacements`.
 
-The PERSONAL PROJECTS block is part of that dump: the model has to see it to draw on it, and
+The PET PROJECTS block is part of that dump: the model has to see it to draw on it, and
 `utils.cv_replacements.drop_read_only_replacements()` is what keeps it out of the replacement set.
 """
 
@@ -70,19 +70,23 @@ def split_lines(text):
 def project_lines(project):
     """One project as the single-line-per-paragraph text the master DOCX carries.
 
-    The order mirrors the document: heading (verbatim - it holds the right-aligned tab run and
-    the year), description, the `Highlights:` label, the bullets, the link lines, the stack.
+    The labels are the document's own (`Key Highlights:`, `Tech Stack:`) and the body order is
+    the document's (bullets, then the stack, then the link lines). The title and the year live in
+    two side-by-side cells of one row, so they are emitted as two lines.
     """
     lines = [project["heading"]]
+    if project.get("year"):
+        lines.append(project["year"])
     if project.get("description"):
         lines.append(project["description"])
     highlights = project.get("highlights") or []
     if highlights:
-        lines.append("Highlights:")
+        lines.append("Key Highlights:")
         lines.extend(f"• {highlight}" for highlight in highlights)
-    lines.extend(project.get("links") or [])
     if project.get("stack"):
-        lines.append(f"Stack: {project['stack']}")
+        lines.append("Tech Stack:")
+        lines.append(project["stack"])
+    lines.extend(project.get("links") or [])
     return lines
 
 
@@ -90,9 +94,14 @@ def cv_data_to_text(cv_data):
     """Render the structured CV model as the single-line-per-paragraph text the
     tailoring prompt and the replacement matcher both rely on.
 
-    The PERSONAL PROJECTS block is rendered too - the model has to see it to draw on it - but
-    it is *read-only context*: `drop_read_only_replacements()` is what keeps a replacement from
-    targeting its lines.
+    Each experience entry is emitted as its document paragraphs - role, employer, context, period
+    (that semantic order, not the cells' left/right order: the document puts role + context in one
+    cell and period + employer in the other) - followed by its bullets, so anything the model
+    copies back is a line the DOCX actually carries and a replacement can match.
+
+    The PET PROJECTS block (the JSON key keeps the model's name, `personal_projects`) is rendered
+    too - the model has to see it to draw on it - but it is *read-only context*:
+    `drop_read_only_replacements()` is what keeps a replacement from targeting its lines.
     """
     cv_data = as_plain_dict(cv_data)
     if not cv_data:
@@ -111,13 +120,16 @@ def cv_data_to_text(cv_data):
     lines.append("\nPROFESSIONAL EXPERIENCE:")
     for experience in cv_data["professional_experience"]:
         lines.append(f"\n{experience['role']}")
-        lines.append(f"{experience['company_info']}")
+        for key in ("company_info", "context", "dates"):
+            value = experience.get(key)
+            if value:
+                lines.append(str(value))
         for highlight in experience["highlights"]:
             lines.append(f"• {highlight}")
 
     projects = cv_data.get("personal_projects") or []
     if projects:
-        lines.append("\nPERSONAL PROJECTS:")
+        lines.append("\nPET PROJECTS:")
         for project in projects:
             lines.extend(project_lines(project))
 

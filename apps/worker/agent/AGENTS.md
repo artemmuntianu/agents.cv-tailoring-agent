@@ -81,7 +81,7 @@ The adaptation prompt is part of the product, not a comment - it lives in
    metrics; never change a real figure.
 5. **Keep count and order** of experience entries and bullets; keep replacements
    roughly the same length as the original.
-6. **PERSONAL PROJECTS is read-only context.** The model sees the block and may back
+6. **PET PROJECTS is read-only context.** The model sees the block and may back
    a SUMMARY or SKILLS claim with it, but it must never return one of its lines as
    `original_text`: `drop_read_only_replacements()` enforces exactly that, so the
    prompt rule and the code state the same thing.

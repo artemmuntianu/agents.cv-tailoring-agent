@@ -71,8 +71,12 @@ add it there too.**
   **one-directional** - a section that exists only in the DOCX stays invisible until `cv_data.json`
   carries it - and it skips label lines (those ending in `:`).
 - **`personal_projects` is context, not copy**: rendered into the CV text so the model can draw on
-  it, and protected by `drop_read_only_replacements()` so no replacement can rewrite it. The
-  `heading` is verbatim (tabs included) because the sync test is tab-preserving.
+  it, and protected by `drop_read_only_replacements()` so no replacement can rewrite it. Every
+  line of a project is stored verbatim, one field per DOCX paragraph (`heading`, `year`,
+  `description`, `highlights`, `stack`, `links`) - the refactored document has no tab runs.
+- **One experience entry is four paragraphs, not one.** The master CV lays a role out as
+  `role | context` beside `period | employer`, so `CvExperience` carries four single-line fields
+  (`role`, `company_info`, `context`, `dates`) and all four are replacement targets.
 - **Renderer hardening**: one LibreOffice user profile per job
   (`-env:UserInstallation=...`), a hard timeout (`CONVERSION_TIMEOUT_SECONDS = 240`),
   and isolated output dirs, so two conversions on one node cannot fight over the

@@ -120,8 +120,12 @@ export function cvModelSections(model: Record<string, unknown> | null): CvSectio
   if (skillLines.length) sections.push({ title: 'Relevant skills', lines: skillLines });
 
   const experience = (model.professional_experience ?? []) as Record<string, unknown>[];
+  // One entry is four separate paragraphs in the document (role | context / period | employer),
+  // so the page shows all four rather than inventing a single composite line.
   const experienceLines = experience.flatMap((entry) => [
     `${entry.role ?? ''} - ${entry.company_info ?? ''}`.replace(/ - $/, ''),
+    ...(entry.context ? [String(entry.context)] : []),
+    ...(entry.dates ? [String(entry.dates)] : []),
     ...((entry.highlights ?? []) as string[]).map((highlight) => `• ${highlight}`),
   ]);
   if (experienceLines.length) {
@@ -131,10 +135,11 @@ export function cvModelSections(model: Record<string, unknown> | null): CvSectio
   const projects = (model.personal_projects ?? []) as Record<string, unknown>[];
   const projectLines = projects.flatMap((entry) => [
     String(entry.heading ?? 'Project'),
+    ...(entry.year ? [String(entry.year)] : []),
     ...(entry.description ? [String(entry.description)] : []),
     ...((entry.highlights ?? []) as string[]).map((highlight) => `• ${highlight}`),
+    ...(entry.stack ? [`Tech Stack: ${entry.stack}`] : []),
     ...((entry.links ?? []) as string[]),
-    ...(entry.stack ? [`Stack: ${entry.stack}`] : []),
   ]);
   if (projectLines.length) {
     sections.push({ title: 'Personal projects (read-only context)', lines: projectLines });

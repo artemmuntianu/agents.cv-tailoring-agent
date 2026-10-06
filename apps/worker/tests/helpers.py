@@ -31,8 +31,12 @@ SAMPLE_CV_DATA = {
     },
     "professional_experience": [
         {
+            # The document lays an entry out as role + context | period + employer - four separate
+            # single-line paragraphs - so the fixture mirrors that, one field per line.
             "role": "Senior Software Engineer",
-            "company_info": "Acme Corp | 2018 - 2024",
+            "company_info": "Acme Corp",
+            "context": "Payments platform",
+            "dates": "2018 - 2024",
             "highlights": [
                 "Led the migration of 50 desktop screens to a web platform.",
                 "Cut report generation time by 80%.",
@@ -43,7 +47,8 @@ SAMPLE_CV_DATA = {
     # replacement may target these lines (`utils.cv_replacements.drop_read_only_replacements`).
     "personal_projects": [
         {
-            "heading": "1) Personal Analytics Tool\t\t\t\t[2026]",
+            "heading": "Personal Analytics Tool - self-hosted product analytics.",
+            "year": "2026",
             "description": "Built a self-hosted analytics tool for small teams.",
             "highlights": [
                 "Shipped a queue-backed ingestion pipeline using RabbitMQ.",

@@ -72,7 +72,7 @@ def _as_dict(cv_data) -> dict:
 def cv_digest(cv_data) -> str:
     """The CV facts the letter may use, in the order the CV itself states them.
 
-    PERSONAL PROJECTS is deliberately left out: it is tailoring context (see
+    PET PROJECTS is deliberately left out: it is tailoring context (see
     `utils.cv_replacements.drop_read_only_replacements`), not letter material.
     """
     cv = _as_dict(cv_data)
@@ -94,7 +94,14 @@ def cv_digest(cv_data) -> str:
     for experience in cv.get("professional_experience") or []:
         role = experience.get("role") or ""
         company = experience.get("company_info") or ""
-        lines.append(f"EXPERIENCE: {role} - {company}".rstrip(" -"))
+        # The document splits one entry into four paragraphs; the letter's digest folds the
+        # context and the period back onto the heading line, so a 160-word letter can place the
+        # role in time without spending a line of its own on it.
+        period = " ".join(
+            part for part in (experience.get("context"), experience.get("dates")) if part
+        )
+        heading = f"EXPERIENCE: {role} - {company}".rstrip(" -")
+        lines.append(f"{heading} ({period})" if period else heading)
         # Four highlights is plenty for a 160-word letter; more only invites padding.
         for highlight in (experience.get("highlights") or [])[:4]:
             lines.append(f"  - {highlight}")

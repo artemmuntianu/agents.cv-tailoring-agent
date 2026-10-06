@@ -16,8 +16,18 @@ describe('the CV model as the page shows it', () => {
       header: { name: 'Jane Doe', title: 'Senior Engineer' },
       summary: 'Twenty years of it.',
       skills: { Languages: 'Python', Empty: '   ' },
-      professional_experience: [{ role: 'Lead', company_info: 'Acme', highlights: ['Did things'] }],
-      personal_projects: [{ heading: 'Project A', stack: 'Python', links: ['Repo: x'] }],
+      professional_experience: [
+        {
+          role: 'Lead',
+          company_info: 'Acme',
+          context: 'Payments',
+          dates: '2020 - 2024',
+          highlights: ['Did things'],
+        },
+      ],
+      personal_projects: [
+        { heading: 'Project A', year: '2026', stack: 'Python', links: ['Repo: x'] },
+      ],
     });
     expect(sections.map((section) => section.title)).toEqual([
       'Header',
@@ -28,8 +38,13 @@ describe('the CV model as the page shows it', () => {
     ]);
     expect(sections[0].lines).toEqual(['NAME: Jane Doe', 'TITLE: Senior Engineer']);
     expect(sections[2].lines).toEqual(['Languages: Python']);
-    expect(sections[3].lines).toEqual(['Lead - Acme', '• Did things']);
-    expect(sections[4].lines).toEqual(['Project A', 'Repo: x', 'Stack: Python']);
+    expect(sections[3].lines).toEqual([
+      'Lead - Acme',
+      'Payments',
+      '2020 - 2024',
+      '• Did things',
+    ]);
+    expect(sections[4].lines).toEqual(['Project A', '2026', 'Tech Stack: Python', 'Repo: x']);
   });
 
   it('never invents a section for a model that is not there', () => {

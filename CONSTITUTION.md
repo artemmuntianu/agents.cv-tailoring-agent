@@ -135,7 +135,7 @@ automation         .github/workflows/
    fails rather than mutating the wrong paragraph. Two properties are easy to
    forget: it is **one-directional** (it proves the JSON mirrors the DOCX, not that
    the DOCX is fully modelled - adding a section to `cv.docx` alone stays green and
-   silently never reaches the prompt, which is how the PERSONAL PROJECTS section
+   silently never reaches the prompt, which is how the PET PROJECTS section
    went unnoticed), and a line ending in `:` is a label, not data, so it is skipped.
 6. **Replacements are single-line and marker-free.** `normalize_replacements()`
    splits concatenated label+value pairs, drops misaligned lines and no-ops, and
@@ -636,13 +636,21 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     match stops the flow with "this page is not linked to a card yet" instead of filling a form
     from the wrong vacancy.
 
-30. **`personal_projects` is read-only context.** The projects block is rendered into the CV text
-    (`utils.cv_text.project_lines`) so the model can draw on it - a project stack is *proof*
-    of a technology, and `apps/worker/agent/verification.py` admits those terms - but it may inform the SUMMARY
+30. **`personal_projects` is read-only context.** The projects block - the document's own
+    **PET PROJECTS** heading, the JSON key keeps the model's name - is rendered into the CV text
+    (`utils.cv_text.project_lines`) so the model can draw on it: a project stack is *proof*
+    of a technology, and `apps/worker/agent/verification.py` admits those terms. It may inform the SUMMARY
     and RELEVANT SKILLS **only**: `drop_read_only_replacements()` discards any replacement whose
-    target is one of its lines, because the headings carry the right-aligned tab run and the
-    `Website:`/`Repo:`/`YT Video` lines carry the URLs. Its `heading` is stored verbatim, tabs
-    included, because invariant 5 is a tab-preserving substring test.
+    target is one of its lines, because the title/year row carries the entry layout and the
+    `Website:`/`Repo:`/`YT Video` lines carry the URLs. Its `title`, `year` and `stack` are stored
+    verbatim (one field per DOCX paragraph) because invariant 5 is a per-line substring test.
+
+    The master CV was refactored on 2026-10-06 into the shape this invariant describes: two
+    top-level tables (a profile table and a two-column roles/projects table), where every entry is
+    a `content | meta` row pair - role + context on the left, period + employer on the right - followed by
+    a merged body row (`Key Highlights:` / `Responsibilities:` / `Tech Stack:`). The earlier
+    layout kept the whole page in one table-in-a-table and right-aligned the project years with
+    tab runs; there are no tab runs left in the document.
 
 31. **One candidate-facts document grounds every prompt.** `application_profile` (one jsonb row per
     operator; `apps/worker/utils/candidate.py`, mirrored by `apps/backoffice/src/lib/candidate.ts`) is the half of

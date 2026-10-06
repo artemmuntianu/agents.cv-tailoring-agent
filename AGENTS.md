@@ -208,7 +208,7 @@ not add a dependency just to answer a reference/dead-code question.
     whitespace mismatch fails the task by design - regenerate `cv_data.json` when
     the master CV changes. The check is **one-directional** (JSON ⊆ DOCX): adding a
     section to `cv.docx` alone stays green and silently never reaches the prompt,
-    which is exactly how the PERSONAL PROJECTS section went unnoticed on 2026-09-29.
+    which is exactly how the PET PROJECTS section went unnoticed on 2026-09-29.
 12. **`.env` is gitignored and never staged**, and may still contain now-unused
     Supabase keys (see `CONSTITUTION.md` D9).
 13. **PowerShell 5.1 mangles native arguments and array literals.** `--flag key=(expr)`

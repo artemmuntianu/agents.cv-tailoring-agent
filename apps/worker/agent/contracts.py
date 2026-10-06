@@ -48,25 +48,37 @@ class CvHeader(BaseModel):
 
 
 class CvExperience(BaseModel):
+    """One role of the master CV (`professional_experience`).
+
+    The refactored master CV lays a role out as a two-cell row - the role and its context in the
+    left cell, the period and the employer in the right one - so those are four separate DOCX
+    paragraphs and therefore four separate single-line fields. Each one is a replacement target,
+    and `utils.docx_mutator.validate_cv_data_against_docx()` is a verbatim per-line substring
+    test, so a value that is not a line of the document fails the task.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     role: str
     company_info: str = ""
+    context: str = ""
+    dates: str = ""
     highlights: list[str] = Field(default_factory=list)
 
 
 class CvProject(BaseModel):
-    """One personal project of the master CV (`personal_projects`).
+    """One project of the master CV (`personal_projects`; the document's *PET PROJECTS* block).
 
-    `heading` is stored verbatim - it carries the ordinal, the title, the year and the tab run
-    that right-aligns it - because the sync rule is a verbatim (tab-preserving) substring test
-    against the DOCX paragraph. The whole block is context for the SUMMARY/SKILLS rewrites; see
+    `heading`, `year` and `stack` are stored verbatim, one field per DOCX paragraph, because the
+    sync rule is a verbatim per-line substring test against the document (invariant 5). The whole
+    block is context for the SUMMARY/SKILLS rewrites; see
     `utils.cv_replacements.drop_read_only_replacements`.
     """
 
     model_config = ConfigDict(extra="allow")
 
     heading: str
+    year: str = ""
     description: str = ""
     highlights: list[str] = Field(default_factory=list)
     links: list[str] = Field(default_factory=list)
