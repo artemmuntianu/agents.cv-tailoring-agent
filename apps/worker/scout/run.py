@@ -238,7 +238,7 @@ def _run(args, ledger) -> int:
         vacancies = vacancies[: config.SCOUT_MAX_PER_RUN]
 
     try:
-        fresh = store.new_vacancies(vacancies, config.CV_VERSION)
+        fresh = store.new_vacancies(vacancies)
     except Exception as exc:  # noqa: BLE001
         log.error("could not read the board", error=str(exc))
         ledger.fail(f"could not read the board: {exc}")

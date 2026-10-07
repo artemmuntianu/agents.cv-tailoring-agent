@@ -858,13 +858,13 @@ export async function restoreCard(
  *               the case that exposed this (2026-09-26).
  *
  * `archived_at` is part of the answer because a refused vacancy must never be queued again
- * (see `lib/ingest.ts`). When several rows match a board-scoped lookup, the most recently
- * touched one wins.
+ * (see `lib/ingest.ts`). When several rows match a board-scoped lookup, the one **on the board**
+ * wins and the most recently touched one after that - so a `v1` row an older intake left behind
+ * can never shadow the card the operator actually moved into a column.
  */
 export async function findExistingVacancies(
   userId: string | null,
   externalIds: string[],
-  cvVersion: string,
   options: { scope?: 'user' | 'board'; source?: string } = {},
 ): Promise<Map<string, ExistingVacancy>> {
   if (externalIds.length === 0) return new Map();
@@ -878,15 +878,20 @@ export async function findExistingVacancies(
     updated_at: Date | string;
     archived_at: Date | string | null;
   }>(
+    // `cv_version` is deliberately absent. It identifies a row, but neither intake has a version
+    // of its own (the extension publishes `v1`), so filtering on it made a card the board already
+    // held at `v2`/`v3` look new and created a `v1` twin - and that twin, being newer, was what
+    // the form filler resolved (live 2026-10-07: "no cover letter on the board yet", card 851999).
+    // A row that is *on the board* wins a tie, so an older intake's leftover can never shadow the
+    // card the operator can see.
     `select r.job_id, r.external_id, r.status, r.updated_at, b.archived_at
        from resumes r
        left join resume_board b on b.job_id = r.job_id
-      where r.cv_version = $2
-        and r.external_id = any($3::text[])
-        and r.source = $5
-        and ($4::boolean or coalesce(r.user_id, 'local') = coalesce($1, 'local'))
-      order by r.updated_at desc`,
-    [userId, cvVersion, externalIds, boardScope, source],
+      where r.external_id = any($2::text[])
+        and r.source = $4
+        and ($3::boolean or coalesce(r.user_id, 'local') = coalesce($1, 'local'))
+      order by (b.job_id is null), r.updated_at desc`,
+    [userId, externalIds, boardScope, source],
   );
 
   const found = new Map<string, ExistingVacancy>();

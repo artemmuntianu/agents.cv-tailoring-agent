@@ -51,7 +51,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
     known = await findExistingVacancies(
       session.sub,
       parsed.vacancies.map((vacancy) => vacancy.external_id),
-      version,
       // Board scope: what the operator can see is what must not be queued twice, no matter
       // which account created the row (the CLI/smoke-test rows carry no user id).
       { scope: 'board', source: parsed.source },

@@ -115,8 +115,9 @@ generate one on the card), the tailored PDF is not on the board's machine
 re-rendered since the snapshot (run Populate again: the new form gets a new hash and a fresh draft).
 
 **When Apply opens another site.** Many DOU/Djinni vacancies hand the application over to the
-employer's own ATS: the Apply button opens `job-boards.eu.greenhouse.io/<board>/jobs/<id>` in a new
-tab. That page has no vacancy id the board knows - the card is still `dou`/`351812` - so the
+employer's own ATS: the Apply button opens `job-boards.eu.greenhouse.io/<board>/jobs/<id>` - or a
+Teamtailor career page such as `careers.blackbird-lab.com/jobs/<id>-<slug>` - in a new tab. That page
+has no vacancy id the board knows - the card is still `dou`/`351812` - so the
 filler asks the board *which card this page is* and matches the URL against the cards' own
 **Application URL**. Paste the page's address into the card's **Details -> Application URL** in the
 board once (the tracking tail is dropped on save, so `?gh_src=…` never matters) and Populate works
@@ -140,7 +141,8 @@ into a card's Application URL and populate from that page (the card is found by 
 
 - `host_permissions` covers **both sides**: the gateway origin (`localhost:4321` /
   `127.0.0.1:4321` - change it in `manifest.json` if you move the gateway) and the vacancy sites
-  (`djinni.co`, `jobs.dou.ua`/`dou.ua`, the three `greenhouse.io` boards, and `*.indeed.com`), which
+  (`djinni.co`, `jobs.dou.ua`/`dou.ua`, the three `greenhouse.io` boards, `*.indeed.com`, and the
+  Teamtailor career host `careers.blackbird-lab.com`), which
   the per-card button needs in order to inject the scraper into the tab it was clicked in. Dropping
   either one shows up as a button that answers `Retry scrape`.
 - **Greenhouse is read one job at a time.** Its boards have no listing cards - the job page itself

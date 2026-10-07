@@ -300,8 +300,9 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   the ids the board knows appear, and `jobId` is what the extension's `Scraped` link points
   at (`/?card=<job_id>`, opened by `App.tsx`).
 - It is the *same* lookup the batch route uses for dedupe (invariant 17) - so the two can
-  never disagree - and it is deliberately **board-scoped**
-  (`findExistingVacancies(..., { scope: 'board' })`): the board renders every row whatever
+  never disagree - and it is deliberately **board-scoped** and **version-agnostic**
+  (`findExistingVacancies(..., { scope: 'board' })`; a row that is on the board beats an off-board
+  twin and the newest wins after that): the board renders every row whatever
   its `user_id`, so an account-scoped answer would offer to scrape a card that is already
   visible (rows created by the CLI carry `user_id = NULL`). The `user` scope (the default)
   stays the worker-shaped business key and is still what `findExistingVacancies` means when

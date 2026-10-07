@@ -4,9 +4,11 @@ Nothing is queued here: the operator's drag into Prepare publishes the tailoring
 (`CONSTITUTION.md` invariant 23), so a run costs no Gemini request no matter how many vacancies
 it finds. Two rules come from the store, and both are load-bearing:
 
-* the dedupe is **board-scoped** (`find_existing_ids`): any owner, any status, refused cards
-  included - because the board renders every row, so a card the operator can see must not be
-  created twice (invariant 17);
+* the dedupe is **board-scoped** (`find_existing_ids`): any owner, any status, **any master-CV
+  version**, refused cards included - because the board renders every row, so a card the operator
+  can see must not be created twice (invariant 17). The version is not part of the question: the
+  intake publishes `v1` whatever the board holds, so a card re-tailored against a newer master
+  used to look *new* and get a `v1` twin (live 2026-10-07);
 * the dedupe is also **per site**: the source slug comes from the feed's parser, and it is half of
   the business key, so DOU's and Djinni's rows never see each other's ids;
 * the row is created with `status = 'submitted'`, which is deliberately outside
@@ -22,7 +24,7 @@ from utils.logging_setup import get_logger
 log = get_logger(__name__)
 
 
-def new_vacancies(vacancies, cv_version, store=None) -> list[dict]:
+def new_vacancies(vacancies, store=None) -> list[dict]:
     """The subset of `vacancies` the board does not have yet, in feed order.
 
     The dedupe is per **site** (`find_existing_ids`), because the source is half of the business key
@@ -30,6 +32,11 @@ def new_vacancies(vacancies, cv_version, store=None) -> list[dict]:
     374708. That is why the ids are grouped and asked about one source at a time - and why the
     answer is filtered against the original list instead of concatenated, so the run keeps feed
     order.
+
+    The master-CV version is *not* part of the question, because this run has no version of its
+    own: it publishes `CV_VERSION` for whatever it creates, and asking "does the board have this
+    vacancy **at that version**?" made a card kept at a newer version look new (see
+    `utils.db.find_existing_ids`).
     """
     store = store or db_module.get_db()
     if not vacancies:
@@ -38,8 +45,7 @@ def new_vacancies(vacancies, cv_version, store=None) -> list[dict]:
     for vacancy in vacancies:
         ids_by_source.setdefault(vacancy["source"], []).append(vacancy["external_id"])
     known = {
-        source: store.find_existing_ids(source, ids, cv_version)
-        for source, ids in ids_by_source.items()
+        source: store.find_existing_ids(source, ids) for source, ids in ids_by_source.items()
     }
     fresh = [
         vacancy for vacancy in vacancies if vacancy["external_id"] not in known[vacancy["source"]]

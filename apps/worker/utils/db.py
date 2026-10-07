@@ -340,17 +340,15 @@ class LocalDb:
         self._save(data)
         return record
 
-    def find_existing_ids(self, source, external_ids, cv_version="v1"):
+    def find_existing_ids(self, source, external_ids):
         """Which of these vacancies are already on the board (see PostgresDb)."""
         wanted = set(external_ids)
         source = source or "djinni"
-        cv_version = cv_version or "v1"
         return {
             row.get("external_id")
             for row in self._load()["jobs"].values()
             if row.get("external_id") in wanted
             and (row.get("source") or "djinni") == source
-            and (row.get("cv_version") or "v1") == cv_version
         }
 
     def app_user_exists(self, user_id):
@@ -1412,13 +1410,21 @@ class PostgresDb:
             conn.commit()
         return dict(row) if row else None
 
-    def find_existing_ids(self, source, external_ids, cv_version="v1"):
-        """Which of these vacancies the board already has - **any** owner, any status.
+    def find_existing_ids(self, source, external_ids):
+        """Which of these vacancies the board already has - **any** owner, any status, any version.
 
         Board-scoped on purpose (`CONSTITUTION.md` invariant 17): the board renders every row
         whatever its `user_id`, so a lookup limited to one account would create a second card
         for a vacancy the operator can already see. The intake uses this to decide what is new;
         a refused card counts as known, so a re-run never reopens it.
+
+        The master-CV version is deliberately **not** part of this question. It identifies a row,
+        but neither intake has a version of its own (the scout and the extension both publish
+        `v1`), so filtering on it made a card the board already held at `v2`/`v3` look *new* and
+        created a `v1` twin for the same vacancy - live 2026-10-07: the scout's twins for
+        `353314`/`851999` shadowed the real cards, and the form filler resolved the coverless twin
+        ("no cover letter on the board yet"). Re-versioning is the operator tooling's job
+        (`scripts/retailor_stage.py`), never an intake's.
         """
         if not external_ids:
             return set()
@@ -1430,9 +1436,8 @@ class PostgresDb:
                     select external_id from resumes
                      where source = %s
                        and external_id = any(%s)
-                       and cv_version = %s
                     """,
-                    (source or "djinni", list(external_ids), cv_version or "v1"),
+                    (source or "djinni", list(external_ids)),
                 )
                 return {row["external_id"] for row in cur.fetchall()}
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CV tailoring vacancy scraper",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Scrape a vacancy card onto the board, and fill its application form from the board's tailored CV and cover letter.",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": [
@@ -12,6 +12,7 @@
     "https://job-boards.eu.greenhouse.io/*",
     "https://job-boards.greenhouse.io/*",
     "https://boards.greenhouse.io/*",
+    "https://careers.blackbird-lab.com/*",
     "https://*.indeed.com/*",
     "https://indeed.com/*",
     "http://localhost:4321/*",
@@ -30,7 +31,8 @@
         "https://dou.ua/*",
         "https://job-boards.eu.greenhouse.io/*",
         "https://job-boards.greenhouse.io/*",
-        "https://boards.greenhouse.io/*"
+        "https://boards.greenhouse.io/*",
+        "https://careers.blackbird-lab.com/*"
       ],
       "js": ["src/inject.js", "src/formfill.js"],
       "run_at": "document_idle"

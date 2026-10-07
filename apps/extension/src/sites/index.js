@@ -2,6 +2,7 @@ import { djinni } from './djinni.js';
 import { dou } from './dou.js';
 import { greenhouse } from './greenhouse.js';
 import { indeed } from './indeed.js';
+import { teamtailor } from './teamtailor.js';
 import { CARD_LIST } from './plans.js';
 
 export { CARD_LIST, JOB_PAGE, PANE } from './plans.js';
@@ -21,7 +22,7 @@ export { CARD_LIST, JOB_PAGE, PANE } from './plans.js';
  * duplicates), and two claiming one host would make routing depend on import order. Neither is
  * visible in review, so both fail loudly instead.
  */
-export const SITES = [djinni, dou, greenhouse, indeed];
+export const SITES = [djinni, dou, greenhouse, indeed, teamtailor];
 
 /**
  * The site an unlisted host is read as: the card-list strategy under the slug `other`.

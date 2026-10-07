@@ -60,7 +60,7 @@ is never reported as an empty result.
 | `html_text.py` | The escaped-HTML -> plain-text pass the parsers share - the double unescape and the `&nbsp;` normalisation live here once |
 | `feeds.py` | The only network code: fetch each configured URL, tolerate a broken one |
 | `policy.py` | What deserves a card at all: the feed's own date, the age cutoff (`SCOUT_MAX_AGE_DAYS`) and the counts of what it refused (`select`) - the operator's "no old vacancies" rule, in one place |
-| `store.py` | The board writes: per-site, board-scoped dedupe (`find_existing_ids`), then one `resumes` row per new vacancy with `status = 'submitted'` |
+| `store.py` | The board writes: per-site, board-scoped dedupe (`find_existing_ids` - any owner, any status, any master-CV version), then one `resumes` row per new vacancy with `status = 'submitted'` |
 | `telegram.py` | One plain-text message per new vacancy (`build_message` is pure, `send` is the call) |
 | `run.py` | Preflight, `collect` (host routing + the site stamp), `main` - the orchestration |
 | `__main__.py` | `python -m scout` |
@@ -242,7 +242,7 @@ file backend, and Telegram is never called. It pins what would break silently:
 4. routing (`collect` stamps the parser's slug; the same number from two sites stays two cards; a
    feed no parser owns is skipped);
 5. dedupe (`new_vacancies` returns nothing for a board that already has the vacancy, whatever its
-   status - and another site's board never hides this one's card);
+   status or master-CV version - and another site's board never hides this one's card);
 6. **the scout queues nothing** - both queues stay empty after a run;
 7. the run's ledger row (one per run, with the counters the Processes window shows, and none at
    all for a `--dry-run`).

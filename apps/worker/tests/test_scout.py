@@ -580,7 +580,7 @@ def test_the_intake_creates_cards_in_scraped_and_remembers_them():
     with tempfile.TemporaryDirectory() as tmp:
         with isolated_config(tmp):
             vacancies = dou_cards()
-            fresh = scout_store.new_vacancies(vacancies, "v1")
+            fresh = scout_store.new_vacancies(vacancies)
             assert len(fresh) == 2, "an empty board has nothing to dedupe against"
 
             created = scout_store.create_cards(fresh, "scout-user", "v1")
@@ -593,7 +593,7 @@ def test_the_intake_creates_cards_in_scraped_and_remembers_them():
             assert row["description_raw"].startswith("About the Role")
 
             # The next run of the same feeds creates nothing - the dedupe is the point.
-            assert scout_store.new_vacancies(dou_cards(), "v1") == []
+            assert scout_store.new_vacancies(dou_cards()) == []
 
 
 def test_a_handled_card_counts_as_known_too():
@@ -603,7 +603,25 @@ def test_a_handled_card_counts_as_known_too():
             db_module.get_db().update_job(created[0]["job_id"], status="failed")
             # Whatever the status (a failure, or a card the operator refused): re-running the
             # intake must not duplicate or reopen it.
-            assert scout_store.new_vacancies(dou_cards(), "v1") == []
+            assert scout_store.new_vacancies(dou_cards()) == []
+
+
+def test_a_card_kept_at_another_master_version_counts_as_known():
+    """A twin is a duplicate card: the version identifies a row, it does not make a vacancy new.
+
+    Live 2026-10-07 - the scout re-created `353314`/`851999` at `v1` while the board held them at
+    `v3`. The `v1` twins shadowed the real cards (the id lookup answers with the newest row), and
+    the form filler resolved a coverless card: *"no cover letter on the board yet"*.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            created = scout_store.create_cards(dou_cards(), "scout-user", "v1")
+            store = db_module.get_db()
+            for entry in created:
+                # The operator re-tailored the cards against a newer master CV.
+                store.update_job(entry["job_id"], cv_version="v3")
+
+            assert scout_store.new_vacancies(dou_cards()) == []
 
 
 def test_a_card_on_the_board_of_another_site_does_not_hide_this_one():
@@ -613,9 +631,9 @@ def test_a_card_on_the_board_of_another_site_does_not_hide_this_one():
             # The board already holds Djinni's 374708; DOU's 374708 is still a new card.
             djinni_card = FIXTURES["djinni"].replace("850592", "374708")
             vacancies = run.collect([(DJINNI_URL, djinni_card)]).vacancies
-            scout_store.create_cards(scout_store.new_vacancies(vacancies, "v1"), "scout-user", "v1")
+            scout_store.create_cards(scout_store.new_vacancies(vacancies), "scout-user", "v1")
 
-            fresh = scout_store.new_vacancies(dou_cards(), "v1")
+            fresh = scout_store.new_vacancies(dou_cards())
             assert [v["external_id"] for v in fresh] == ["374708", "361093"]
 
 

@@ -49,12 +49,14 @@ Three kinds exist (`src/sites/plans.js`); a new **shape** is a new reader in `ex
 | kind | the page | used by |
 |---|---|---|
 | `cards` | a listing whose cards *are* the vacancies | `djinni`, `dou`, and the fallback for an unlisted site (`other`) |
-| `job-page` | the whole vacancy is on the job page | `greenhouse` |
+| `job-page` | the whole vacancy is on the job page | `greenhouse`, and `teamtailor` (the filler only) |
 | `pane` | the cards carry a snippet and one pane holds the selected vacancy's text | `indeed` |
 
 Adding a site costs: the module (bind an existing strategy when the mark-up is one we already know, as
-`dou.js` does) + a manifest entry and host permission if it declares `buttons` + nothing else - two guards
-in `sites.test.ts` fail until the manifest matches the declaration and the board can name the slug. The
+`dou.js` does) + a manifest entry and host permission for *every* host it claims + nothing else - two guards
+in `sites.test.ts` fail until the manifest matches the declaration and the board can name the slug. A
+`buttons: 'none'` site needs that entry too, for the **form filler** rather than for a scraper: that is the
+whole wiring of a Greenhouse board and of a Teamtailor career page. The
 registry is the extension's copy of `apps/worker/scout/sources.py`: one module per site, routed by host,
 validated at load.
 
@@ -87,6 +89,27 @@ validated at load.
   (`source: "greenhouse"`, id = the numeric job id) for a page the operator queued by hand; a
   board-wide feed is a parser module in `apps/worker/scout/parsers/` plus its URL in `SCOUT_FEEDS`, not a
   scraper here.
+
+## Teamtailor career pages (the `job-page` strategy, filler only)
+
+An employer's own career site on Teamtailor (`careers.blackbird-lab.com` today) is the second half of
+the story Greenhouse's boards tell: the vacancy's Apply button leaves DOU, the card is still
+`dou`/`353314`, and the filler resolves the page by the cards' own **Application URL** - so the host
+must be granted or Populate answers *"no form filler on it - reload the page"* (the live failure that
+added this plugin, 2026-10-07).
+
+- **The form is an overlay the page fetches into itself** - `<div
+  data-controller="careersite--jobs--form-overlay"` with a
+  `data-…-job-application-url-value="…/applications/new"` - a turbo-frame/dialog in the *same*
+  document. So the operator's sequence is Apply, then **Pick the form** on the overlay, then Populate.
+  Nothing here crosses a document boundary: the page's two `<iframe>`s are its chat messenger.
+- **No cards, so no buttons and nothing to scrape.** `buttons: 'none'` leaves `src/inject.js` silent
+  (it finds no `div[id^="job-item-"]`), and `JOB_PAGE` is bound honestly rather than opportunistically:
+  the reader refuses a page whose marker or description it cannot find and answers *no vacancies*
+  (`mode: 'job-page'`) instead of a mangled card.
+- **Only the verified host is claimed.** Teamtailor also serves customers at
+  `<company>.teamtailor.com`, which nobody has injected into yet; a second host is one more `hosts`
+  entry plus one more manifest grant, and a claim nobody injects into only *looks* right.
 
 ## Indeed's job feed (a fourth page shape, and the only pane-driven one)
 
@@ -265,7 +288,7 @@ for `fetch` from a service worker without it).
 | `src/extract.js` | `extractVacancies(root, options)` - the **one page reader**, which is why it is a single self-contained function. Takes a strategy (`options.plan`) and interprets its `kind`; the result echoes it in `mode` (`cards` \| `job-page` \| `pane` \| `none`) |
 | `src/sites/index.js` | The **registry**: routes a URL to a plugin, answers by slug, and validates the set at load (a duplicated slug or host is refused) |
 | `src/sites/plans.js` | The three **strategies** - `CARD_LIST`, `JOB_PAGE`, `PANE` - as selector data, because a plan crosses into the page and a function cannot |
-| `src/sites/<site>.js` | One **plugin** per site: slug + hosts + content-script behaviour + the strategy it binds to (`djinni`, `dou`, `greenhouse`, `indeed`) |
+| `src/sites/<site>.js` | One **plugin** per site: slug + hosts + content-script behaviour + the strategy it binds to (`djinni`, `dou`, `greenhouse`, `indeed`, `teamtailor` - the last one for the filler alone) |
 | `src/inject.js` | The listing-page content script (classic): the per-card `Scrape`/`Scraped` buttons for the `cards` sites (Djinni/DOU, and Greenhouse's filler) |
 | `src/indeed.js` | The Indeed content script (classic, its own `content_scripts` entry): the same buttons, but a click first selects the card and waits for the pane - the only shape where the text is not in the card. Also answers the sweep's two messages (`indeedCards`, `indeedSelect`) |
 | `src/indeed/sweep.js` | The whole-feed walk behind the popup's **Scrape & queue this page** on Indeed: select each card, read its pane, publish one batch. Runs in the worker (the popup cannot hold a 30-second loop) and knows no selector |

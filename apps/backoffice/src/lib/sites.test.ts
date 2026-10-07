@@ -43,6 +43,10 @@ describe('the site registry', () => {
     expect(siteForUrl('https://djinni.co/jobs/123-x/')?.slug).toBe('djinni');
     expect(siteForUrl('https://jobs.dou.ua/vacancies/?remote')?.slug).toBe('dou');
     expect(siteForUrl('https://job-boards.eu.greenhouse.io/growe/jobs/1')?.slug).toBe('greenhouse');
+    // An employer's own ATS page, reached from a card's Application URL: same `job-page` shape.
+    expect(
+      siteForUrl('https://careers.blackbird-lab.com/jobs/7530541-senior-net-engineer/2e256c48')?.slug,
+    ).toBe('teamtailor');
     expect(siteForUrl('https://pt.indeed.com/')?.slug).toBe('indeed');
 
     // A host that merely *ends* like a claimed one is not its subdomain, and an unlisted host is not a
@@ -65,6 +69,7 @@ describe('the site registry', () => {
   it('finds a plugin by the slug a card was stored under', () => {
     expect(siteForSlug('indeed')?.plan).toBe(PANE);
     expect(siteForSlug('greenhouse')?.plan).toBe(JOB_PAGE);
+    expect(siteForSlug('teamtailor')?.plan).toBe(JOB_PAGE);
     expect(siteForSlug('  DOU ')?.plan).toBe(CARD_LIST);
     expect(siteForSlug('work-ua')).toBeNull();
   });
@@ -80,6 +85,13 @@ describe('the site registry', () => {
     expect(vacancyIdFromUrl('https://job-boards.eu.greenhouse.io/growe/jobs/4987494101')).toBe(
       '4987494101',
     );
+    // The shape an ATS page shares with the vendor's own hosting: `/jobs/<id>-<slug>`, with the
+    // page's opaque tail after it (`card 353314` is the live case, 2026-10-07).
+    expect(
+      vacancyIdFromUrl(
+        'https://careers.blackbird-lab.com/jobs/7530541-senior-net-engineer-for-toromont-cat/2e256c48-dd6e-4bf5-a5ad-356709384de1',
+      ),
+    ).toBe('7530541');
     expect(vacancyIdFromUrl('https://pt.indeed.com/viewjob?jk=510f8e399c212ca1')).toBe(
       '510f8e399c212ca1',
     );
@@ -98,6 +110,9 @@ describe('the site registry', () => {
     expect(boardKeyForUrl('https://job-boards.greenhouse.io/growe/jobs/4987494101')).toBe('greenhouse');
     expect(boardKeyForUrl('https://job-boards.eu.greenhouse.io/growe/jobs/1')).toBe('greenhouse');
     expect(boardKeyForUrl('https://boards.greenhouse.io/acme/jobs/2')).toBe('greenhouse');
+    // One host today, so its own key and its own form pick - a second Teamtailor host is one more
+    // entry here, and the pick then covers it (the reason `hosts` is a list, not a host).
+    expect(boardKeyForUrl('https://careers.blackbird-lab.com/jobs/7530541-x/abc')).toBe('teamtailor');
     expect(boardKeyForUrl('https://jobs.dou.ua/vacancies/375802/')).toBe('dou');
     expect(boardKeyForUrl('https://djinni.co/jobs/848944-senior-go/')).toBe('djinni');
 

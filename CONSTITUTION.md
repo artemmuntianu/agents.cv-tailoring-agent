@@ -170,8 +170,11 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     operator drags it to Prepare. `submitted` must stay out of `ACTIVE_STATUSES`, otherwise
     the claim would ack the message as a duplicate and the card would never run; being
     non-active makes `_claim_row` re-claim that exact row. The board's *move* path still never
-    writes `resumes.status`. **Its duplicate check is board-scoped, not account-scoped**
-    (`findExistingVacancies(..., { scope: 'board', source })`): the board renders every row
+    writes `resumes.status`. **Its duplicate check is board-scoped, not account-scoped, and
+    version-agnostic** (`findExistingVacancies(..., { scope: 'board', source })`, and the same rule
+    in the scout's `find_existing_ids`: `cv_version` identifies a row, it does not make a vacancy
+    new - filtering on it made a re-tailored card look new and created a `v1` twin, live
+    2026-10-07): the board renders every row
     whatever its `user_id` (D11), so a check limited to the session account would offer to
     scrape a card the operator can already see - and the row it then created would look like a
     duplicate card. The business key includes `source`, so the same number on two sites is two
@@ -466,8 +469,12 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
 34. **A site the feed intake cannot reach is browser-scraped only, and one of them is not a list.**
     The registry (`apps/extension/src/sites/index.js`, invariant 35) is what derives `resumes.source`
     from the page's own host, and that is what keeps a browser scrape and a scouted card on one row (`resumes_job_key_idx`,
-    invariants 16/17/25). Four slugs exist today - `djinni`, `dou`, `greenhouse`, and `indeed`, the
-    last of which **only the browser can produce**: Indeed serves no feed and no API. Verified
+    invariants 16/17/25). Five slugs exist today - `djinni`, `dou`, `greenhouse`, `indeed`, and
+    `teamtailor`. The last is the **filler's alone**: an employer's own ATS page reached from a card's
+    Application URL, where `JOB_PAGE` answers *no vacancies* rather than a mangled card and the host is
+    granted for `src/formfill.js` (2026-10-07, card `353314` - before the grant, Populate answered
+    "no form filler on it"). Meanwhile `indeed` **only the browser can
+    produce**: Indeed serves no feed and no API. Verified
     2026-10-05: `pt.indeed.com/rss` returns no feed and `robots.txt` disallows `/rss` and `/*?rss`
     for `User-agent: *`; the old Publisher Job Search API host `api.indeed.com` no longer resolves;
     and every HTML path - the homepage, `/jobs`, `/viewjob` - answers 403/401 to a client that is

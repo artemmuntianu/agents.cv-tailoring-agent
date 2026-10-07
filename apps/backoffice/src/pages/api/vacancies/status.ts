@@ -28,7 +28,7 @@ export const GET: APIRoute = async ({ url, locals }) => {
   if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
 
   try {
-    const known = await findExistingVacancies(session.sub, parsed.ids, cvVersion(), {
+    const known = await findExistingVacancies(session.sub, parsed.ids, {
       scope: 'board',
       source: parsed.source,
     });
