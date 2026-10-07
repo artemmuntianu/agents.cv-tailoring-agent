@@ -12,6 +12,13 @@ import { CARD_LIST } from './plans.js';
 export const djinni = {
   slug: 'djinni',
   hosts: ['djinni.co'],
+  /**
+   * Where *this site's own* vacancy URL carries the id (`/jobs/848944-slug/`). The form filler asks
+   * the registry for it, which is what lets *Populate* resolve a card by its id - and therefore what
+   * keeps the card's *Application URL* optional, since it is only the landing page of an ATS that
+   * leaves this site.
+   */
+  urlId: '\\/jobs\\/(\\d+)',
   /** Which per-card button content script the manifest wires for these hosts (`src/inject.js`). */
   buttons: 'cards',
   /** Whether "Scrape & queue this page" has to *walk* the page (`src/indeed/sweep.js`) - it does not. */

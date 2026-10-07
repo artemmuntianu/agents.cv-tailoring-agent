@@ -12,15 +12,23 @@
 import { extractVacancies } from './extract.js';
 import { createFormWorker } from './form/worker.js';
 import { createSweepWorker } from './indeed/sweep.js';
-import { siteForPage, siteForUrl } from './sites/index.js';
+import { boardKeyForUrl, siteForPage, siteForUrl, vacancyIdFromUrl } from './sites/index.js';
 
 const DEFAULT_GATEWAY = 'http://localhost:4321';
 
 /**
- * The form-filler flow lives in `form/worker.js`; it borrows this worker's two helpers, so both
- * halves of the extension agree on the session and on how a page matches a board card.
+ * The form-filler flow lives in `form/worker.js`; it borrows this worker's helpers, so both halves of
+ * the extension agree on the session, on how a page matches a board card, and on the two registry
+ * facts a page carries: which part of its URL is its vacancy id, and which **job board** it belongs
+ * to (the key a picked form is remembered under - `sites/<site>.js`, never a rule in the flow).
  */
-const formWorker = createFormWorker({ settings, cardStatus, cardForUrl });
+const formWorker = createFormWorker({
+  settings,
+  cardStatus,
+  cardForUrl,
+  vacancyIdFromUrl,
+  boardKeyForUrl,
+});
 /**
  * "Queue every vacancy on this Indeed feed" is its own flow, like the form filler:
  * `indeed/sweep.js` walks the page's cards through the content script and publishes the result. It is
@@ -305,8 +313,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // The popup's ticker while a fill runs: one step, and how long the run has taken.
         sendResponse({ ok: true, phase: formWorker.phase() });
       } else if (message && message.type === 'formRecipe') {
-        const all = await formWorker.recipes();
-        sendResponse({ ok: true, recipe: all[formWorker.hostOf(tabUrl)] || null });
+        // This host's own pick, else its job board's saved default (`source` says which).
+        sendResponse({ ok: true, ...(await formWorker.recipeFor(tabUrl)) });
+      } else if (message && message.type === 'saveFormDefaults') {
+        // The popup's *Save as default*: copy this host's pick to the whole job board.
+        sendResponse(await formWorker.saveFormDefaults(tabUrl));
       } else if (message && message.type === 'clearFormRecipe') {
         sendResponse(await formWorker.clearRecipe(tabUrl));
       } else if (message && message.type === 'pickForm') {

@@ -139,7 +139,7 @@ if ($DryRun) {
         ' -> amqp://<user>:<password>@localhost:' + $LocalPort + '/%2F')
     Say '  5. $env:QUEUE_BACKEND=amqp  and  $env:RABBITMQ_URL=<that url>'
     foreach ($jobPath in $jdPaths) {
-        Say ('  6. python publisher.py --jd ' + $jobPath + ' ' + ($userFlag -join ' '))
+        Say ('  6. python apps/worker/publisher.py --jd ' + $jobPath + ' ' + ($userFlag -join ' '))
     }
     Say '  7. restore the previous session env, stop the port-forward'
     exit 0
@@ -220,7 +220,7 @@ try {
     $env:QUEUE_BACKEND = 'amqp'
     $env:RABBITMQ_URL = $brokerUrl
 
-    $publisherArgs = @('publisher.py') + $userFlag
+    $publisherArgs = @('apps/worker/publisher.py') + $userFlag
     if ($All) {
         $publisherArgs += '--all'
     }

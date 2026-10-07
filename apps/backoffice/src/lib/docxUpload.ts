@@ -89,11 +89,3 @@ export const RENDER_STATE_LABEL: Record<DocxRenderState, string> = {
   completed: 'PDF regenerated',
   failed: 'render failed',
 };
-
-export const RENDER_STATE_CHIP: Record<DocxRenderState, string> = {
-  absent: 'bg-slate-50 text-slate-500 ring-slate-200',
-  queued: 'bg-amber-50 text-amber-700 ring-amber-200',
-  running: 'bg-sky-50 text-sky-700 ring-sky-200',
-  completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  failed: 'bg-rose-50 text-rose-700 ring-rose-200',
-};

@@ -16,6 +16,8 @@ import { PANE } from './plans.js';
 export const indeed = {
   slug: 'indeed',
   hosts: ['indeed.com'],
+  /** The vacancy key in the page URL (`/viewjob?jk=510f8e399c212ca1`) - the same `jk` `PANE.paneId` reads. */
+  urlId: '[?&]jk=([0-9a-f]{8,32})',
   buttons: 'pane',
   sweep: true,
   plan: PANE,

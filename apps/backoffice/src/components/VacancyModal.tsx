@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { MAX_APPLY_URL_LENGTH } from '../lib/applyUrl';
-import { artifactUrl, storedPathName } from '../lib/artifact-link';
+import { artifactUrl } from '../lib/artifact-link';
 import { historyLine } from '../lib/board';
 import { coverState, coverStateLabel } from '../lib/cover';
 import {
   MAX_DOCX_UPLOAD_BYTES,
-  RENDER_STATE_CHIP,
-  RENDER_STATE_LABEL,
   fileRejection,
   renderState,
 } from '../lib/docxUpload';
@@ -98,21 +96,12 @@ const DETAIL_INPUT =
   'mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal normal-case ' +
   'tracking-normal text-slate-900 placeholder:text-slate-400';
 
-function duration(ms: number | null): string {
-  return ms === null || ms === undefined ? '—' : `${(ms / 1000).toFixed(1)}s`;
-}
-
 /** Names of the documents the worker stored but this board cannot serve (not mirrored yet). */
 function missingArtifacts(card: BoardCard): string {
   const missing: string[] = [];
   if (card.pdfUrl && !card.artifactAvailability.pdf) missing.push('PDF');
   if (card.docxPath && !card.artifactAvailability.docx) missing.push('DOCX');
   return missing.join(' + ');
-}
-
-/** The stored artifact path reduced to its file name (`/data/output/848944.pdf`). */
-function resultField(storedPath: string | null): string {
-  return storedPathName(storedPath) ?? 'not stored yet';
 }
 
 /**
@@ -350,23 +339,10 @@ export default function VacancyModal({
             </p>
           )}
 
-          <dl className="mt-4 grid grid-cols-3 gap-4">
-            <Field label="Worker status" value={card.status} />
-            <Field label="Attempts" value={String(card.attempts)} />
-            <Field label="Revisions" value={card.revisionCount === null ? '—' : String(card.revisionCount)} />
-            <Field label="Task duration" value={duration(card.durationMs)} />
-            <Field label="CV version" value={card.cvVersion} />
+          {/* Two timestamps, on one line: the card's own clock is what the archiver reads. */}
+          <dl className="mt-4 flex flex-wrap gap-x-10 gap-y-2">
             <Field label="Created" value={formatDateTime(card.createdAt)} />
             <Field label="Last change" value={formatDateTime(card.updatedAt)} />
-            {card.archived && <Field label="Refused by" value={card.archivedActor ?? 'unknown'} />}
-            {card.archived && (
-              <Field
-                label="Refused on"
-                value={formatDateTime(card.archivedAt ?? card.updatedAt)}
-              />
-            )}
-            <Field label="Result (PDF)" value={resultField(card.pdfUrl)} />
-            <Field label="Result (DOCX)" value={resultField(card.docxPath)} />
           </dl>
 
           {(card.pdfUrl || card.docxPath) && (
@@ -384,7 +360,7 @@ export default function VacancyModal({
             </p>
           )}
 
-          <div className="mt-4 flex flex-wrap gap-3 text-xs">
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
             {card.sourceUrl && (
               <a
                 href={card.sourceUrl}
@@ -458,6 +434,15 @@ export default function VacancyModal({
                 {missingArtifacts(card)} not mirrored here
               </span>
             )}
+          </div>
+
+          {/*
+            The card-level actions, on one line: the three that change the card (Archive / Restore /
+            Remove for good) and the *Update docx* workflow's own two buttons. The hidden file input
+            travelled with its trigger, which is why the section below keeps the workflow's *state*
+            (chip, file name, explanation) and the trigger sits here with the other actions.
+          */}
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
             {!card.archived && onArchive && (
               <button
                 type="button"
@@ -485,6 +470,47 @@ export default function VacancyModal({
               >
                 🗑 Remove for good
               </button>
+            )}
+            {card.docxPath && onUploadDocx && (
+              <>
+                <input
+                  ref={docxInput}
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(event) => chooseDocx(event.target.files?.[0] ?? null)}
+                />
+                <button
+                  type="button"
+                  onClick={() => docxInput.current?.click()}
+                  className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Update docx
+                </button>
+                {docxFile && (
+                  <button
+                    type="button"
+                    onClick={() => void uploadDocx()}
+                    disabled={docxBusy || docxState === 'running'}
+                    className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  >
+                    {docxBusy ? 'Uploading…' : 'Regenerate PDF'}
+                  </button>
+                )}
+              </>
+            )}
+            {/* The *Update docx* outcome - and only when there is one: a chosen file the rules
+                refused, a render that failed, or the confirmation. The section that used to hold
+                these (heading, status chip, file name, explanation) was removed 2026-10-07; the
+                button below is the whole UI, so this is the only feedback left. */}
+            {docxMessage && <span className="text-rose-700">{docxMessage}</span>}
+            {docxState === 'failed' && docxUpdate?.error && (
+              <span className="text-rose-700">{docxUpdate.error}</span>
+            )}
+            {docxState === 'completed' && docxUpdate?.updatedAt && (
+              <span className="text-emerald-700">
+                Re-rendered on {formatDateTime(docxUpdate.updatedAt)}.
+              </span>
             )}
           </div>
 
@@ -548,29 +574,27 @@ export default function VacancyModal({
               />
             </label>
 
-            <div className="block text-xs font-medium uppercase tracking-wide text-slate-500 sm:col-span-3">
-              Application URL
-              <input
-                value={detailsDraft.applyUrl}
-                onChange={(event) => editDetails({ applyUrl: event.target.value })}
-                maxLength={MAX_APPLY_URL_LENGTH}
-                placeholder="https://job-boards.eu.greenhouse.io/growe/jobs/4987494101"
-                className={`${DETAIL_INPUT} font-normal normal-case`}
-              />
-              <span className="mt-1 block text-[11px] font-normal normal-case leading-relaxed text-slate-400">
-                Where <em>Apply</em> actually lands, when that is not the posting itself. The
-                browser extension finds this card from that page, so <em>Populate</em> works on the
-                employer&rsquo;s own form. The query string and fragment are dropped on save.
-              </span>
-            </div>
+            {/* One line: the URL the extension looks this card up by, beside the channel. */}
+            <div className="grid grid-cols-1 gap-3 sm:col-span-3 sm:grid-cols-2">
+              <div className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                Application URL
+                <input
+                  value={detailsDraft.applyUrl}
+                  onChange={(event) => editDetails({ applyUrl: event.target.value })}
+                  maxLength={MAX_APPLY_URL_LENGTH}
+                  placeholder="https://job-boards.eu.greenhouse.io/growe/jobs/4987494101"
+                  className={`${DETAIL_INPUT} font-normal normal-case`}
+                />
+              </div>
 
-            <div className="block text-xs font-medium uppercase tracking-wide text-slate-500 sm:col-span-3">
-              Communication channel
-              <ChannelSelect
-                value={detailsDraft.communicationChannels}
-                onChange={(channels) => editDetails({ communicationChannels: channels })}
-                disabled={detailsBusy}
-              />
+              <div className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                Communication channel
+                <ChannelSelect
+                  value={detailsDraft.communicationChannels}
+                  onChange={(channels) => editDetails({ communicationChannels: channels })}
+                  disabled={detailsBusy}
+                />
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:col-span-3">
@@ -617,83 +641,9 @@ export default function VacancyModal({
         </section>
 
         {/* The cover letter has its own page (`/cover/<job_id>`), reached from the *Cover letter*
-            link in the actions row: reading a two-hundred-word letter and asking for a new one were
+            link above: reading a two-hundred-word letter and asking for a new one were
             never the card's business, and the row it reads (`resume_cover_letter`) is untouched -
             only the reader moved. */}
-
-        {/* *Update docx* - the workflow the operator asked for: download the tailored DOCX,
-            verify it, fix what the model could not, upload it back, and the PDF follows. Offered
-            only when the card has a deliverable (`docxPath`), which is the same condition the
-            route enforces. The bytes are stored in Postgres and rendered by `resumes.rerender`;
-            the outcome arrives through the card payload. */}
-        {card.docxPath && onUploadDocx && (
-          <section className="border-t border-slate-200 px-6 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Update docx
-                </h3>
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${RENDER_STATE_CHIP[docxState]}`}
-                >
-                  {RENDER_STATE_LABEL[docxState]}
-                </span>
-                {docxUpdate?.filename && (
-                  <span className="text-[11px] text-slate-400">{docxUpdate.filename}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  ref={docxInput}
-                  type="file"
-                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  className="hidden"
-                  onChange={(event) => chooseDocx(event.target.files?.[0] ?? null)}
-                />
-                <button
-                  type="button"
-                  onClick={() => docxInput.current?.click()}
-                  className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Update docx
-                </button>
-                {docxFile && (
-                  <button
-                    type="button"
-                    onClick={() => void uploadDocx()}
-                    disabled={docxBusy || docxState === 'running'}
-                    className="rounded border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                  >
-                    {docxBusy ? 'Uploading…' : 'Regenerate PDF'}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <p className="mt-2 text-xs text-slate-500">
-              Download the DOCX above, fix whatever the model could not, and upload it back: the
-              board keeps the file and rebuilds this card&rsquo;s PDF from it, so both links keep
-              pointing at the current pair.
-              {docxFile && (
-                <>
-                  {' '}
-                  Chosen: <strong>{docxFile.name}</strong> ({Math.max(1, Math.round(docxFile.size / 1024))}{' '}
-                  KB).
-                </>
-              )}
-            </p>
-            {docxMessage && <p className="mt-2 text-xs text-rose-700">{docxMessage}</p>}
-            {docxState === 'failed' && docxUpdate?.error && (
-              <p className="mt-2 text-xs text-rose-700">{docxUpdate.error}</p>
-            )}
-            {docxState === 'completed' && docxUpdate?.updatedAt && (
-              <p className="mt-2 text-xs text-emerald-700">
-                Re-rendered from {docxUpdate.filename ?? 'the uploaded DOCX'} on{' '}
-                {formatDateTime(docxUpdate.updatedAt)}.
-              </p>
-            )}
-          </section>
-        )}
 
         {hasReachedInterviewing(card) && (
           <section className="border-t border-slate-200 px-6 py-4">

@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest';
 import {
   GENERIC,
   SITES,
+  boardKeyForUrl,
   siteForPage,
   siteForSlug,
   siteForUrl,
   validate,
+  vacancyIdFromUrl,
 } from '../../../extension/src/sites/index.js';
 import { CARD_LIST, JOB_PAGE, PANE } from '../../../extension/src/sites/plans.js';
 
@@ -65,6 +67,50 @@ describe('the site registry', () => {
     expect(siteForSlug('greenhouse')?.plan).toBe(JOB_PAGE);
     expect(siteForSlug('  DOU ')?.plan).toBe(CARD_LIST);
     expect(siteForSlug('work-ua')).toBeNull();
+  });
+
+  it('reads each site its own vacancy id out of a page URL', () => {
+    // The form filler asks *this* rather than matching `/jobs/(\d+)` itself. The sites do not agree
+    // about where their id lives, and a DOU page that answered '' fell straight through to the
+    // application-URL lookup and told the operator to paste the page into the card (375802,
+    // 2026-10-07 - the fix is exactly that this answers '375802').
+    expect(vacancyIdFromUrl('https://djinni.co/jobs/848944-senior-go/')).toBe('848944');
+    expect(vacancyIdFromUrl('https://jobs.dou.ua/companies/riseapps/vacancies/375802/')).toBe('375802');
+    expect(vacancyIdFromUrl('https://jobs.dou.ua/vacancies/375802/')).toBe('375802');
+    expect(vacancyIdFromUrl('https://job-boards.eu.greenhouse.io/growe/jobs/4987494101')).toBe(
+      '4987494101',
+    );
+    expect(vacancyIdFromUrl('https://pt.indeed.com/viewjob?jk=510f8e399c212ca1')).toBe(
+      '510f8e399c212ca1',
+    );
+
+    // A page that names no vacancy id - and a host we do not know at all - answer '' rather than
+    // guess, which is what keeps the URL fallback (and its honest stop) in place.
+    expect(vacancyIdFromUrl('https://djinni.co/')).toBe('');
+    expect(vacancyIdFromUrl('https://jobs.dou.ua/vacancies/?remote')).toBe('');
+    expect(vacancyIdFromUrl('https://example.com/jobs/123')).toBe('');
+    expect(vacancyIdFromUrl('')).toBe('');
+  });
+
+  it('groups a board\'s hosts under one key, because the apply form is the board\'s', () => {
+    // What a picked form is remembered under: one key per **job board**, not one per host, so
+    // "Save as default" on one Greenhouse host covers all three (and a board's other pages).
+    expect(boardKeyForUrl('https://job-boards.greenhouse.io/growe/jobs/4987494101')).toBe('greenhouse');
+    expect(boardKeyForUrl('https://job-boards.eu.greenhouse.io/growe/jobs/1')).toBe('greenhouse');
+    expect(boardKeyForUrl('https://boards.greenhouse.io/acme/jobs/2')).toBe('greenhouse');
+    expect(boardKeyForUrl('https://jobs.dou.ua/vacancies/375802/')).toBe('dou');
+    expect(boardKeyForUrl('https://djinni.co/jobs/848944-senior-go/')).toBe('djinni');
+
+    // An unlisted host is its own board: `other` is one slug for *every* unknown site, and sharing a
+    // default across unrelated sites would fill one site's form with another's selectors.
+    expect(boardKeyForUrl('https://one.example.com/apply')).toBe('one.example.com');
+    expect(boardKeyForUrl('https://two.example.com/apply')).toBe('two.example.com');
+  });
+
+  it('refuses a plugin that does not say where its own URL carries the id', () => {
+    for (const site of SITES) {
+      expect(typeof site.urlId, site.slug).toBe('string');
+    }
   });
 
   it('refuses a registry that would merge two id spaces or two hosts', () => {

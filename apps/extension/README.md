@@ -90,7 +90,9 @@ Sign in, open the vacancy, click the site's own **Apply** so the form is on the 
    letter field exists before that), then pin it, and pin the resume to the hidden upload field
    behind **Attach**. Escape cancels. Optional but recommended: **Pin the letter field** and
    **Pin the resume field**, the two places the generated documents must land, chosen by you rather
-   than by the model.
+   than by the model. Once they look right, **Save as default** widens that pick to the whole **job
+   board**, so the board's other hosts (Greenhouse has three, Djinni's dashboard is its own page) need
+   no picking at all; *Forget this site* drops both the pick and that default.
 2. The **candidate facts** (name, contacts, salary expectation, availability, work rights, English
    level) are not edited here: they live in the board's `application_profile` row for your account and
    every prompt reads them. Review them on the board's **Sources of truth** page (`/sources`), and
@@ -105,8 +107,9 @@ Sign in, open the vacancy, click the site's own **Apply** so the form is on the 
 4. **Read the report, then submit the site's own form.** The extension never submits anything.
 
 It says no, on purpose, when: the vacancy is not on the board yet (scrape and tailor it first), the
-application page is not linked to a card (open the vacancy on the board and paste this page's URL
-into its **Application URL** - see below), no cover letter has been generated (the report says so -
+application page is not linked to a card (a vacancy's *own* page resolves by the id its URL carries,
+so this is the page that *left* the site - paste its URL into the card's **Application URL**, see
+below), no cover letter has been generated (the report says so -
 generate one on the card), the tailored PDF is not on the board's machine
 (`storage-files.ps1 -Action download`, or point `OUTPUT_DIR` at the cluster volume), or the form was
 re-rendered since the snapshot (run Populate again: the new form gets a new hash and a fresh draft).
@@ -118,10 +121,16 @@ filler asks the board *which card this page is* and matches the URL against the 
 **Application URL**. Paste the page's address into the card's **Details -> Application URL** in the
 board once (the tracking tail is dropped on save, so `?gh_src=…` never matters) and Populate works
 there from then on; the popup confirms with *Matched this page by Application URL*. The ATS host
-must be in `host_permissions`/`content_scripts` for the filler to be on the page at all.
+must be in `host_permissions`/`content_scripts` for the filler to be on the page at all. This is the
+*only* case the field is for: on the site's own vacancy page the card is found by the id that URL
+carries - Djinni `djinni.co/jobs/<id>`, DOU `jobs.dou.ua/…/vacancies/<id>` - so nothing has to be
+pasted, and the field stays empty.
 
 Manual checklist after a change to `formfill.js` or `form/`: pick on both sites; populate a Djinni
-form (answers + letter + PDF + report); populate a DOU form (letter + file); press Escape mid-pick;
+form (answers + letter + PDF + report); populate a DOU form (letter + file); populate a DOU vacancy
+page with an **empty** Application URL (the card is found by its own `/vacancies/<id>` id - card
+`375802` is the regression); save a pick as the board's default and populate a *sibling* host with no
+pick of its own; press Escape mid-pick;
 run Populate twice on the same page (the second run reuses the draft, no second Gemini call); reload
 the page mid-draft (the old snapshot is refused as stale rather than filled); paste an ATS page URL
 into a card's Application URL and populate from that page (the card is found by URL, and it is

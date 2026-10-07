@@ -96,7 +96,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
-| `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the five states the modal shows) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
+| `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the deliverable's five states) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
 | `src/pages/sources.astro`, `src/components/SourcesPage.tsx`, `src/pages/api/sources.ts` | The **Sources of truth** page (`/sources`): *what a generated CV or cover letter is built from* - the master CV model (`cv_data.json`, rendered as the sections the prompt and the document share), the master document (`input/cv.docx`) and the model rotation state (`model_state.json`) read through the artifact mirror, plus the operator's candidate facts row (`application_profile`, sanitized exactly as `apps/worker/utils/candidate.py` does). Read-only: `src/lib/sources.ts` resolves the paths from `artifacts.ts`'s root, reports a file this machine does not have as **absent with its path** (never as empty), and never writes |
 | `src/lib/missing.ts` | The *Missing fields* section: which card fields the scrape left empty, the request fragment they become, and the fill-only company rule (`resolveCompany`) |
 | `src/pages/vacancy/[jobId].astro`, `src/components/VacancyTextPage.tsx` | The **parsed vacancy text** (`/vacancy/<job_id>`), opened from a card's *Parsed vacancy text* button: `resumes.description_raw` verbatim with the site, id, posting link, board state and its size. Read-only |
@@ -259,8 +259,10 @@ edit what the model could not, upload it back**, and the PDF regenerates from th
   mirror. One row per vacancy is the audit trail; the latest upload is the deliverable.
 - The outcome arrives through the **card payload** (`docxUpdate`, another `LEFT JOIN` in
   `CARD_SELECT`) and the existing 5s poll. `lib/docxUpload.ts::renderState` maps the row to the
-  five states the modal shows (`absent`/`queued`/`running`/`completed`/`failed`) and is unit
-  tested, so the component stays a rendering layer.
+  deliverable's five states (`absent`/`queued`/`running`/`completed`/`failed`) and is unit
+  tested, so the component stays a rendering layer. The modal shows the outcome as **one line
+  beside the *Update docx* button** - the section that used to wrap it (heading, chip, file name,
+  explanation) was removed 2026-10-07.
 
 ## Application drafts (`POST`/`GET /api/apply/<job_id>`, `GET`/`PUT /api/profile`)
 
@@ -474,11 +476,14 @@ to that page yet (a normal answer, not a 404).
   moves - so typing a recruiter counts as activity for the date window *and* for the inactivity
   sweep - and **no** `resume_history` row is written (invariant 28). The channels are a code +
   DB-CHECK vocabulary like the Actors and the interview types, not operator data, so they are not
-  editable from `/admin`. The application URL is the one field the operator cannot leave to the
-  scraper: the redirect only exists after the Apply click, which is why the card stores it and the
-  extension's *Populate* reads it back through `GET /api/vacancies/link` (the section above). It is
-  canonicalised on save (`lib/applyUrl.ts`), and the card modal offers it as *Open the application
-  page* next to *Open the vacancy posting*.
+  editable from `/admin`. The application URL is **optional** - it exists for the one case the
+  scraper cannot see: the Apply click *leaving* the site (the redirect only appears after the click).
+  A card whose own posting *is* the page being filled resolves by the id that site's URL carries
+  (`apps/extension/src/sites/<site>.js`'s `urlId`); the DOU `/vacancies/<id>` shape was the gap that
+  made the field look mandatory there (card `375802`, 2026-10-07). It is stored for the pages that do
+  leave the site, which is what the extension's *Populate* reads back through
+  `GET /api/vacancies/link` (the section above), canonicalised on save (`lib/applyUrl.ts`); the card
+  modal offers it as *Open the application page* next to *Open the vacancy posting*.
 - **The History at the bottom of the card is correctable, and correcting it is not activity.**
   Every line carries *✏️ Edit* and *✕ Remove*. The edit rewrites the **whole** line
   (`PATCH /api/board/history/<id>`: date, actor, wording, kind and both states), because a

@@ -11,6 +11,14 @@ import { CARD_LIST } from './plans.js';
 export const dou = {
   slug: 'dou',
   hosts: ['dou.ua'],
+  /**
+   * DOU puts the vacancy id after `/vacancies/`, **not** `/jobs/`: `/vacancies/375802/` and
+   * `/companies/riseapps/vacancies/375802/` are the same vacancy, and the number is exactly the
+   * `resumes.external_id` that both the feed intake and the browser scrape store. Reading it here is
+   * what stops a DOU page from being pushed to the card's *Application URL* to resolve at all
+   * (2026-10-07: card `375802` could not be populated from its own DOU page).
+   */
+  urlId: '\\/vacancies\\/(\\d+)',
   buttons: 'cards',
   sweep: false,
   plan: CARD_LIST,

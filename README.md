@@ -232,12 +232,13 @@ from the stored job description and the master `cv_data.json` - it can only repe
 says - and the modal shows it with a *Copy* button. `docs/MESSAGE_CONTRACT.md` documents that
 payload.
 
-A card that **went through tailoring** also gets an **Update docx** section: download the tailored
-DOCX, verify it, fix what the model could not, upload it back - the board stores the file, asks
-`resumes.rerender` for a new render, and `rerender.py` writes the upload back as the card's
-deliverable and rebuilds its PDF with the image's LibreOffice, so the *Tailored PDF* / *Tailored
-DOCX* links keep pointing at the current pair. The status of that render shows in the modal as it
-happens (`CONSTITUTION.md` invariant 32).
+A card that **went through tailoring** gets an **Update docx** button in its actions row (beside
+**Archive**): download the tailored DOCX, verify it, fix what the model could not, upload it back -
+the board stores the file, asks `resumes.rerender` for a new render, and `rerender.py` writes the
+upload back as the card's deliverable and rebuilds its PDF with the image's LibreOffice, so the
+*Tailored PDF* / *Tailored DOCX* links keep pointing at the current pair. The outcome - a refused
+file, the failure reason, or *Re-rendered on …* - appears beside the button
+(`CONSTITUTION.md` invariant 32).
 
 The card is the operator's workspace. An **`➕ Add action`** button records a change
 *without* moving the card - which is also how a card escapes the auto-archiver's ten-day rule.

@@ -17,6 +17,8 @@ export const greenhouse = {
    * own site, and a claim nobody injects into is a claim that only looks right.
    */
   hosts: ['job-boards.greenhouse.io', 'job-boards.eu.greenhouse.io', 'boards.greenhouse.io'],
+  /** The same URL shape `JOB_PAGE.urlId` scrapes with (`/<board>/jobs/<id>`). */
+  urlId: '\\/jobs\\/(\\d+)',
   buttons: 'none',
   sweep: false,
   plan: JOB_PAGE,

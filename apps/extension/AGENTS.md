@@ -164,9 +164,18 @@ write into the page. Four rules shape it, and all four are about not guessing:
 
 1. **The form is picked, never guessed.** `Pick the form` puts the page into a crosshair mode: the
    operator clicks the form (Djinni's dialog, DOU's area below Apply) and the selector is stored per
-   host in `chrome.storage.local.formRecipes`. The two fields that must be exactly right can be
+   **host** in `chrome.storage.local.formRecipes`. The two fields that must be exactly right can be
    pinned the same way (`Pin the letter field`, `Pin the resume field`), which takes them out of the
-   model's hands entirely.
+   model's hands entirely. **A board's hosts usually render one form**, so the popup's **Save as
+   default** copies this host's whole recipe (the root *and* both pins) to its **job board** in
+   `chrome.storage.local.formDefaults`, keyed by the registry's slug
+   (`sites/index.js::boardKeyForUrl`): one pick then covers `job-boards.greenhouse.io`,
+   `job-boards.eu.greenhouse.io` and `boards.greenhouse.io`, and Djinni's dashboard inherits what
+   `/jobs` taught. `recipeFor()` asks the host first, so a later pick on one host still wins for that
+   host - a default is a fallback, never an override - and an unlisted host is its own board (the
+   `other` slug belongs to every unknown site, so a *default* must not be shared through it). The
+   button is enabled only when this host holds a pick of its own (there is nothing to widen
+   otherwise), and `Forget this site` drops the host pick and the board default together.
 2. **The model never sees a selector - and never sees a document.** The page annotates every
    fillable control with a deterministic `data-cvt-id` (f1, f2, ... in DOM order) and the worker
    sends that snapshot to the board, which queues it on `applications.draft` (`apply.py`). The plan
@@ -182,17 +191,25 @@ write into the page. Four rules shape it, and all four are about not guessing:
    `scripts/seed_profile.py` (the popup's *Candidate facts* editor was removed 2026-10-03), and the
    same row grounds the CV and the cover letter too (`CONSTITUTION.md` invariants 25/31).
 4. **The card is resolved twice, never guessed.** `form/worker.js` asks the page's own vacancy id
-   first (`GET /api/vacancies/status`, the same lookup the per-card buttons use), and when that
-   finds nothing it asks **which card this page is** (`GET /api/vacancies/link?url=…`) - the
-   lookup that matches the page URL against the cards' own **application URL**
-   (`resume_board.apply_url`, set on the card in the board's Details block: a DOU/Djinni vacancy
-   whose Apply button opens the employer's ATS page keeps `dou`/`351812` as its identity, so
-   nothing on the board carries that Greenhouse job number). Neither match stops the run with
-   *"this page is not linked to a card yet"* - the popup then says `Matched this page by
-   Application URL` when the second lookup answered, because there is nothing else that would tell
-   the operator the connection worked. The lookup needs no manifest change (the ATS host has to be
-   in `host_permissions`/`content_scripts` already, or there is no filler on the page at all), and
-   nothing is written to the page before a card is known.
+   first (`GET /api/vacancies/status`, the same lookup the per-card buttons use) - and **which part
+   of that URL is the id is the site's own fact** (`sites/<site>.js`'s `urlId`, read by
+   `vacancyIdFromUrl`: Djinni `/jobs/<id>`, DOU `/vacancies/<id>`, Greenhouse `/jobs/<id>`, Indeed
+   `?jk=`), because the flow used to hard-code `/jobs/` and every DOU page therefore answered "no
+   id" (card `375802`, 2026-10-07). When that finds nothing it asks **which card this page is**
+   (`GET /api/vacancies/link?url=…`) - the lookup that matches the page URL against the cards' own
+   **application URL** (`resume_board.apply_url`, set on the card in the board's Details block: a
+   DOU/Djinni vacancy whose Apply button opens the employer's ATS page keeps `dou`/`351812` as its
+   identity, so nothing on the board carries that Greenhouse job number). That field is **optional**:
+   it only ever matters for a page that left the site, which is exactly the case the id cannot
+   answer. **The id lookup answers for the board's *current* `CV_VERSION`** (the business key
+   `resumes_job_key_idx` includes it), so a card scraped under another version is not found by id and
+   this fallback is forced for it - the `v1`/`v2` twin rows in the live database are exactly that
+   (2026-10-07). Bumping `CV_VERSION` is therefore a *Populate* regression, not only a re-tailoring
+   one. Neither match stops the run with *"this page is not linked to a card yet"* - the popup
+   then says `Matched this page by Application URL` when the second lookup answered, because there
+   is nothing else that would tell the operator the connection worked. The lookup needs no manifest
+   change (the ATS host has to be in `host_permissions`/`content_scripts` already, or there is no
+   filler on the page at all), and nothing is written to the page before a card is known.
 
 Constraints worth knowing: the site's submit button is never clicked; `input[type=hidden]`,
 `password` and disabled fields are not annotated at all; a radio/checkbox group is one field with N
@@ -256,7 +273,7 @@ for `fetch` from a service worker without it).
 | `src/form/plan.js` | Pure plan plumbing: the pins overriding the model, which documents a plan needs, and the popup's report |
 | `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply, recording the phase of each step |
 | `src/form/phases.js` | The progress vocabulary: the step list and the one-line label the popup ticks through while a fill runs (pure, unit tested) |
-| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the page->card lookup (`cardForUrl`), the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `clearFormRecipe`, `populate`, `phase`) |
+| `src/background.js` | The only network client: sign-in, token storage, the status lookup, the page->card lookup (`cardForUrl`), the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `saveFormDefaults`, `clearFormRecipe`, `populate`, `phase`) |
 | `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome |
 | `README.md` | The same load-and-use steps as above, for an operator |
 
@@ -403,7 +420,10 @@ cd apps/backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browse
   the card's *Application URL* and Populate works there from then on. A `tabs.onUpdated` +
   `openerTabId` listener could fill that in by itself, but an MV3 service worker is asleep most of
   the time and a wrong guess would link a card to the wrong posting - the manual field is the
-  honest POC answer, and the lookup it feeds is already host-agnostic.
+  honest POC answer, and the lookup it feeds is already host-agnostic. **The field is not always
+  needed**: a card whose own posting *is* the page being filled resolves by the id that page's URL
+  carries (`urlId` in rule 4), which is why the board describes it as optional - only a page that
+  left the site has to be connected by hand.
 - Buttons follow the cards: every Djinni page that renders one gets them (`https://djinni.co/*`),
   a page that renders none gets nothing. The scope is the whole host on purpose - the
   dashboard (`/my/dashboard/subs`) lists vacancies with the same card markup as `/jobs`, and a

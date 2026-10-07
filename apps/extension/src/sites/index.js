@@ -76,6 +76,45 @@ export function siteForSlug(slug) {
 }
 
 /**
+ * The vacancy id a page's own URL carries, or `''` when the URL names none.
+ *
+ * The **site** owns the shape (`sites/<site>.js`'s `urlId`), because the two plugins that answer
+ * `CARD_LIST` do not agree about it: Djinni writes the number after `/jobs/`, DOU after
+ * `/vacancies/`. Hard-coding one of them is what made every DOU page unresolvable by id - the form
+ * filler fell through to the application-URL lookup and told the operator to paste the page into the
+ * card (card `375802`, 2026-10-07). An unlisted host has no pattern and answers `''`, the same way
+ * `siteForUrl` answers `null` instead of guessing.
+ *
+ * The match runs over `pathname + search`, so a site whose id lives in the query (Indeed's `jk`)
+ * answers too, and it is the *page being filled* that is asked - never the card's stored URL.
+ */
+export function vacancyIdFromUrl(url) {
+  const site = siteForUrl(url);
+  if (!site || !site.urlId) return '';
+  try {
+    const parsed = new URL(String(url || ''));
+    const match = (parsed.pathname + parsed.search).match(new RegExp(site.urlId));
+    return match ? match[1] : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+/**
+ * The **job board** a page belongs to - what a picked application form is remembered under.
+ *
+ * The registry's slug when the host is a site we know, so a board's hosts share one recipe:
+ * `job-boards.greenhouse.io`, `job-boards.eu.greenhouse.io` and `boards.greenhouse.io` are one
+ * board, and picking the form on one of them has picked it on all three. An unlisted host is its
+ * own board - `other` is a single slug for *every* unknown site, and sharing a default across
+ * unrelated sites would fill one site's form with another's selectors.
+ */
+export function boardKeyForUrl(url) {
+  const site = siteForUrl(url);
+  return site ? site.slug : hostOf(url);
+}
+
+/**
  * Refuse a registry that would let two sites share an id space, a host, or a strategy.
  *
  * Called at load (`validate()` below), so a half-added site breaks the extension loudly rather than

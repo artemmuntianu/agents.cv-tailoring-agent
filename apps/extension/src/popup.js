@@ -43,19 +43,29 @@ async function refresh() {
   if (signedIn) await refreshRecipe();
 }
 
-/** What the extension knows about this site: the picked form and the two pins. */
+/**
+ * What the extension knows about this site: the picked form, the two pins, and whether they are this
+ * host's own pick or the default saved for the whole **job board**.
+ *
+ * *Save as default* is enabled only when this host holds a pick of its own - there is nothing to
+ * widen otherwise - which is also how a board's default is updated: pick again, then save.
+ */
 async function refreshRecipe() {
   const response = await send({ type: 'formRecipe' });
   const recipe = response && response.recipe;
+  const save = $('saveDefault');
   if (!recipe || !recipe.root) {
     $('recipe').textContent =
       'No form picked on this site yet: open the vacancy, click Apply, then “Pick the form”.';
+    save.disabled = true;
     return;
   }
   const pins = Object.keys(recipe.pins || {});
+  const origin = response.source === 'board' ? ' (this job board’s default)' : '';
   $('recipe').textContent =
-    `Form: ${recipe.root.selector}` +
+    `Form: ${recipe.root.selector}${origin}` +
     (pins.length ? `\nPins: ${pins.join(', ')}` : '\nNo pinned fields (the model chooses them).');
+  save.disabled = response.source !== 'host';
 }
 
 async function signIn() {
@@ -270,10 +280,25 @@ $('pick').addEventListener('click', () => pick('root', 'pick'));
 $('pickCover').addEventListener('click', () => pick('cover_letter', 'pickCover'));
 $('pickResume').addEventListener('click', () => pick('resume_file', 'pickResume'));
 $('populate').addEventListener('click', populate);
+/**
+ * Widen this host's pick to its whole job board.
+ *
+ * The Apply form and the two document fields are usually one shape per board, so picking them once
+ * and saving the default is what stops the operator re-picking on every host of it (Greenhouse's
+ * three hosts, Djinni's `/jobs` and dashboard, ...). It copies what this host already holds - it
+ * never invents a selector - so the button is disabled until something is picked here.
+ */
+$('saveDefault').addEventListener('click', async () => {
+  $('saveDefault').disabled = true;
+  const response = await send({ type: 'saveFormDefaults' });
+  if (!response.ok) return status(response.error, 'error');
+  await refreshRecipe();
+  status(`Saved as the default for the whole board (${response.board}).`, 'ok');
+});
 $('forget').addEventListener('click', async () => {
   await send({ type: 'clearFormRecipe' });
   await refreshRecipe();
-  status('This site’s form recipe was forgotten.', 'ok');
+  status('Forgot this site’s pick - and the board default it saved.', 'ok');
 });
 $('signout').addEventListener('click', async () => {
   await send({ type: 'signOut' });

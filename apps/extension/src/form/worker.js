@@ -11,11 +11,12 @@ import { mergePlan, neededDocuments, publicFields } from './plan.js';
  *
  * Three rules shape the flow:
  *
- * * the **card is resolved twice, in order**. The page's own vacancy id answers "was this vacancy
- *   scraped from this site?", and when that fails the page URL is matched against the cards'
- *   application URLs - the only way to reach a DOU/Djinni card whose Apply button opened the
- *   employer's own ATS form. Neither match means the page belongs to no card, and the flow stops
- *   rather than filling a form from a guess.
+ * * the **card is resolved twice, in order**. The id the page's own URL carries answers "was this
+ *   vacancy scraped from this site?" - read by the page's *site* (`vacancyIdFromUrl`, injected from
+ *   `sites/index.js`), so Djinni's `/jobs/<id>` and DOU's `/vacancies/<id>` both count. When that
+ *   fails the page URL is matched against the cards' application URLs, which is the only way to
+ *   reach a card whose Apply button opened the employer's own ATS form. Neither match means the page
+ *   belongs to no card, and the flow stops rather than filling a form from a guess.
  * * the **snapshot hash** is the cache key. The board stores a plan per `(job_id, hash)`, so
  *   re-filling the same rendered form costs no Gemini call, while a changed form re-drafts.
  * * the generated **documents never leave the browser**: only the plan travels through the queue,
@@ -25,7 +26,13 @@ const POLL_INTERVAL_MS = 2500;
 const POLL_DEADLINE_MS = 120000;
 const DEFAULT_GATEWAY = 'http://localhost:4321';
 
-export function createFormWorker({ settings, cardStatus, cardForUrl }) {
+export function createFormWorker({
+  settings,
+  cardStatus,
+  cardForUrl,
+  vacancyIdFromUrl,
+  boardKeyForUrl,
+}) {
   // -- progress --------------------------------------------------------------- //
 
   /**
@@ -60,16 +67,6 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     }
   }
 
-  /** The vacancy id in a job page's URL (`/jobs/850592-slug/`). */
-  function externalIdFromUrl(url) {
-    try {
-      const match = new URL(String(url || '')).pathname.match(/\/jobs\/(\d+)/);
-      return match ? match[1] : '';
-    } catch (error) {
-      return '';
-    }
-  }
-
   /** Talk to the page's form filler (`formfill.js`), a separate classic content script. */
   function formMessage(tabId, payload) {
     return new Promise((resolve) => {
@@ -94,40 +91,95 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     });
   }
 
-  async function recipes() {
-    const stored = await chrome.storage.local.get(['formRecipes']);
-    return stored.formRecipes && typeof stored.formRecipes === 'object' ? stored.formRecipes : {};
+  /** The job board a page belongs to - the registry's answer, or the host when we cannot ask. */
+  function boardKeyOf(url) {
+    return boardKeyForUrl ? boardKeyForUrl(url) : hostOf(url);
+  }
+
+  /** Both stores in one read: the per-host picks and the per-board defaults. */
+  async function formRecipes() {
+    const stored = await chrome.storage.local.get(['formRecipes', 'formDefaults']);
+    return {
+      hosts: stored.formRecipes && typeof stored.formRecipes === 'object' ? stored.formRecipes : {},
+      boards:
+        stored.formDefaults && typeof stored.formDefaults === 'object' ? stored.formDefaults : {},
+    };
   }
 
   /**
-   * Remember what the operator picked, per host.
+   * The recipe a page is filled with: **this host's own pick**, else its **job board's default**.
+   *
+   * The pick is per host because a board's hosts *usually* render one form and the ones that do not
+   * must still be able to differ; `saveFormDefaults` is how the operator says "these are the same"
+   * once, instead of picking on every host of the board. `source` says which of the two answered, so
+   * the popup can show a stale host pick still overriding a saved default.
+   */
+  async function recipeFor(tabUrl) {
+    const host = hostOf(tabUrl);
+    if (!host) return { recipe: null, source: '' };
+    const { hosts, boards } = await formRecipes();
+    if (hosts[host]) return { recipe: hosts[host], source: 'host' };
+    const key = boardKeyOf(tabUrl);
+    if (key && boards[key]) return { recipe: boards[key], source: 'board' };
+    return { recipe: null, source: '' };
+  }
+
+  /**
+   * Remember what the operator picked, per **host**.
    *
    * The root is the only thing the extension cannot guess - the two sites render the same idea in
    * completely different markup, and Djinni's form only appears after Apply - and the pins make the
-   * fields that must be exactly right independent of the model.
+   * fields that must be exactly right independent of the model. A pick here overrides the board
+   * default for this host only; *Save as default* is what widens it.
    */
   async function storeFormPick(kind, picked, tabUrl) {
     const host = hostOf(tabUrl);
     if (!host) return { ok: false, error: 'this page has no host' };
     if (!picked || !picked.selector) return { ok: false, error: 'nothing was picked' };
 
-    const all = await recipes();
-    const recipe = all[host] || { root: null, pins: {}, updatedAt: null };
+    const { hosts } = await formRecipes();
+    const recipe = hosts[host] || { root: null, pins: {}, updatedAt: null };
     if (kind === 'root') recipe.root = picked;
     else recipe.pins[kind] = picked.selector;
     recipe.updatedAt = new Date().toISOString();
-    all[host] = recipe;
-    await chrome.storage.local.set({ formRecipes: all });
-    return { ok: true, recipes: recipe };
+    hosts[host] = recipe;
+    await chrome.storage.local.set({ formRecipes: hosts });
+    return { ok: true, recipe };
   }
 
-  async function clearRecipe(tabUrl) {
+  /**
+   * Save this page's pick as its **job board's default** - the popup's *Save as default* button.
+   *
+   * A copy, not a guess: it takes the recipe this host already holds (the root and the two pins) and
+   * stores it under the board's key, so the board's other hosts - and any host nobody has picked on
+   * yet - are filled with the same selectors. It refuses when this host has nothing picked, and a
+   * later pick on one host still wins for that host (`recipeFor` asks the host first).
+   */
+  async function saveFormDefaults(tabUrl) {
     const host = hostOf(tabUrl);
-    const all = await recipes();
-    if (host && all[host]) {
-      delete all[host];
-      await chrome.storage.local.set({ formRecipes: all });
+    if (!host) return { ok: false, error: 'this page has no host' };
+    const key = boardKeyOf(tabUrl);
+    if (!key) return { ok: false, error: 'this page has no job board' };
+
+    const { hosts, boards } = await formRecipes();
+    const recipe = hosts[host];
+    if (!recipe || !recipe.root || !recipe.root.selector) {
+      return { ok: false, error: 'nothing picked on this page yet - pick the form first' };
     }
+
+    boards[key] = { ...recipe, updatedAt: new Date().toISOString() };
+    await chrome.storage.local.set({ formDefaults: boards });
+    return { ok: true, board: key, recipe: boards[key] };
+  }
+
+  /** Forget this host's pick *and* the board default it may have saved. */
+  async function clearRecipe(tabUrl) {
+    const {hosts, boards} = await formRecipes();
+    const host = hostOf(tabUrl);
+    const key = boardKeyOf(tabUrl);
+    if (host && hosts[host]) delete hosts[host];
+    if (key && boards[key]) delete boards[key];
+    await chrome.storage.local.set({ formRecipes: hosts, formDefaults: boards });
     return { ok: true };
   }
 
@@ -257,7 +309,7 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     const host = hostOf(url);
     if (!host) return { ok: false, error: 'no active tab' };
 
-    const recipe = (await recipes())[host];
+    const { recipe } = await recipeFor(url);
     if (!recipe || !recipe.root || !recipe.root.selector) {
       return {
         ok: false,
@@ -276,10 +328,11 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     }
 
     setPhase('board');
-    // Two ways to the same card, in this order: the page's own vacancy id (the vacancy was
-    // scraped *from* this site), or the page URL against the cards' application URLs - the only
-    // way to reach a card scraped on Djinni/DOU whose Apply button opened the employer's form.
-    const externalId = externalIdFromUrl(url);
+    // Two ways to the same card, in this order: the id the page's own URL carries, read by its
+    // *site* (Djinni `/jobs/<id>`, DOU `/vacancies/<id>`, ...) - "was this vacancy scraped from
+    // this site?" - or the page URL against the cards' application URLs, the only way to reach a
+    // card whose Apply button opened the employer's own ATS form.
+    const externalId = vacancyIdFromUrl ? vacancyIdFromUrl(url) : '';
     let jobId = '';
     let linkedBy = '';
     if (externalId) {
@@ -365,10 +418,10 @@ export function createFormWorker({ settings, cardStatus, cardForUrl }) {
     /** The popup's ticker: which step the flow is in, and since when. */
     phase: () => ({ ...phase }),
     storeFormPick,
-    recipes,
+    saveFormDefaults,
+    recipeFor,
     clearRecipe,
     hostOf,
     formMessage,
-    externalIdFromUrl,
   };
 }

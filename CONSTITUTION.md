@@ -526,7 +526,14 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     application URLs (`GET /api/vacancies/link`, invariant 28's `apply_url`) - the only way to
     reach a card scraped on Djinni/DOU whose Apply button opened the employer's form. Neither
     match stops the flow with "this page is not linked to a card yet" instead of filling a form
-    from the wrong vacancy.
+    from the wrong vacancy. **Which part of a page's URL is the id is the site's own business**
+    (`apps/extension/src/sites/<site>.js`'s `urlId`, read by `sites/index.js::vacancyIdFromUrl`):
+    Djinni writes it after `/jobs/`, DOU after `/vacancies/`. The flow used to hard-code `/jobs/`,
+    so every DOU page answered "no id" and fell through to the application-URL lookup - card
+    `375802` was unfillable from its own DOU page on 2026-10-07, and the two `jobs.dou.ua` rows in
+    `resume_board.apply_url` are the workaround that forced. The field is therefore **optional for a
+    card whose own posting is the page being filled**, and needed only when the Apply click leaves
+    the site.
 
 37. **The repo is LF-only.** `.gitattributes` (`* text=auto eol=lf`) stores *and*
     checks out every text file with LF - it overrides a system-level
