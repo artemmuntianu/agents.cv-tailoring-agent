@@ -18,6 +18,12 @@ imagePullSecrets: []
 # Lisbon must stay 07:30 across a DST change, which is what `timeZone` is for.
 schedule: "0,30 7-23 * * *"
 timeZone: Europe/Lisbon
+# A missed slot must still run: the cluster being off at a scheduled time (or a paused CronJob
+# controller) starts the intake as soon as it is back, as long as it is within this deadline.
+# Without it the controller drops the run silently once more than 100 slots were missed
+# (~50 h at every 30 min); the intake is idempotent, so a late run is harmless while a
+# silently missed day would not be.
+startingDeadlineSeconds: 86400
 # One run at a time: two scouts racing would both read the board before either inserts, and
 # while `upsert_job` makes that safe, the logs would be full of "someone got there first".
 concurrencyPolicy: Forbid

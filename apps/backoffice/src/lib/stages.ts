@@ -150,6 +150,16 @@ export function isStageId(value: unknown): value is StageId {
 }
 
 /**
+ * The column after `id` in board order, or `undefined` for the last one. The vacancy dialog's
+ * `Move to <next column>` button is the only caller: the funnel is walked one way, and the final
+ * column (`offer`) has nothing after it, so the button simply disappears there.
+ */
+export function nextStage(id: string): StageMeta | undefined {
+  const index = STAGES.findIndex((stage) => stage.id === id);
+  return index === -1 ? undefined : STAGES[index + 1];
+}
+
+/**
  * The `prepare` sub-state is derived from the worker's own `resumes.status` - the
  * board never writes that column, because it is the worker's claim/idempotency
  * state (`ACTIVE_STATUSES` in `apps/worker/utils/db.py`). Anything still in flight reads as

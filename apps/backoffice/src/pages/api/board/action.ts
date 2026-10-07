@@ -8,7 +8,7 @@ export const prerender = false;
 /**
  * POST /api/board/action - record an action **without** moving the card.
  *
- * The card's `➕ Add action` button opens the same dialog as a move (an Actor and a reason),
+ * The vacancy dialog's `➕ Add action` button opens the same dialog as a move (an Actor and a reason),
  * but nothing about the funnel changes: the column is read and written back untouched, one
  * `move` history row with `from_state = to_state = <column>` is written with the Action
  * catalogue upsert, and the vocabulary grows with whatever the operator typed.

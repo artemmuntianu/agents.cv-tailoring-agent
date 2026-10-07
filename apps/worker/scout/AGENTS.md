@@ -41,6 +41,11 @@ python -m scout --feeds "https://jobs.dou.ua/vacancies/feeds/?remote&category=Ar
 make scout-dry-run            # the dry run with DB_BACKEND/DATABASE_SSLMODE set
 ```
 
+The timer is the **CronJob**: `infra/charts/cv-tailoring-scout` schedules it and sets
+`startingDeadlineSeconds`, so a slot missed while the cluster was down (or a paused CronJob
+controller) runs as soon as the cluster is back instead of being skipped - the run is idempotent
+(board-scoped dedupe + `upsert_job`), so a late run is harmless.
+
 There is deliberately **no** root `scout.py`: a package and a module with the same name in one
 directory collide, and `import scout` would quietly resolve to the package while the script ran a
 different file. `python -m scout` is unambiguous (`__main__.py` -> `run.main`).

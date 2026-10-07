@@ -61,7 +61,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/processes.astro`, `src/components/ProcessesPage.tsx`, `src/components/ProcessRunTable.tsx` | `/processes` - the internal jobs' run log as a page (read-only, unpolled) |
 | `src/pages/api/board.ts` | `GET` the cards |
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
-| `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the card's `➕ Add action`): a `move` history row with `from_state = to_state` |
+| `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the vacancy dialog header's `➕ Add action`): a `move` history row with `from_state = to_state` |
 | `src/pages/api/board/interviews/index.ts`, `src/pages/api/board/interviews/[id].ts` | `POST` one interview · `PATCH`/`DELETE` one - the section's own record, plus one `resume_history` line and the card's clock per write (invariant 26) |
 | `src/pages/api/board/details.ts` | `POST` the card's own detail fields (recruiter, the two salaries, the channels, the application URL) - the whole set in one write, never a history row |
 | `src/pages/api/board/history/[id].ts` | `PATCH` one history line (date, actor, wording, kind, both states) · `DELETE` one - the audit trail's only corrective write, and it touches nothing else (invariant 29) |
@@ -397,6 +397,9 @@ to that page yet (a normal answer, not a 404).
   filter (reported 2026-10-01 on `brightfin/373897`).
 - **Cards move only by hand**, and only through the dialog: a drop opens
   `ReasonDialog`, `Cancel`/Escape changes nothing, `Proceed` POSTs actor + reason.
+  The vacancy dialog's header offers the same dialog as `Move to <next column>`
+  (`lib/stages.ts::nextStage`), pre-set to the column the funnel goes to; it is hidden on the
+  last column and on a refused card.
   The writers that are not the dialog are the **intake** - the batch route and the
   scout, which only ever *create* cards - and the 2026-09-26 one-off spreadsheet
   import, which wrote columns and timelines directly and is now deleted
@@ -421,7 +424,7 @@ to that page yet (a normal answer, not a 404).
   card can never move without a recorded reason. Entering **Interviewing** adds the first
   interview to that same transaction, so a card cannot claim the column without the interview
   the dialog collected (or the other way round).
-- **An action can be recorded without a move.** The card's `➕ Add action` opens the *same*
+- **An action can be recorded without a move.** The vacancy dialog header's `➕ Add action` opens the *same*
   dialog as a drop but POSTs to `/api/board/action`: `resume_board` keeps its `stage` and gets a
   fresh `updated_at`, and the history gets a `move` row with `from_state = to_state`. Own route
   on purpose - in Prepare a same-column move is a tailoring *retry*, so reusing

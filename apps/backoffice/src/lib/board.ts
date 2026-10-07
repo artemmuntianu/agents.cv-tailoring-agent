@@ -123,7 +123,7 @@ export function parseMoveRequest(body: unknown): ParseResult<MoveRequest> {
 }
 
 /**
- * Validate a `POST /api/board/action` body - the card's `➕ Add action` button.
+ * Validate a `POST /api/board/action` body - the vacancy dialog's `➕ Add action` button.
  *
  * Deliberately the Archive dialog's shape (actor + reason, **no column**): the route records
  * the action and leaves the card where it is, so there is no `to` to validate and nothing to

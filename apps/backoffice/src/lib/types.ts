@@ -203,7 +203,7 @@ export interface ArchiveRequest {
 }
 
 /**
- * What the card's `➕ Add action` button sends: an action is *recorded* without the card
+ * What the vacancy dialog's `➕ Add action` button sends: an action is *recorded* without the card
  * changing column. The API writes a `move` history row with `from_state = to_state`, which is
  * why this is the same actor + reason contract as a move - only the stage is untouched (and
  * nothing is queued, so an Add Action on a Prepare card is never a tailoring retry).

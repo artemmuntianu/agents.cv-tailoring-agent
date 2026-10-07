@@ -4,6 +4,7 @@ metadata:
   name: {{ include "cv-tailoring-worker.fullname" . }}
   labels:
     {{- include "cv-tailoring-worker.labels" . | nindent 4 }}
+    cv-tailoring.io/workload: worker
 spec:
   {{- if not .Values.keda.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -12,6 +13,15 @@ spec:
   selector:
     matchLabels:
       {{- include "cv-tailoring-worker.selectorLabels" . | nindent 6 }}
+      # A *distinct* selector: the four Deployments of the same image must not claim
+      # each other's pods. Without this key the worker's selector
+      # (`selectorLabels` alone) is a subset of the cover/apply/rerender pods' labels, so
+      # every KEDA HPA selects all four Deployments and refuses to scale
+      # (`ScalingActive=False / AmbiguousSelector`) - the tailoring consumer then never
+      # grows past `fallback.replicas` and the queue drains one job at a time.
+      # Deliberately not `app.kubernetes.io/component` - the chart's labels helper already
+      # sets that key, and a duplicated YAML key is invalid (kubeconform caught exactly that).
+      cv-tailoring.io/workload: worker
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -21,6 +31,7 @@ spec:
     metadata:
       labels:
         {{- include "cv-tailoring-worker.selectorLabels" . | nindent 8 }}
+        cv-tailoring.io/workload: worker
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

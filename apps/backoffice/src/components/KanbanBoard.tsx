@@ -12,8 +12,6 @@ interface KanbanBoardProps {
   onArchive: (jobId: string) => void;
   onRestore: (jobId: string) => void;
   onRemove: (jobId: string) => void;
-  /** The card's `➕ Add action` button: record a change without moving the card. */
-  onAddAction: (jobId: string) => void;
 }
 
 /**
@@ -34,7 +32,6 @@ export default function KanbanBoard({
   onArchive,
   onRestore,
   onRemove,
-  onAddAction,
 }: KanbanBoardProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hoverStage, setHoverStage] = useState<StageId | null>(null);
@@ -128,7 +125,6 @@ export default function KanbanBoard({
                   onArchive={onArchive}
                   onRestore={onRestore}
                   onRemove={onRemove}
-                  onAddAction={onAddAction}
                 />
               ))}
               {columnCards.length === 0 && (

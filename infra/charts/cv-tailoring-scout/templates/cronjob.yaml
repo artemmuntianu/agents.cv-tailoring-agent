@@ -9,6 +9,9 @@ spec:
   schedule: {{ .Values.schedule | quote }}
   # Wall-clock, not UTC: "07:30" has to mean 07:30 in the operator's day, DST included.
   timeZone: {{ .Values.timeZone | quote }}
+  # The missed-slot rule: a cluster that was off at a scheduled time still runs the intake as
+  # soon as it is back, as long as it is within this deadline (`values.yaml` says why).
+  startingDeadlineSeconds: {{ .Values.startingDeadlineSeconds }}
   concurrencyPolicy: {{ .Values.concurrencyPolicy | quote }}
   suspend: {{ .Values.suspend }}
   successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}

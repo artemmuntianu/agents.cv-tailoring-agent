@@ -89,6 +89,9 @@ kubectl create job --from=cronjob/cv-tailoring-cv-tailoring-scout scout-manual
 - **Nothing new arrives**: read the last job's log. `no feed answered` (exit 1) means the feeds are
   unreachable, *not* that the week is quiet - the scout refuses to report that as an empty result.
 - **Pause it**: `helm upgrade ... --set cv-tailoring-scout.suspend=true`.
+- **A missed slot still runs**: `startingDeadlineSeconds: 86400` means a slot skipped while the
+  cluster was off (or a paused CronJob controller) starts as soon as the cluster is back - the run
+  is idempotent, so a late run is harmless while a silently skipped day would not be.
 - **No Telegram messages**: the token and chat id live in the worker's Secret
   (`scripts/worker-secret.ps1` reads `SCOUT_TELEGRAM_TOKEN`/`_CHAT_ID` from `.env`);
   `SCOUT_NOTIFY=none` turns them off deliberately, and the cards still appear.

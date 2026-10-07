@@ -418,9 +418,6 @@ export default function App({ session }: AppProps) {
         onRemove={(jobId) =>
           setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null)
         }
-        onAddAction={(jobId) =>
-          setPendingAction(cards.find((card) => card.jobId === jobId) ?? null)
-        }
       />
 
     {pending && (
@@ -505,6 +502,18 @@ export default function App({ session }: AppProps) {
         onRemove={(jobId) => {
           setOpenId(null);
           setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
+        }}
+        onAddAction={(jobId) => {
+          // Recording an action never moves the card, but the dialog is still closed first - the
+          // ReasonDialog (z-30) then owns the screen, exactly as it does after Archive.
+          setOpenId(null);
+          setPendingAction(cards.find((card) => card.jobId === jobId) ?? null);
+        }}
+        onRequestMove={(card, to) => {
+          // The header's `Move to <next column>` reuses the board's own move dialog, so the
+          // Prepare warning, the interview collection and the reason all come for free.
+          setOpenId(null);
+          setPending({ card, to });
         }}
         onUploadDocx={uploadDocx}
         onAddInterview={addInterview}

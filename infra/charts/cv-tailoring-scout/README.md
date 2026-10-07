@@ -87,6 +87,7 @@ same property that makes `kubectl create job --from=cronjob/...` safe.
 `enabled` | `true` | renders nothing when false |
 `schedule` | `0,30 7-23 * * *` | wall-clock, with `timeZone: Europe/Lisbon` |
 `suspend` | `false` | pause the intake without deleting it |
+`startingDeadlineSeconds` | `86400` | a slot missed while the cluster was down runs as soon as it is back (the run is idempotent) |
 `startup.enabled` | `true` | if false (or `config.userId` empty) the hook Job renders not at all |
 `existingSecret` | `cv-tailoring-secrets` | needs `DATABASE_URL` + `SCOUT_TELEGRAM_TOKEN`/`_CHAT_ID` |
 `config.userId` | – | **required at runtime**: a provisioned `app_users.id`, or the preflight refuses to run |

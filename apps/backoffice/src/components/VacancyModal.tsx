@@ -18,6 +18,7 @@ import {
 import { formatInterviewAt, hasReachedInterviewing, sortInterviews } from '../lib/interviews';
 import {
   STAGES,
+  nextStage,
   refusalLabel,
   tailoringFromStatus,
   tailoringLabel,
@@ -31,6 +32,7 @@ import type {
   HistoryEntryRequest,
   Interview,
   InterviewRequest,
+  StageId,
 } from '../lib/types';
 import ChannelSelect from './ChannelSelect';
 import HistoryDialog from './HistoryDialog';
@@ -45,6 +47,17 @@ interface VacancyModalProps {
   onRestore?: (jobId: string) => void;
   /** Irreversible: the board confirms it in its own dialog. */
   onRemove?: (jobId: string) => void;
+  /**
+   * Record an action on the card **without** moving it - the header's `➕ Add action`. It opens
+   * the same dialog a move does, with no column change: an action is a history line, not a stage.
+   */
+  onAddAction?: (jobId: string) => void;
+  /**
+   * Move the card to the **next** column in the funnel - the header's `Move to <column>` button.
+   * It opens the same Actor + reason dialog a drag-drop does (and, entering Prepare, the same
+   * tailoring warning); only the target column is pre-set.
+   */
+  onRequestMove?: (card: BoardCard, to: StageId) => void;
   /**
    * Upload the deliverable the operator edited by hand (`POST /api/board/docx/<job_id>`).
    * Offered only for a card that has a tailored DOCX, and the render comes back through the
@@ -117,6 +130,8 @@ export default function VacancyModal({
   onArchive,
   onRestore,
   onRemove,
+  onAddAction,
+  onRequestMove,
   onUploadDocx,
   onAddInterview,
   onEditInterview,
@@ -279,6 +294,7 @@ export default function VacancyModal({
   }
 
   const stage = STAGES.find((item) => item.id === card.stage);
+  const next = nextStage(card.stage);
   const tailoring = tailoringFromStatus(card.status);
 
   return (
@@ -299,14 +315,36 @@ export default function VacancyModal({
               {card.company || 'unknown company'} · job_id {card.jobId}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* The card's own actions, reachable without a mouse. A drag-drop opens the same move
+                dialog, so the header's shortcut is simply the next column in the funnel. */}
+            {!card.archived && next && onRequestMove && (
+              <button
+                type="button"
+                onClick={() => onRequestMove(card, next.id)}
+                className="rounded-md border border-slate-300 px-2 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Move to {next.label}
+              </button>
+            )}
+            {!card.archived && onAddAction && (
+              <button
+                type="button"
+                onClick={() => onAddAction(card.jobId)}
+                className="rounded-md border border-slate-300 px-2 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                ➕ Add action
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
         </header>
 
         <div className="px-6 py-4">

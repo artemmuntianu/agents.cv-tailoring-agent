@@ -300,7 +300,7 @@ describe('entering Prepare is what requests tailoring', () => {
   });
 });
 
-describe('parseActionRequest (the card\u2019s Add action button)', () => {
+describe('parseActionRequest (the Add action button)', () => {
   const valid = { jobId: '374001-1', actor: 'Candidate', action: 'Recruiter called back' };
 
   it('accepts an actor and a reason, and trims the reason', () => {

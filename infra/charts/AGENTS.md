@@ -17,7 +17,7 @@ Read `CONSTITUTION.md` first (sections 2, 3 and 5).
 | `cv-tailoring-platform/templates/storage.yaml` | `cv-artifacts` PVC (`helm.sh/resource-policy: keep`) and the always-on `cv-files` pod that keeps `kubectl cp` working while the worker is at zero |
 | `cv-tailoring-platform/templates/definitions.yaml` | The queue topology (`resumes.generate`, `resumes.cover`, `applications.draft` and `resumes.rerender`, each with its own DLX/DLQ/binding, plus `vacancies.parse` and `applications.submit`) as a definitions Secret - reviewable in git, loaded by `rabbitmq.yaml` |
 | `cv-tailoring-platform/templates/rabbitmq-credentials.yaml` | The one Secret holding username/password/url, shared by the broker, the worker and KEDA |
-| `cv-tailoring-scout/` | The scheduled intake: a `CronJob` (`python -m scout`, the worker's image) that fetches the feeds, creates a card per new vacancy in Scraped and sends one Telegram message each. No KEDA, no broker, no volume - it shares the worker's Secret for `DATABASE_URL` and the bot token |
+| `cv-tailoring-scout/` | The scheduled intake: a `CronJob` (`python -m scout`, the worker's image) that fetches the feeds, creates a card per new vacancy in Scraped and sends one Telegram message each. No KEDA, no broker, no volume - it shares the worker's Secret for `DATABASE_URL` and the bot token. `startingDeadlineSeconds: 86400` catches up a slot missed while the cluster was down |
 | `cv-tailoring-archiver/` | The scheduled housekeeping: a `CronJob` (`python -m archiver`) that refuses the Applied cards nobody touched for `config.afterDays` days, in place, with the board's own archive invariants. `startingDeadlineSeconds: 86400` is what makes a slot missed while the cluster was down run as soon as it is back; same image, same Secret, no KEDA, no broker |
 | `cv-tailoring-worker/` | The worker pod group: Deployment, ScaledObject, TriggerAuthentication, ConfigMap, optional Secret/PVC, `helm test` probe - and three more workloads (`cover-deployment.yaml` + `cover-scaledobject.yaml` for `python cover.py` on `resumes.cover`, `apply-deployment.yaml` + `apply-scaledobject.yaml` for `python apply.py` on `applications.draft`, and `rerender-deployment.yaml` + `rerender-scaledobject.yaml` for `python rerender.py` on `resumes.rerender`), which share the image, the ConfigMap, the Secret and the artifact volume (the rerender one is the only consumer that *writes* artifacts) |
 | `cv-tailoring-worker/values.schema.json` | Type/enum guard for the values Helm must accept before anything renders |
@@ -53,6 +53,15 @@ Only KEDA comes from an upstream chart. The broker is ours, on the official
 - **Two different `keda:` keys on purpose**: the top-level one configures the KEDA
   **operator subchart**, `cv-tailoring-worker.keda` configures the worker's
   **ScaledObject**.
+- **Every worker workload carries a distinct `cv-tailoring.io/workload` label** (`worker`,
+  `cover`, `apply`, `rerender`) on its Deployment `labels`, `selector.matchLabels`, pod
+  `template` labels *and* its ScaledObject. The four Deployments share an image and the
+  `selectorLabels` helper, so a workload whose selector is a *subset* of the others' labels
+  makes every KEDA HPA match all four Deployments; the autoscaler then refuses to act
+  (`ScalingActive=False`, `AmbiguousSelector`) and pins that consumer at
+  `fallback.replicas`, draining its queue one job at a time - the "Tailoring In Progress
+  forever" symptom (2026-10-07). A selector is immutable, so changing it needs the
+  Deployment deleted and recreated (re-run `scripts/local-deploy.ps1`).
 - **Helm 4 needs `index .Values "cv-tailoring-worker"`** for the dashed key, and
   every value a template reads needs a default in the chart's `values.yaml` or
   `helm lint` dies with a nil pointer.

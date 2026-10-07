@@ -390,7 +390,7 @@ export async function fillCompany(jobId: string, company: string): Promise<void>
 }
 
 /**
- * Record an action **without** moving the card - the card's `➕ Add action` button.
+ * Record an action **without** moving the card - the vacancy dialog's `➕ Add action` button.
  *
  * The column is read and written back untouched (a card without a board row is seeded as
  * `scraped`, exactly like the column default), while `updated_at` moves: that is what makes an

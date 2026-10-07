@@ -286,7 +286,8 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     a different one would also make the claim insert a second row. "No feed answered" exits 1: that
     is not an empty week, and a CronJob has to be
     able to tell them apart. The declared queue `vacancies.parse` stays unused - the scout parses
-    in-process (D12).
+    in-process (D12). Its chart sets `startingDeadlineSeconds` (86400), so a slot missed while the
+    cluster was down runs as soon as it is back - the run is idempotent, so a late run is harmless.
 
     **A card's site is a property of its feed, not of the run.** There is no `SCOUT_SOURCE`: one
     module per site in `apps/worker/scout/parsers/` exports a `FeedSource` (slug, hosts, pure parser), the
@@ -693,3 +694,11 @@ Facts only a real install could reveal. All were fixed in the same change - keep
     (`RABBITMQ_HOST/PORT/VHOST` + the credentials from the broker Secret): those are
     injected in the Deployment only, so the probe used to compose `guest@localhost:5672`
     and always failed.
+10. **All four worker Deployments need a distinct `cv-tailoring.io/workload` selector
+    label.** The base worker's selector was left as the bare `selectorLabels` helper, which
+    is a *subset* of the cover/apply/rerender pods' labels, so each KEDA HPA matched all
+    four Deployments and refused to scale (`ScalingActive=False`, `AmbiguousSelector`). The
+    tailoring consumer stayed at `fallback.replicas` (1) while a 5-message backlog drained
+    one job at a time - which the operator saw as cards stuck in "Tailoring In Progress"
+    (2026-10-07). `spec.selector` is immutable, so the fix had to delete and recreate the
+    Deployment.

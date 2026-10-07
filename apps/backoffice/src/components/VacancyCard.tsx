@@ -15,8 +15,6 @@ interface VacancyCardProps {
   onRestore: (jobId: string) => void;
   /** Irreversible: the board asks for confirmation before calling this. */
   onRemove: (jobId: string) => void;
-  /** Record an action on the card **without** moving it (the Add Action dialog). */
-  onAddAction: (jobId: string) => void;
 }
 
 const MIRROR_HINT =
@@ -68,8 +66,8 @@ function ArtifactChip({
  * One card, in two visual states.
  *
  * *Active*: solid, the whole card is the drag handle, a click opens the modal, and
- * hovering (or tabbing into it) reveals `➕ Add action` and `⛔️ Archive` - the first records a
- * change *without* moving the card, which is the only way to log "recruiter called back".
+ * hovering (or tabbing into it) reveals `⛔️ Archive`. Recording an action *without* moving the
+ * card - the only way to log "recruiter called back" - lives in the vacancy dialog's header.
  *
  * *Refused* (the in-place soft delete): the same position in the same column, muted -
  * half opacity at rest, readable on hover, rose accent border, struck-through title, the
@@ -93,7 +91,6 @@ export default function VacancyCard({
   onArchive,
   onRestore,
   onRemove,
-  onAddAction,
 }: VacancyCardProps) {
   const lastAction = card.history[card.history.length - 1];
   const tailoring = tailoringFromStatus(card.status);
@@ -151,18 +148,6 @@ export default function VacancyCard({
           </>
         ) : (
           <>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onAddAction(card.jobId);
-              }}
-              aria-label={`Record an action on ${card.title || card.externalId} without moving it`}
-              title="Record an action without moving the card"
-              className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-700 hover:bg-slate-50"
-            >
-              ➕ Add action
-            </button>
             <button
               type="button"
               onClick={(event) => {
