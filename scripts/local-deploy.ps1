@@ -193,7 +193,23 @@ Step '8b. force the worker rollout'
 # rollout is forced here - and this is also what makes `-SkipBuild` mean "redeploy an existing
 # image". `rollout restart` follows the deployment's own rolling strategy, and the worker's SIGTERM
 # handler finishes the in-flight task before the pod goes.
-$workerDeployments = @('ai-agent-worker', 'ai-agent-worker-cover', 'ai-agent-worker-apply')
+#
+# The list is *derived* from the image rather than written out, because a written-out one is a trap
+# of its own: `ai-agent-worker-rerender` was missing from it until 2026-10-08, so that worker alone
+# kept the previous image through every deploy (its pod still showed the pre-deploy digest) while
+# this step reported success - the very silent-stale-code failure the step exists to prevent.
+$workerDeployments = @(
+    (Invoke-External 'kubectl' @(
+        'get', 'deploy', '-o',
+        "jsonpath={range .items[?(@.spec.template.spec.containers[0].image=='$Image')]}{.metadata.name}{'\n'}{end}"
+    )).Text -split "`r?`n" | Where-Object { $_.Trim() }
+)
+if (-not $workerDeployments.Count) {
+    Warn "no deployment runs an image called $Image - nothing to restart (check -Image)"
+    $workerDeployments = @(
+        'ai-agent-worker', 'ai-agent-worker-cover', 'ai-agent-worker-apply', 'ai-agent-worker-rerender'
+    )
+}
 $restart = Invoke-External 'kubectl' (@('rollout', 'restart') + @($workerDeployments | ForEach-Object { "deployment/$_" }))
 if ($restart.Code -ne 0) { Warn 'could not force the worker rollout - run: kubectl rollout restart deployment/ai-agent-worker' }
 else {
@@ -201,7 +217,7 @@ else {
         $status = Invoke-External 'kubectl' @('rollout', 'status', "deployment/$name", '--timeout=180s')
         if ($status.Code -ne 0) { Warn ("$name did not roll out cleanly: " + $status.Text) }
     }
-    Ok 'workers restarted on the current image'
+    Ok ('workers restarted on the current image: ' + ($workerDeployments -join ', '))
 }
 
 Step '9. status'
