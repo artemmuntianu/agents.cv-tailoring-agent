@@ -508,6 +508,13 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     duplicated slug or host at load. Nothing else in the extension names a site - `background.js`,
     `popup.js` and `indeed/sweep.js` all ask the registry, which mirrors
     `apps/worker/scout/sources.py` (one module per site, routed by host, validated at load) deliberately.
+    One exception exists, and it is read-only: the MyGreenhouse portal's **badge** script
+    (`apps/extension/src/mygreenhouse.js`) asks its status question with an explicit `source`
+    (`'greenhouse'`). `my.greenhouse.io` lists that slug's vacancies while deliberately not being a
+    host the `greenhouse` plugin claims, so a host-derived answer would be `other` and every badge
+    grey whatever the board held (2026-10-08). `cardStatus` honours a message's own `source` over the
+    tab's, the constant is pinned to the registry by `mygreenhouse.test.ts` (`siteForSlug`), and the
+    script scrapes nothing.
     The strategy is **data, not code**, and that is a constraint rather than a preference:
     `chrome.scripting.executeScript({ func })` serialises the injected function's *source*, so a reader
     cannot close over a module, and `args` are structured-cloned, so a function cannot be passed either.

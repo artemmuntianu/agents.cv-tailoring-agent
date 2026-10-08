@@ -59,6 +59,23 @@ notice a batch scrape, so they stop offering `Scrape` for cards the popup has ju
 Reload the extension on `chrome://extensions` after updating these files, then refresh the
 listing page (the buttons are injected at page load).
 
+## The badges on `my.greenhouse.io`
+
+Greenhouse's job-seeker portal (`my.greenhouse.io/jobs/search?…`) lists vacancies that live on the
+same Greenhouse boards you scrape, so each tile carries a read-only pill:
+
+- **Scraped** (green) - that vacancy is on your board under the `greenhouse` source, whatever state
+  it is in by now (queued, tailored, refused). Find it on the board to work with it.
+- **Not Scraped** (grey) - the board does not know it yet. Click the tile, then press **Scrape &
+  queue this page** in the popup: that opens the company's Greenhouse board, which is the page a
+  scraper can actually read (a board renders no listing cards, so there is no per-card button there).
+
+The badges are a status display and nothing else - there is deliberately no scrape action on the
+portal, because the tile's text is not the vacancy (the board page is). They refresh themselves when
+the list re-renders or when the popup queues something, and they show `Not Scraped` while you are
+signed out. Reload the extension once after updating: the manifest gained a host and a
+content-script entry.
+
 ## What it sends
 
 ```json
@@ -144,7 +161,9 @@ into a card's Application URL and populate from that page (the card is found by 
   (`djinni.co`, `jobs.dou.ua`/`dou.ua`, the three `greenhouse.io` boards, `*.indeed.com`, and the
   Teamtailor career host `careers.blackbird-lab.com`), which
   the per-card button needs in order to inject the scraper into the tab it was clicked in. Dropping
-  either one shows up as a button that answers `Retry scrape`.
+  either one shows up as a button that answers `Retry scrape`. The job-seeker portal
+  `my.greenhouse.io` is granted for the badge script alone - nothing is scraped there, and its host
+  is deliberately not one of the `greenhouse` plugin's boards.
 - **Greenhouse is read one job at a time.** Its boards have no listing cards - the job page itself
   *is* the vacancy - so **Scrape & queue this page** queues exactly that job; discovery across a
   whole board is the scheduled `scout` job's business. Two things on its apply form start out yours: the

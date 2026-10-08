@@ -132,7 +132,12 @@ async function cardStatus(message, tabUrl) {
 
   // The lookup is per site: "do I already have DOU 374708?" is a different question from
   // "do I already have djinni 374708?".
-  const source = sourceForUrl(tabUrl);
+  //
+  // A caller may name the source itself, and the MyGreenhouse badge does: its page lists *board*
+  // jobs but its own host is not one the registry claims, so the host-derived answer would be
+  // `other` and no badge would ever be green. Everything else omits `source` and keeps asking by
+  // host, exactly as before.
+  const source = String(message.source || '').trim() || sourceForUrl(tabUrl);
   const response = await fetch(
     `${gateway}/api/vacancies/status?external_ids=${encodeURIComponent(ids.join(','))}` +
       `&source=${encodeURIComponent(source)}`,

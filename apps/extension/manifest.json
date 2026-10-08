@@ -12,6 +12,7 @@
     "https://job-boards.eu.greenhouse.io/*",
     "https://job-boards.greenhouse.io/*",
     "https://boards.greenhouse.io/*",
+    "https://my.greenhouse.io/*",
     "https://careers.blackbird-lab.com/*",
     "https://*.indeed.com/*",
     "https://indeed.com/*",
@@ -40,6 +41,11 @@
     {
       "matches": ["https://*.indeed.com/*", "https://indeed.com/*"],
       "js": ["src/indeed.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://my.greenhouse.io/*"],
+      "js": ["src/mygreenhouse.js"],
       "run_at": "document_idle"
     }
   ],

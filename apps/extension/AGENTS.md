@@ -92,6 +92,45 @@ validated at load.
   board-wide feed is a parser module in `apps/worker/scout/parsers/` plus its URL in `SCOUT_FEEDS`, not a
   scraper here.
 
+## The MyGreenhouse portal (badges only)
+
+`https://my.greenhouse.io/jobs/search?…` is Greenhouse's **job-seeker** portal, not a company board:
+its tiles link out to the boards above, so every vacancy it lists is one of *those* boards' jobs. It
+gets a content script of its own - `src/mygreenhouse.js`, its own `content_scripts` entry - and that
+script does exactly one thing: it stamps each tile with a `Scraped` / `Not Scraped` pill.
+
+- **No scrape action, deliberately.** The tile's markup is not the vacancy (the text is on the board
+  page the link points at), so a scrape here would have to open that board first - which is what
+  clicking the tile already does, and where a scrape *is* possible: press the popup's **Scrape &
+  queue this page** there, because a Greenhouse board renders no cards for `inject.js` to sit a
+  button in (`greenhouse.js` is `buttons: 'none'`). A badge is the honest thing to put on a listing
+  you cannot read.
+- **...and therefore not the `inject.js`/`formfill.js` entry.** `inject.js` looks for
+  `div[id^="job-item-"]` cards and `formfill.js` for an application form; the portal renders neither,
+  so sharing their entry would put two observers on a page with nothing for them to find.
+- **The status question names its source.** `{ type: 'cardStatus', externalIds, source: 'greenhouse' }`
+  - the message `inject.js` sends, plus an explicit `source`. This is the one place outside the
+  registry that names a site (invariant 35), and it is forced: `cardStatus` otherwise derives the slug
+  from the *tab's host*, the portal's host is deliberately not one the `greenhouse` plugin claims
+  (those are the three boards an operator scrapes and fills on), so the derived answer would be
+  `other` - a different `resumes.source` space - and every badge would be grey whatever the board
+  held. `cardStatus` honours a message's own `source` over the tab's, and `mygreenhouse.test.ts`
+  asserts the constant resolves through `siteForSlug`, so a renamed slug fails the suite instead of
+  going quiet.
+- **The DOM contract** (verified against the live page 2026-10-08): a tile is
+  `div[data-provides="search-result"]`, and the vacancy is the first anchor inside it whose `href`
+  matches `/jobs/<board>/<numeric-id>` - that number is the board's own job id, i.e. the
+  `external_id` a board scrape of the same vacancy stores, which is the whole reason a badge is
+  possible. The pill is absolutely positioned at the tile's bottom-left (`bottom: 14px;
+  left: 16px`), clear of the site's own bell button (`absolute right-6 top-5`), and carries no
+  click handler. A tile whose link names no job simply gets none.
+- **Inertia re-renders the list** on every filter/pagination change, so a debounced
+  `MutationObserver` (250 ms - the strategy `inject.js` uses for htmx) re-scans, one scan at a time:
+  rendering a badge is itself a DOM mutation, and overlapping scans would each ask for the ids the
+  other is already asking about. The popup's `boardChanged` message clears the cached answers, so a
+  batch scrape is reflected without a reload. "Not signed in" is a normal state - the badges still
+  appear, as `Not Scraped`.
+
 ## Teamtailor career pages (the `job-page` strategy, filler only)
 
 An employer's own career site on Teamtailor (`careers.blackbird-lab.com` today) is the second half of
@@ -289,12 +328,13 @@ for `fetch` from a service worker without it).
 
 | Path | Owns |
 |---|---|
-| `manifest.json` | MV3 declaration: `activeTab` + `scripting` + `storage`, gateway host permission, popup, service worker, the `content_scripts` entry for the listing page. **Tracked source** (`.gitignore` negates `*.json` for it): a clone must load unpacked, and `apps/backoffice/src/lib/inject.test.ts` asserts `host_permissions` covers every `content_scripts` match - a manifest that is only on one machine fails that test on CI |
+| `manifest.json` | MV3 declaration: `activeTab` + `scripting` + `storage`, gateway host permission, popup, service worker, the `content_scripts` entries (the listing pages' buttons, Indeed's feed, the MyGreenhouse portal's badges). **Tracked source** (`.gitignore` negates `*.json` for it): a clone must load unpacked, and `apps/backoffice/src/lib/inject.test.ts` asserts `host_permissions` covers every `content_scripts` match - a manifest that is only on one machine fails that test on CI |
 | `src/extract.js` | `extractVacancies(root, options)` - the **one page reader**, which is why it is a single self-contained function. Takes a strategy (`options.plan`) and interprets its `kind`; the result echoes it in `mode` (`cards` \| `job-page` \| `pane` \| `none`) |
 | `src/sites/index.js` | The **registry**: routes a URL to a plugin, answers by slug, and validates the set at load (a duplicated slug or host is refused) |
 | `src/sites/plans.js` | The three **strategies** - `CARD_LIST`, `JOB_PAGE`, `PANE` - as selector data, because a plan crosses into the page and a function cannot |
 | `src/sites/<site>.js` | One **plugin** per site: slug + hosts + content-script behaviour + the strategy it binds to (`djinni`, `dou`, `greenhouse`, `indeed`, `teamtailor` - the last one for the filler alone) |
 | `src/inject.js` | The listing-page content script (classic): the per-card `Scrape`/`Scraped` buttons for the `cards` sites (Djinni/DOU, and Greenhouse's filler) |
+| `src/mygreenhouse.js` | The MyGreenhouse portal's content script (classic, its own `content_scripts` entry): the `Scraped`/`Not Scraped` **badges** on `my.greenhouse.io` tiles. Read-only - no scrape action, no scrape selectors of its own, and its one status message names the `greenhouse` source |
 | `src/indeed.js` | The Indeed content script (classic, its own `content_scripts` entry): the same buttons, but a click first selects the card and waits for the pane - the only shape where the text is not in the card. Also answers the sweep's two messages (`indeedCards`, `indeedSelect`) |
 | `src/indeed/sweep.js` | The whole-feed walk behind the popup's **Scrape & queue this page** on Indeed: select each card, read its pane, publish one batch. Runs in the worker (the popup cannot hold a 30-second loop) and knows no selector |
 | `src/formfill.js` | The form filler (a second `content_scripts` entry, also classic): the HITL picker, the deterministic annotator, the snapshot, the applier and the per-site adapters |
@@ -367,7 +407,9 @@ way the browser does, with `window.eval`).
   without a single request.
 - **Three messages**, all handled by `background.js`:
   `{ type: 'cardStatus', externalIds: [...] }` → `{ ok, gateway, known }` (one request per
-  page, through `GET /api/vacancies/status`, which is board-scoped);
+  page, through `GET /api/vacancies/status`, which is board-scoped; an optional `source` in the
+  message overrides the slug the sender's own host would name - the MyGreenhouse badge is the only
+  caller that sends one, and that section explains why);
   `{ type: 'scrapeCard', externalId }` → `{ ok, jobId, gateway, created, duplicates }`; and
   the incoming `{ type: 'boardChanged' }` - sent to every tab after the popup publishes a
   batch with `created > 0`, so the buttons stop offering `Scrape` for cards the popup just
@@ -398,6 +440,9 @@ cd apps/backoffice; npm test
 #   src/lib/sites.test.ts     <- the registry: routing, validate(), structured-cloneable plans, the
 #                                 manifest wiring and the board's labels (both pinned against it)
 #   src/lib/inject.test.ts    <- inject.js, window.eval, fixture djinni-card-footer.html
+#   src/lib/mygreenhouse.test.ts <- mygreenhouse.js (eval too), tiles inline: both badge states, the
+#                                 one-per-page `cardStatus` with its explicit `source`, and the
+#                                 re-scan after an Inertia list swap
 #   src/lib/indeed.test.ts    <- indeed.js, window.eval, fixture indeed-feed.html (the whole live
 #                                 feed: 12 cards + the one pane, so the select-then-wait rule, the
 #                                 refusal to scrape the wrong vacancy and the sweep's two messages
@@ -466,6 +511,10 @@ cd apps/backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browse
 
 ## Don't
 
+- Give `src/mygreenhouse.js` a scrape path, a `Scrape` button, or a copy of the scraping selectors:
+  the portal's tiles are links to the boards, where `inject.js` already offers the button, and the
+  tile's text is not the vacancy (the badge's explicit `source` is what keeps its read-only lookup
+  honest - the one exception invariant 35 records).
 - Add a build step, a bundler or a `package.json` to this directory.
 - Move the `fetch` back into the popup, or store credentials anywhere but
   `chrome.storage.local`.
