@@ -183,13 +183,19 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     different owner would make the claim insert a second row. That is how this was found live
     on 2026-09-26.
 18. **`resumes.pdf_url` / `docx_path` are storage paths, not URLs.** They are what
-    `apps/worker/utils/storage.LocalStorage.upload` returned (`/data/output/848944.pdf` in the
-    cluster), so nothing in a browser may link them: the board serves downloads from
+    `apps/worker/utils/storage.LocalStorage.upload` returned
+    (`/data/output/artemmuntianu-848944.pdf` in the cluster), so nothing in a browser may link them:
+    the board serves downloads from
     `GET /api/artifacts/<job_id>` (keyed by `job_id`, resolved against `ARTIFACTS_DIR`,
     traversal-refused) and reports "not on this machine" instead of a bare 404. **Both
     documents are served** (`?format=docx` included - the mirror used to copy only PDFs),
     and `fetchBoard` reports per-card `artifactAvailability`, so the UI labels an
     unmirrored document instead of offering a link that cannot resolve.
+    The name is `<candidate>-<vacancy>` since 2026-10-08: the stem comes from the `full_name`
+    candidate fact through `storage.artifact_stem`, which keeps lower-case ASCII alphanumerics only -
+    the board echoes the file name in a hand-built `content-disposition` header and Node refuses a
+    non-latin-1 one - and a card with no owner, no facts row or no name keeps the bare vacancy id, so
+    nothing already on the volume needed renaming.
     On a dev machine the board can also point straight at the volume: Docker Desktop keeps
     its PVs on the VM disk, which Windows reaches through WSL
     (`\\wsl$\<distro>\mnt\docker-desktop-disk\data\k8s-pvs\<pvc>\output`) -

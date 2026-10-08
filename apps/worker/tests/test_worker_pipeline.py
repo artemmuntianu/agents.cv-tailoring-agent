@@ -10,6 +10,7 @@ import docx
 import config
 import worker
 from tests.helpers import (
+    SAMPLE_CANDIDATE,
     SAMPLE_CV_DATA,
     fake_gemini,
     isolated_config,
@@ -43,7 +44,9 @@ def test_worker_processes_one_message_end_to_end():
             assert len(_files(queue, "processed")) == 1
             assert _files(queue, "retry") == []
 
-            # persist node uploaded both artifacts through the storage backend
+            # Persist uploaded both artifacts through the storage backend. This owner has no facts
+            # row, so the name is the vacancy id alone - the other half of that rule is
+            # `test_artifacts_are_named_after_the_candidate` below.
             assert os.path.exists(os.path.join(config.OUTPUT_DIR, "848944.pdf"))
             assert os.path.exists(os.path.join(config.OUTPUT_DIR, "848944.docx"))
 
@@ -56,6 +59,34 @@ def test_worker_processes_one_message_end_to_end():
 
             # per-job temp dirs are cleaned up
             assert not os.path.exists(os.path.join(config.TEMP_ROOT, "job-848944"))
+
+
+def test_artifacts_are_named_after_the_candidate():
+    """`artemmuntianu-848944.pdf`, not `848944.pdf`: a download says whose CV it is.
+
+    The name is the `full_name` candidate fact, and the very same value reaches the file name the
+    board serves (`resumes.pdf_url` / `docx_path` are storage paths - `CONSTITUTION.md` invariant 18),
+    so this is the one place the two spellings could drift apart.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            seed_candidate("user-1", {**SAMPLE_CANDIDATE, "full_name": "Artem Muntianu"})
+            payload = sample_task(user_id="user-1", include_cv_data=True)
+
+            with fake_gemini([(SAMPLE_CV_DATA["summary"], TAILORED_SUMMARY)]):
+                result = worker.handle_delivery(Delivery(payload=payload))
+
+            assert result.outcome == Outcome.ACK
+            assert os.path.exists(
+                os.path.join(config.OUTPUT_DIR, "artemmuntianu-848944.pdf")
+            )
+            assert os.path.exists(
+                os.path.join(config.OUTPUT_DIR, "artemmuntianu-848944.docx")
+            )
+
+            job = db_module.get_db().get_job("job-848944")
+            assert job["pdf_url"].endswith("artemmuntianu-848944.pdf")
+            assert job["docx_path"].endswith("artemmuntianu-848944.docx")
 
 
 def test_duplicate_message_is_acked_without_regenerating():

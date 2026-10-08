@@ -345,8 +345,9 @@ to that page yet (a normal answer, not a 404).
 ## Artifact links
 
 - **`resumes.pdf_url` / `resumes.docx_path` are storage paths, not URLs**
-  (`apps/worker/utils/storage.LocalStorage.upload` returns `/data/output/848944.pdf` in the
-  cluster). Linking one from a browser resolves it against the board's own origin and
+  (`apps/worker/utils/storage.LocalStorage.upload` returns `/data/output/artemmuntianu-848944.pdf`
+  in the cluster, named `<candidate>-<vacancy>`). Linking one from a browser resolves it against the
+  board's own origin and
   404s - that was a real bug. Every link in the UI goes through
   `artifactUrl(jobId)` (`src/lib/artifact-link.ts`, no node builtins, safe in islands).
 - `GET /api/artifacts/<job_id>[?format=docx]` (`src/pages/api/artifacts/[jobId].ts`)

@@ -5,7 +5,7 @@ a PersistentVolumeClaim - inside Kubernetes):
 
     ARTIFACTS_DIR/cv_data.json     structured CV model
     ARTIFACTS_DIR/input/cv.docx    master CV (plus jd_*.txt for CLI batches)
-    ARTIFACTS_DIR/output/*.pdf     tailored results (+ .docx)
+    ARTIFACTS_DIR/output/*.pdf     tailored results, named `<candidate>-<vacancy>.pdf` (+ .docx)
 
 `prepare_task()` materialises the inputs for one queue message, so the rest of
 the pipeline only ever sees local paths.
@@ -45,6 +45,34 @@ def _safe_component(value, fallback):
         for character in str(value or "")
     ).strip("_")
     return cleaned or fallback
+
+
+# A candidate's name is data a human types; a file name needs only enough of it to say whose CV this
+# is, and every filesystem in play caps a single component far below this.
+MAX_STEM_CHARS = 40
+
+
+def artifact_stem(name, external_id):
+    """`Artem Muntianu` + `852417` -> `artemmuntianu-852417`; an unusable name -> `852417`.
+
+    The stem is `<candidate>-<vacancy>`: the person says whose CV this is, the id says which vacancy
+    it was tailored for, and either half alone is ambiguous (`852417.pdf` was the old name; two
+    candidates would collide on a name only).
+
+    Lower case, ASCII letters and digits only, and that is a correctness rule rather than a
+    preference: the stem becomes a file name on the artifact volume *and* travels back to the
+    operator as the file name of a `content-disposition` header the board builds by hand. Node
+    refuses a header whose characters are not latin-1 (verified: a Cyrillic name raises
+    `Cannot convert argument to a ByteString`), so a name in another script - or one carrying
+    punctuation or an accent - keeps the vacancy id as the whole stem instead of breaking the
+    download.
+    """
+    slug = "".join(
+        character
+        for character in str(name or "").lower()
+        if character.isascii() and character.isalnum()
+    )[:MAX_STEM_CHARS]
+    return f"{slug}-{external_id}" if slug else str(external_id)
 
 
 class LocalStorage:
@@ -127,8 +155,16 @@ def reset_storage_cache():
     _STORAGE = None
 
 
-def output_key_for(task, suffix):
-    """Canonical artifact key; flattened to a file name when stored locally."""
+def output_key_for(task, suffix, name=""):
+    """Canonical artifact key; flattened to a file name when stored locally.
+
+    `name` is the candidate's own name (the `full_name` candidate fact, read by the node that
+    uploads), which is what turns a download from `852417.pdf` into `artemmuntianu-852417.pdf`: the
+    operator downloads these files, edits one and uploads it back, so they have to say whose CV they
+    are. It stays optional deliberately - a card with no owner, an owner without a facts row, or a
+    row without a name keeps the id-only name every artifact had before, so nothing already on the
+    volume has to be renamed.
+    """
     external_id = _safe_component(getattr(task, "external_id", "cv"), "cv")
     user_id = _safe_component(getattr(task, "user_id", None) or "local", "local")
-    return f"{config.OUTPUT_KEY_PREFIX}/{user_id}/{external_id}{suffix}"
+    return f"{config.OUTPUT_KEY_PREFIX}/{user_id}/{artifact_stem(name, external_id)}{suffix}"

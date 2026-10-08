@@ -52,6 +52,18 @@ def test_a_standing_answer_gets_its_own_longer_cap():
     assert candidate_module.MAX_ANSWER_CHARS > candidate_module.MAX_VALUE_CHARS
 
 
+def test_full_name_is_the_one_fact_an_artifact_name_is_built_from():
+    """The name that reaches a file name, or `''` - never an error (`utils/storage.artifact_stem`)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            store = db_module.get_db()
+            assert candidate_module.full_name(store, "nobody") == ""
+            assert candidate_module.full_name(store, None) == ""
+
+            seed_candidate("user-1", {**SAMPLE_CANDIDATE, "full_name": "  Artem Muntianu  "})
+            assert candidate_module.full_name(store, "user-1") == "Artem Muntianu"
+
+
 def test_a_missing_row_or_user_is_an_empty_block_never_an_error():
     with tempfile.TemporaryDirectory() as tmp:
         with isolated_config(tmp):

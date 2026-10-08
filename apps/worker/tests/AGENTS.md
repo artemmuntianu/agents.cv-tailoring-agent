@@ -14,7 +14,8 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 |---|---|
 | `conftest.py` | Puts `apps/worker/` (the package root) on `sys.path` so pytest runs from the repo root |
 | `helpers.py` | Fixture-free harness: `isolated_config`, `fake_gemini`, `reset_caches`, sample CV/JD builders |
-| `test_candidate_facts.py` | The candidate-facts block: one renderer for the facts + standing answers, the two caps (`MAX_VALUE_CHARS` / `MAX_ANSWER_CHARS`), both stored shapes, and a missing row/user as an empty block rather than an error |
+| `test_artifact_name.py` | The artifact's own file name: `<candidate>-<vacancy>` (`artemmuntianu-852417.pdf`), the slug rule (ASCII-only, because the board's hand-built `content-disposition` header refuses anything else), a name that cannot be carried falling back to the vacancy id, the old name when there is no name at all, a "name" shaped like a path staying one component, and the cap |
+| `test_candidate_facts.py` | The candidate-facts block: one renderer for the facts + standing answers, the two caps (`MAX_VALUE_CHARS` / `MAX_ANSWER_CHARS`), both stored shapes, a missing row/user as an empty block rather than an error, and `full_name` (the fact an artifact name is built from) |
 | `test_contracts.py` | `ResumeTaskMessage` defaults, the `job_id` shape guard, `key()`, `to_job_row()`, `new_job_id()` |
 | `test_cover_letter.py` | The letter prompt (only what the CV and the candidate facts state), the digest (projects deliberately excluded), and `cover.handle_delivery`: written / duplicate / quota-deferred / dead-lettered, plus the two queues never sharing storage |
 | `test_cv_replacements.py` | The rules a replacement must satisfy: concatenated label+value splitting, misaligned/duplicate/no-op dropping, and the read-only blocks (PROFESSIONAL EXPERIENCE and the projects block - only the title, the summary and the skills are ever targeted) |
@@ -29,12 +30,13 @@ Read `CONSTITUTION.md` first (section 7 is the verification contract).
 | `test_process_runs.py` | The run ledger: a run is always closed (a `return` inside the block, a crash -> `failed` and the error propagates), `--dry-run` records nothing, a store that refuses to open a row is not fatal, and the next run retires a killed one as `aborted` |
 | `test_archiver.py` | The inactivity sweep, hermetically with an injected `FakeBoard`: which columns/window/actor/reason reach the query, a partial sweep's exit code, `--dry-run` writes nothing, the JSON backend refuses to run, and a typo in the config fails the run loudly |
 | `test_retry.py` | `_is_retryable`, daily-quota detection, headless `RetryLater`, backoff |
-| `test_worker_pipeline.py` | End-to-end `worker.handle_delivery` / `worker.main --once`: happy path, duplicate, DLQ, master-CV drift, quota deferral, attempt ceiling |
+| `test_worker_pipeline.py` | End-to-end `worker.handle_delivery` / `worker.main --once`: happy path, duplicate, DLQ, master-CV drift, quota deferral, attempt ceiling, and the artifacts named after the candidate (`artemmuntianu-848944.pdf`) instead of the vacancy id alone |
+| `test_rerender.py` | The *Update docx* worker: the uploaded bytes become the deliverable in place and the PDF follows, the candidate's name survives that re-render, a redelivery costs nothing, a second upload renders again, and a broken row is refused instead of retried forever |
 
-Expected result where `TEST_DATABASE_URL` is unset (2026-09-29): **152 collected, 124 passed,
-28 skipped**, and the backoffice suite is **250 passed / 24 files** (`npm test`). The superseded
-counts (150/122/28 and 250/24, 2026-09-29; 132/104/28 and 213/21, 2026-09-29; 109/82/27 and
-156/15, 2026-09-27; 45/39/6, 2026-09-19) are history.
+Expected result where `TEST_DATABASE_URL` is unset (2026-10-08): **192 collected, 164 passed,
+28 skipped**, and the backoffice suite is **358 passed / 33 files** (`npm test`). The superseded
+counts (152/124/28 and 250/24, 2026-09-29; 150/122/28 and 250/24, 2026-09-29; 132/104/28 and 213/21,
+2026-09-29; 109/82/27 and 156/15, 2026-09-27; 45/39/6, 2026-09-19) are history.
 
 ## Commands
 

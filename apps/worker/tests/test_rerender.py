@@ -11,7 +11,7 @@ import tempfile
 
 import rerender as rerender_worker
 from agent.contracts import RerenderMessage
-from tests.helpers import isolated_config
+from tests.helpers import SAMPLE_CANDIDATE, isolated_config, seed_candidate
 from utils import db as db_module
 from utils.messaging import Delivery, Outcome, get_queue, rerender_queue_spec
 
@@ -93,6 +93,28 @@ def test_an_uploaded_docx_becomes_the_deliverable_and_the_pdf_follows(monkeypatc
                 store.get_docx_update("rerender-1")["status"]
                 == rerender_worker.RERENDER_COMPLETED
             )
+
+
+def test_a_rerender_keeps_the_candidate_name_on_the_deliverable(monkeypatch):
+    """The second call site of the same name: a re-render must not rename the file back.
+
+    The uploaded DOCX replaces the artifact *in place*, so it is written under the same key the
+    tailoring pipeline used - which now means the same `<candidate>-<vacancy>` stem.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with isolated_config(tmp):
+            store = db_module.get_db()
+            store.upsert_job(job_row())
+            seed_candidate("u-1", {**SAMPLE_CANDIDATE, "full_name": "Artem Muntianu"})
+            store_upload()
+            fake_render(monkeypatch)
+
+            assert rerender_worker.handle_delivery(delivery()).outcome == Outcome.ACK
+
+            row = store.get_job("rerender-1")
+            assert row["docx_path"].endswith("artemmuntianu-900123.docx")
+            assert row["pdf_url"].endswith("artemmuntianu-900123.pdf")
+            assert os.path.exists(row["pdf_url"])
 
 
 def test_a_redelivery_of_an_already_rendered_upload_costs_nothing(monkeypatch):

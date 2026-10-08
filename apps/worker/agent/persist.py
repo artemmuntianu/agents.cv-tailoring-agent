@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from agent.contracts import JobStatus
 from agent.job_log import job_logger, set_status
 from agent.state import State
+from utils import candidate as candidate_module
+from utils import db as db_module
 from utils import storage as storage_module
 from utils.logging_setup import get_logger
 
@@ -39,14 +41,17 @@ def persist(state: State) -> State:
             external_id=state.get("external_id") or "cv",
         )
         storage = storage_module.get_storage()
+        # Whose CV this is, for the artifact name (`artemmuntianu-852417.pdf`), read here because this
+        # is the only node that names one.
+        name = candidate_module.full_name(db_module.get_db(), task.user_id)
         pdf_path = state.get("pdf_path")
         if pdf_path and os.path.exists(pdf_path):
             pdf_url = storage.upload(
-                pdf_path, storage_module.output_key_for(task, ".pdf")
+                pdf_path, storage_module.output_key_for(task, ".pdf", name)
             )
         if state.get("output_path") and os.path.exists(state["output_path"]):
             docx_url = storage.upload(
-                state["output_path"], storage_module.output_key_for(task, ".docx")
+                state["output_path"], storage_module.output_key_for(task, ".docx", name)
             )
 
     duration_ms = None

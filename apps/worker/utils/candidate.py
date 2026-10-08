@@ -104,6 +104,17 @@ def load(store, user_id) -> dict:
     return facts
 
 
+def full_name(store, user_id) -> str:
+    """The candidate's own name - the one fact an *artifact name* is built from.
+
+    Pure like everything here: the store is handed in. This is what makes a download read
+    `artemmuntianu-852417.pdf` instead of `852417.pdf` (`utils/storage.artifact_stem` squeezes it into
+    a slug), and `load()` already answers `{}` for a missing row or an unreachable store, so no name
+    is `''` rather than an error - the artifact then keeps the vacancy id.
+    """
+    return str(load(store, user_id).get("full_name") or "").strip()
+
+
 def digest(candidate) -> str:
     """The candidate block of every prompt: one labelled line per fact, the standing answers last.
 

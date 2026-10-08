@@ -42,6 +42,7 @@ from pydantic import ValidationError
 
 import config
 from agent.contracts import RerenderMessage
+from utils import candidate as candidate_module
 from utils import db as db_module
 from utils import renderer as renderer_module
 from utils import storage as storage_module
@@ -182,12 +183,15 @@ def handle_delivery(delivery) -> HandlerResult:
     task = SimpleNamespace(
         job_id=request.job_id, user_id=row.get("user_id"), external_id=external_id
     )
+    # The same name the tailoring pipeline put on this deliverable (`artemmuntianu-852417.pdf`): a
+    # re-render replaces the artifact *in place*, so it must not rename it back to the vacancy id.
+    name = candidate_module.full_name(db_module.get_db(), row.get("user_id"))
     try:
         os.makedirs(workdir, exist_ok=True)
         with open(local_docx, "wb") as handle:
             handle.write(content)
         docx_path = storage_module.get_storage().upload(
-            local_docx, storage_module.output_key_for(task, ".docx")
+            local_docx, storage_module.output_key_for(task, ".docx", name)
         )
         pdf_path = renderer_module.convert_docx_to_pdf(
             local_docx,
@@ -195,7 +199,7 @@ def handle_delivery(delivery) -> HandlerResult:
             profile_dir=os.path.join(workdir, "lo-profile"),
         )
         pdf_url = storage_module.get_storage().upload(
-            pdf_path, storage_module.output_key_for(task, ".pdf")
+            pdf_path, storage_module.output_key_for(task, ".pdf", name)
         )
     except Exception as exc:  # noqa: BLE001
         _cleanup(workdir)
