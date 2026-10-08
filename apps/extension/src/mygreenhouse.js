@@ -102,7 +102,7 @@
       pointer-events: none;
       position: absolute;
       bottom: 14px;
-      left: 16px;
+      right: 16px;
       z-index: 10;
     }
     .cvt-gh-badge--scraped {
