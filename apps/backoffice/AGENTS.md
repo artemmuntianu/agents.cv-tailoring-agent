@@ -29,8 +29,9 @@ node scripts/user.mjs add --email me@example.com --password=secret --name=Me --a
 npm run dev               # http://localhost:4321 -> sign in
 
 npm test           # vitest: auth, board + archive, filters, actions, interviews, details + the
-                   # application URL, history lines, run log, ingest, artifacts, scraper and the
-                   # form filler (jsdom), and the filler's page->card resolution (fake chrome/fetch)
+                   # application URL, history lines, run log, ingest, the manual add, artifacts,
+                   # scraper and the form filler (jsdom), and the filler's page->card resolution
+                   # (fake chrome/fetch)
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -59,6 +60,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/403.astro` | Where a non-admin who asks for `/admin` lands |
 | `src/pages/index.astro` | The board page (the shell + `App`); passes the session name/email down |
 | `src/pages/processes.astro`, `src/components/ProcessesPage.tsx`, `src/components/ProcessRunTable.tsx` | `/processes` - the internal jobs' run log as a page (read-only, unpolled) |
+| `src/pages/new-vacancy.astro`, `src/components/NewVacancyPage.tsx` | `/new-vacancy` - **the manual intake**: a page that posts one hand-typed vacancy to the scrape gateway, so it lands in Scraped exactly like a scraped one (`lib/manual.ts`) |
 | `src/pages/api/board.ts` | `GET` the cards |
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
 | `src/pages/api/board/action.ts` | `POST` an action **without** moving the card (the vacancy dialog header's `➕ Add action`): a `move` history row with `from_state = to_state` |
@@ -80,6 +82,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/queue.ts` | amqplib publisher; mirrors the Python queue topology |
 | `src/lib/vacancies.ts` | Pure batch validation + `ResumeTaskMessage` builder |
 | `src/lib/ingest.ts` | Pure ingest decision: new card / duplicate (+ the `submitted` status) |
+| `src/lib/manual.ts` | The manual-add contract: the required fields and their caps, the site combobox's suggestions (`SOURCE_SUGGESTIONS`) and the vacancy id derived from the posting URL |
 | `src/lib/artifacts.ts` | Server-only artifact resolution (root from `ARTIFACTS_DIR`/`OUTPUT_DIR`, traversal-refused) |
 | `src/lib/artifact-link.ts` | Isomorphic `/api/artifacts/...` link builder for the React islands |
 | `src/lib/db.ts` | Server-only pg pool; board reads, one transaction per move, the ingest rows, the interviews, the history corrections, the recorded action, the process-run read and the one worker column the board fills (a company the scrape left empty) |
@@ -90,14 +93,14 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/interviewAgenda.ts` | The card face's one interview line: the relative stamp (`tomorrow, Fri 11:00 AM` · `2 days ago, Fri 11:00 AM` · `Sep 24, Wed 1:00 AM` past `RELATIVE_DAYS`), the soonest/latest call and the past calls still missing a result |
 | `src/lib/details.ts` | The card's detail fields: the six communication channels, the application URL, the draft/dirty helpers and the details parser |
 | `src/lib/history.ts` | The History section: the four kinds, the states each kind may carry, the per-kind fallback transition, the edit parser and the draft helpers |
-| `src/lib/applyUrl.ts` | The application URL: canonicalisation (`normalizeApplyUrl`), the Details field's parser and the `?url=` lookup's query parser - shared by the form that writes it and the route that matches a page against it |
+| `src/lib/applyUrl.ts` | The application URL: canonicalisation (`normalizeApplyUrl` - host lower-cased, fragment and tracking params dropped, an identity query such as `?gh_jid=…` kept), the Details field's parser and the `?url=` lookup's query parser - shared by the form that writes it and the route that matches a page against it |
 | `src/lib/processes.ts` | The Processes page's vocabulary: process labels and hints, run status chips, one-line run summaries, durations, the trigger label |
 | `src/lib/cardMeta.ts` | The card face's reading line: the site slug -> display name, and the change stamp's recency rule (`today` / `yesterday` / `N days ago` up to 9 days, then the plain date) |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
 | `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the deliverable's five states) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
-| `src/pages/sources.astro`, `src/components/SourcesPage.tsx`, `src/pages/api/sources.ts` | The **Sources of truth** page (`/sources`): *what a generated CV or cover letter is built from* - the master CV model (`cv_data.json`, rendered as the sections the prompt and the document share), the master document (`input/cv.docx`) and the model rotation state (`model_state.json`) read through the artifact mirror, plus the operator's candidate facts row (`application_profile`, sanitized exactly as `apps/worker/utils/candidate.py` does). Read-only: `src/lib/sources.ts` resolves the paths from `artifacts.ts`'s root, reports a file this machine does not have as **absent with its path** (never as empty), and never writes |
+| `src/pages/sources.astro`, `src/components/SourcesPage.tsx`, `src/pages/api/sources.ts` | The **Sources of truth** page (`/sources`): *what a generated CV or cover letter is built from* - the master CV model (`cv_data.json`, rendered as the sections the prompt and the document share), the master document (`input/cv.docx`) and the model rotation state (`model_state.json`) read through the artifact mirror, plus the operator's candidate facts row (`application_profile`, sanitized exactly as `apps/worker/utils/candidate.py` does). Read-only: `src/lib/sources.ts` resolves the paths from `artifacts.ts`'s root, reports a file this machine does not have as **absent with its path** (never as empty), and never writes a *file*: its one write is the candidate facts (`CandidateFactsEditor` -> `PUT /api/profile`, the row an application form is filled from), because that is operator data in Postgres rather than an artifact on the volume |
 | `src/lib/missing.ts` | The *Missing fields* section: which card fields the scrape left empty, the request fragment they become, and the fill-only company rule (`resolveCompany`) |
 | `src/pages/vacancy/[jobId].astro`, `src/components/VacancyTextPage.tsx` | The **parsed vacancy text** (`/vacancy/<job_id>`), opened from a card's *Parsed vacancy text* button: `resumes.description_raw` verbatim with the site, id, posting link, board state and its size. Read-only |
 | `src/pages/cover/[jobId].astro`, `src/components/CoverLetterPage.tsx` | The **cover letter** (`/cover/<job_id>`), opened from a card's *Cover letter* link: the text an application sends, its state/model/when, and the *Generate*/*Regenerate* button - the letter's only writer. The card keeps the state as that link's label |
@@ -189,6 +192,11 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
   letter** (`lib/coverRequest.ts`, best effort: it never rolls the move back and never replaces a
   letter that is already there) - one drop sets up the whole application kit, and the response's
   the whole application kit, and the response's `note` says what happened to each half.
+- **The same route is the manual intake.** `/new-vacancy` posts one hand-typed vacancy to it - the
+  body built by `lib/manual.ts`, with the vacancy id derived from the posting URL - so a card
+  nobody scraped is validated, de-duplicated and filed by *this* code rather than by a second
+  ingest that would drift from it. The page then writes the optional application URL through
+  `POST /api/board/details`, the card's own route, for the same reason.
 - **A move can fill a field the scrape left empty** - the dialog's *Missing fields* section
   (`lib/missing.ts`). The trigger today is `resumes.company`: a listing that hides the employer
   comes back blank, and both the tailoring prompt and the cover letter read that column. The route
@@ -285,7 +293,8 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
   the cluster - the shared Postgres is the only place both can see. `PUT` **merges**
   `standing_answers`, so a partial caller (one whose form shows the facts but not the question/answer
   set) cannot wipe it (send `{}` to clear it deliberately); the extension no longer calls this route -
-  its *Candidate facts* editor was removed 2026-10-03. The same row grounds the tailoring and
+  its *Candidate facts* editor was removed 2026-10-03, and the facts are edited on `/sources`
+  (`CandidateFactsEditor.tsx`) instead. The same row grounds the tailoring and
   cover-letter prompts as well (`CONSTITUTION.md` invariants 25/30/31), and the row a prompt reads is
   the **card owner's**.
 * `GET /api/cover/<job_id>` serves the generated letter to the extension, which pastes it into a
@@ -324,8 +333,9 @@ to that page yet (a normal answer, not a 404).
   find it. The connection is the card's own **application URL** (invariant 28).
 - Both sides of the comparison are canonicalised by `lib/applyUrl.ts::normalizeApplyUrl`, the
   same function the Details form stores with, so a `?gh_src=…` tracking tail or a trailing slash
-  does not decide the match. The URL is the whole query - nothing else is matched, and a page
-  with no link gets no card.
+  does not decide the match - while an **identity** parameter does, which is what keeps two
+  postings on one board path apart (`…/job-postings?gh_jid=7822098003`, 2026-10-08). The URL is
+  the whole query - nothing else is matched, and a page with no link gets no card.
 - The read is `findCardByApplyUrl`: **board-scoped** and newest-first, like the status lookup
   (any account's card is a card the operator can see; when two cards were linked to the same
   posting the most recently touched one wins). `archived` travels with the answer so the applier
@@ -515,10 +525,11 @@ to that page yet (a normal answer, not a 404).
 - **Every page wears the same chrome** (`AppShell`): the `NavBar` panel, a header with the page's
   title, its one-line subtitle and the page's own controls, and a content region that is what
   scrolls (the viewport is fixed, so the panel and the header stay put on a long run log). `/`
-  (the board), `/processes` (the run log) and `/admin` (the vocabularies) are three routes on that
-  one shell - which is also why sign-out has a single implementation.
-- **The nav panel folds to its icons.** The `«` toggle collapses `NavBar` to the four icons
-  (Board, Vocabularies, Processes, Sign out) and hides the words, the pipeline counts and the
+  (the board), `/new-vacancy` (the manual intake), `/processes` (the run log) and `/admin` (the
+  vocabularies) are routes on that one shell - which is also why sign-out has a single
+  implementation.
+- **The nav panel folds to its icons.** The `«` toggle collapses `NavBar` to its icons
+  (Board, New vacancy, Vocabularies, Processes, Sign out) and hides the words, the pipeline counts and the
   roadmap placeholders; the choice lives in `localStorage` under `cvt.nav.collapsed` and is read
   in an `effect`, never during render, so the server-rendered shell and the first client render
   agree. The panel deliberately has **no** reload button and no help text - a page's own controls

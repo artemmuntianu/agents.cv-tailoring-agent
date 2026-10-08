@@ -19,8 +19,9 @@ The rules below are the contract, not style advice:
 - `action` is one of:
   * "answer"      - you write the text for this field (text, textarea, number, date, select).
   * "select"      - choose one of this control's own options: `value` must be the option's label
-                    exactly as the form prints it (a select value, or the label of the radio or
-                    checkbox option that should be picked).
+                    exactly as the form prints it (a select value, the label of the radio or
+                    checkbox option that should be picked, or - for a `combobox` - the label its
+                    list shows, which the extension then clicks).
   * "cover_letter" - the candidate's cover letter belongs here. Return **no** value: the board
                     already holds the letter and the extension pastes it in untouched.
   * "resume_file" - the candidate's tailored CV document belongs here. Return **no** value: the
@@ -28,8 +29,10 @@ The rules below are the contract, not style advice:
                     when two upload controls carry the same label, the form's own ids and the
                     section headings in the html block say which of them is the CV.
   * "skip"        - leave this field to the candidate; `reason` says why in a few words.
-- A field whose kind is `combobox` is a JavaScript dropdown (react-select and friends), not a
-  text input, and the extension does not type into it: always "skip" with reason "dropdown".
+- A field whose kind is `combobox` is a JavaScript dropdown (react-select and friends) rather than a
+  text input, so it is always a "select" and never an "answer": name the option's label, and the
+  extension opens the widget, finds that label and clicks it. Use "skip" with reason "dropdown" only
+  when no fact gives you such a label - never name an option the list may not contain.
 - Use ONLY facts stated in the vacancy, the candidate block or the CV block. If a question needs a
   fact that is not there, return "skip" with reason "no fact for this" - never invent an employer,
   a technology, a number, a date or a language level.

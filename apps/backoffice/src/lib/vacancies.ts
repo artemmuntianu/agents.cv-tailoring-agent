@@ -10,8 +10,10 @@
 export const MAX_BATCH_SIZE = 25;
 /** How many vacancies one status lookup may ask about (a whole listing page). */
 export const MAX_STATUS_IDS = 200;
-const MAX_DESCRIPTION_CHARS = 200_000;
-const MAX_FIELD_CHARS = 300;
+// The caps and shapes the batch contract enforces. `lib/manual.ts` (the hand-typed vacancy)
+// reads the same ones, so the two intakes cannot disagree about what a field may hold.
+export const MAX_DESCRIPTION_CHARS = 200_000;
+export const MAX_FIELD_CHARS = 300;
 /** Ids the DB's shape guard accepts (`resumes_job_id_shape` uses the same alphabet). */
 const EXTERNAL_ID = /^[A-Za-z0-9_.:-]+$/;
 /**
@@ -19,7 +21,7 @@ const EXTERNAL_ID = /^[A-Za-z0-9_.:-]+$/;
  * 2-32 characters. `djinni` is the default so an extension build that predates `source`
  * keeps producing exactly the rows it did before.
  */
-const SOURCE_SLUG = /^[a-z0-9][a-z0-9-]{1,31}$/;
+export const SOURCE_SLUG = /^[a-z0-9][a-z0-9-]{1,31}$/;
 export const DEFAULT_SOURCE = 'djinni';
 
 export interface ScrapedVacancy {

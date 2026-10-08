@@ -71,9 +71,11 @@ validated at load.
   "... at <company>" (falling back to the board's path segment) and the text from
   `.job__description`. The registry routes these hosts to the `greenhouse` plugin, whose slug is a legal
   `resumes.source` value.
-- **Its application form carries no `name` attribute anywhere** and drives four react-select
-  dropdowns, which is why the annotator keys on `id` as well and gives a `role="combobox"` a kind
-  of its own (the rules below). The labels are real (`label[for]`) - except on the two upload
+- **Its application form carries no `name` attribute anywhere** and its four react-select
+  dropdowns are `role="combobox"`, which is why the annotator keys on `id` as well and gives a
+  `role="combobox"` a kind of its own (the rules below): the filler opens such a widget and clicks
+  the option the plan named, because the widget renders its list only while open and no option list
+  can travel in a snapshot. The labels are real (`label[for]`) - except on the two upload
   controls, whose own label is the hidden text of the *button* ("Attach"): the question lives on
   the enclosing `role="group" aria-labelledby="upload-label-<field>"`, which `questionFor` reads
   before the control's own label.
@@ -243,8 +245,11 @@ generates for itself is dropped (TomSelect's unnamed `#tomselect-1-ts-control` i
 `.ts-wrapper`, never the `<select>` it hides, which keeps its `name` and stays annotatable);
 `required` counts whether it is the attribute or `aria-required`, on the control or on the group
 around it; a control a script owns (`role="combobox"`, react-select and friends) is reported as
-kind `combobox`, and the applier **refuses** to type into it instead of putting a value into a box
-that would drop it on its next render; the snapshot is hashed by the board, so re-Populating the
+kind `combobox`, which the applier never types into - it **opens the widget and clicks the option**
+the plan named (`chooseCombobox`: the four gestures that open one tried in turn, the label matched
+against the options the open menu rendered, the widget's own search box as the filter for a long
+list, and the committed value verified before the field counts as filled); the snapshot is hashed
+by the board, so re-Populating the
 same rendered form costs no Gemini call while a changed form (or newly saved candidate facts)
 re-drafts.
 
@@ -410,7 +415,7 @@ cd apps/backoffice; npm test
 jsdom page with a fake `chrome.runtime`), so the DOM hooks, every state, the click → message →
 `Scraped` link flow and the htmx re-injection are asserted against the live card markup.
 `formfill.test.ts` does the same for the filler: the real Greenhouse form is annotated and a plan
-is applied to it, so the identity rule, the combobox refusal and both pin paths are pinned by
+is applied to it, so the identity rule, the combobox click and both pin paths are pinned by
 tests rather than by the manual checklist above (jsdom does no layout, so that file never reads
 `field.hidden`).
 

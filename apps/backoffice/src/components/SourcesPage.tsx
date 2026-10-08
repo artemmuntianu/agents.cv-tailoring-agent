@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from './AppShell';
+import CandidateFactsEditor from './CandidateFactsEditor';
 import type { CandidateProfile } from '../lib/candidate';
 import type { CvModelSource, FileSource, ModelStateSource } from '../lib/sources';
 
@@ -12,9 +13,10 @@ import type { CvModelSource, FileSource, ModelStateSource } from '../lib/sources
  * model wrote the last document. The vacancy itself (`resumes.description_raw`) is the fourth input
  * and stays on the card, where it belongs.
  *
- * Read-only by construction: the route only reads, and this page renders what it finds - including
- * a source that is *not* on this machine, which is reported with its path and the command that
- * mirrors it rather than shown as empty.
+ * Read-only except for one row: the three *files* are only ever rendered - the route reads, and a
+ * source that is not on this machine is reported with its path and the command that mirrors it
+ * rather than shown as empty - while the candidate facts are operator data in Postgres and have an
+ * editor of their own (`CandidateFactsEditor`, over `PUT /api/profile`).
  */
 
 interface FactsSource {
@@ -130,7 +132,7 @@ export default function SourcesPage({ session }: SourcesPageProps) {
     <AppShell
       active="sources"
       title="Sources of truth"
-      subtitle="What the generated CV and cover letter are built from - read-only"
+      subtitle="What the generated CV and cover letter are built from - the files are read-only, the candidate facts are editable"
       session={session}
       actions={
         <button
@@ -188,8 +190,8 @@ export default function SourcesPage({ session }: SourcesPageProps) {
             {!facts?.present && (
               <p className="text-sm text-amber-800">
                 No facts stored for this account yet: the three prompts run with an empty facts
-                block, so nothing the CV text does not state can be surfaced. Load them with{' '}
-                <code>scripts/seed_profile.py</code> - the facts have no UI editor.
+                block, so nothing the CV text does not state can be surfaced. Fill them in below -
+                or load a whole answer set with <code>scripts/seed_profile.py</code>.
               </p>
             )}
             {facts?.present && (
@@ -208,6 +210,7 @@ export default function SourcesPage({ session }: SourcesPageProps) {
                 </p>
               </>
             )}
+            <CandidateFactsEditor onSaved={() => void load()} />
           </Block>
 
           <Block

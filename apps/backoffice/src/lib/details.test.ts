@@ -230,7 +230,7 @@ describe('the draft the form holds', () => {
       salaryOffered: '',
       salaryDesired: '6000 EUR',
       communicationChannels: ['Email', 'Dou'] as ('Email' | 'Dou')[],
-      applyUrl: 'https://example.com/jobs/1?src=x',
+      applyUrl: 'https://example.com/jobs/1?gh_src=x',
     };
     const request = draftToRequest('374001-1', draft);
     // The form resets from the *request* after a save, so the dirty check must come out false.
@@ -252,11 +252,17 @@ describe('the dirty check', () => {
     expect(detailsEqual(base, details({ applyUrl: 'https://example.com/jobs/1' }))).toBe(false);
   });
 
-  it('does not call a re-pasted application URL a change', () => {
+  it('does not call a re-pasted application URL a change - but an identity query is one', () => {
     const stored = details({ applyUrl: 'https://example.com/jobs/1' });
+    // A tracking tail is noise: re-pasting the link out of a referrer app is not an edit.
     expect(
-      detailsChanged({ ...EMPTY_DETAILS_DRAFT, applyUrl: 'https://example.com/jobs/1?src=x' }, stored),
+      detailsChanged({ ...EMPTY_DETAILS_DRAFT, applyUrl: 'https://example.com/jobs/1?gh_src=x' }, stored),
     ).toBe(false);
+    // A parameter that identifies the page is not noise - on a Greenhouse-style board the query
+    // *is* the vacancy, so adding one is a real change (`lib/applyUrl.ts`).
+    expect(
+      detailsChanged({ ...EMPTY_DETAILS_DRAFT, applyUrl: 'https://example.com/jobs/1?gh_jid=7' }, stored),
+    ).toBe(true);
     expect(
       detailsChanged({
         ...EMPTY_DETAILS_DRAFT,

@@ -13,7 +13,8 @@
  *   snapshot  - annotate every fillable control with a deterministic `data-cvt-id` (f1, f2, ... in
  *               DOM order), collect a compact field list, hand back the trimmed subtree. The worker
  *               posts that to the board, where it becomes a Gemini prompt. A control a script owns
- *               (`role="combobox"`) is reported as its own kind, never as a text field.
+ *               (`role="combobox"`) is reported as its own kind, never as a text field: it can only
+ *               be *selected*, never typed into.
  *   apply     - take the plan that comes back (keyed by those ids) plus the documents the worker
  *               fetched, and write them into the page. It never submits anything.
  *   adapter   - per-site steps for widgets a plain `input[type=file]` cannot express (Djinni's CV
@@ -92,8 +93,9 @@
     if (tag === 'TEXTAREA') return 'textarea';
     if (tag === 'SELECT') return 'select';
     // A dropdown a script owns (react-select and friends) is an `<input>` that only looks like a
-    // text field: typing into it shows a value the widget drops on its next render. Its own kind
-    // is what tells the model to leave it alone and the applier to refuse it.
+    // text field: typing into it shows a value the widget drops on its next render. Its own kind is
+    // what tells the model to name an *option* rather than a value - the applier opens the widget
+    // and clicks that label (`chooseCombobox`), which is the only way the choice becomes real.
     const role = (element.getAttribute('role') || '').toLowerCase();
     const popup = (element.getAttribute('aria-haspopup') || '').toLowerCase();
     if (role === 'combobox' || popup === 'listbox') return 'combobox';
@@ -535,6 +537,157 @@
     return { ok: false, error: 'no option matches ' + value };
   }
 
+  // --- JavaScript dropdowns (react-select and friends) ----------------------- //
+
+  /**
+   * A widget's dropdown can only be *selected*, never typed into - and its options cannot come from
+   * the snapshot either, because react-select renders its list only while the menu is open. So the
+   * label a candidate fact names is what drives it: open the widget, read what it just rendered,
+   * click the matching option, and fall back to the widget's own search box for a long list - which
+   * is exactly what a person does.
+   */
+
+  /** The clickable box of a dropdown: react-select's control, or the input's own container. */
+  function comboboxControl(element) {
+    return (
+      element.closest(
+        '[class*="select__control"], [class*="select-control"], [class*="combobox"], [class*="autocomplete"]',
+      ) ||
+      element.parentElement ||
+      element
+    );
+  }
+
+  /**
+   * The options an open dropdown has rendered.
+   *
+   * Deliberately not filtered by visibility: a widget keeps a closed menu in the DOM and hides it
+   * with CSS, and jsdom (where the tests run) reports *every* node as hidden - a visibility check
+   * would find nothing at all. Only the a11y mirror react-select wraps in `aria-hidden` is dropped.
+   */
+  function comboboxOptions() {
+    return Array.from(document.querySelectorAll('[role="option"]')).filter(
+      (node) => !node.closest('[aria-hidden="true"]') && oneLine(node.textContent),
+    );
+  }
+
+  /** Press a node the way a person does - every gesture a widget might be listening for. */
+  function press(node) {
+    if (!node) return;
+    for (const type of ['mouseover', 'mousemove', 'mousedown', 'mouseup', 'click']) {
+      node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+    }
+  }
+
+  /**
+   * Open a dropdown and hand back the options it rendered.
+   *
+   * Which gesture opens it is the widget's business - react-select opens on a `mousedown` on its
+   * control, others on focus, on a keystroke, or through their own toggle button - so the four ways
+   * a person would try are tried in turn, and the first that makes a *new* option appear wins. A
+   * widget none of them opens leaves the options that were already on the page (usually none), and
+   * the caller reports that rather than typing into a box that would drop the text.
+   */
+  async function openCombobox(element) {
+    const seen = new Set(comboboxOptions());
+    const fresh = () => comboboxOptions().filter((node) => !seen.has(node));
+    const control = comboboxControl(element);
+    const toggle = Array.from(control.querySelectorAll('button, [class*="indicator"]')).find((node) =>
+      /toggle|open|expand|arrow|select/i.test(
+        (node.getAttribute('aria-label') || '') + ' ' + oneLine(node.className, 80),
+      ),
+    );
+    const gestures = [
+      () => press(element),
+      () => press(control),
+      () => press(toggle),
+      () => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })),
+    ];
+    for (const gesture of gestures) {
+      if (fresh().length) return fresh();
+      try {
+        gesture();
+        element.focus();
+      } catch (error) {
+        continue; // a gesture this page refuses is one to skip, not a run to fail
+      }
+      if (await waitFor(() => (fresh().length ? true : null), 400)) return fresh();
+    }
+    return comboboxOptions();
+  }
+
+  /** The option whose label matches the wanted text - exact first, then the looser readings. */
+  function bestOption(options, value) {
+    const needle = oneLine(value).toLowerCase();
+    if (!needle) return null;
+    const text = (node) => oneLine(node.textContent, 200).toLowerCase();
+    return (
+      options.find((node) => text(node) === needle) ||
+      options.find((node) => text(node).startsWith(needle)) ||
+      options.find((node) => text(node).includes(needle)) ||
+      // The other direction, for a fact written as a sentence ("No sponsorship required" -> "No").
+      options.find((node) => text(node).length > 1 && needle.includes(text(node))) ||
+      null
+    );
+  }
+
+  /** Type into the widget's search box: it is a filter, so the field is not marked as filled. */
+  function typeInto(element, text) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (descriptor && descriptor.set) descriptor.set.call(element, text);
+    else element.value = text;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  /** Close a dropdown we opened but could not use, so the page is left as we found it. */
+  function pressEscape(element) {
+    try {
+      element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      element.blur();
+    } catch (error) {
+      /* an unwired node is not worth failing over */
+    }
+  }
+
+  /** Choose an option of a JavaScript dropdown: open it, match the label, click it, verify it held. */
+  async function chooseCombobox(record, value) {
+    const element = record.elements[0];
+    const wanted = oneLine(value);
+    if (!wanted) return { ok: false, error: 'no option was named' };
+
+    // A datalist-backed input is a combobox that is really a text field: typing *is* the answer.
+    if (element.hasAttribute('list')) {
+      setValue(element, wanted);
+      return { ok: true, option: wanted };
+    }
+
+    const control = comboboxControl(element);
+    let option = bestOption(await openCombobox(element), wanted);
+    if (!option) {
+      typeInto(element, wanted);
+      option = await waitFor(() => bestOption(comboboxOptions(), wanted) || null, 1600);
+    }
+    if (!option) {
+      pressEscape(element);
+      return { ok: false, error: 'no option matches "' + wanted + '" - pick it yourself' };
+    }
+
+    const chosen = oneLine(option.textContent, 200);
+    press(option);
+    const kept = await waitFor(
+      () =>
+        oneLine(control.textContent, 240).toLowerCase().includes(chosen.toLowerCase())
+          ? chosen
+          : null,
+      1200,
+    );
+    if (!kept) {
+      return { ok: false, error: 'clicked "' + chosen + '" but the widget did not keep it' };
+    }
+    highlight(control, true);
+    return { ok: true, option: chosen };
+  }
+
   function fileFromBase64(base64, name, type) {
     const binary = atob(String(base64 || ''));
     const bytes = new Uint8Array(binary.length);
@@ -678,9 +831,9 @@
    *
    * `instructions` is what the worker assembled: the plan's fields (keyed by the ids this script
    * minted), the cover letter text, the PDF bytes, the pins, and the note. Everything is applied
-   * through `setValue`/`chooseOption`/`assignFile`, and the report that comes back is what the
-   * popup shows. Nothing here ever submits, ticks a consent box, or touches a field the operator
-   * already filled - the applier only writes what the plan named.
+   * through `setValue`, `chooseOption`, `chooseCombobox` and `assignFile`, and the report that comes
+   * back is what the popup shows. Nothing here ever submits, ticks a consent box, or touches a field
+   * the operator already filled - the applier only writes what the plan named.
    */
   async function applyPlan(instructions) {
     const root = resolveRoot(instructions.root) || document;
@@ -699,16 +852,19 @@
       const element = record.elements[0];
 
       // A JS dropdown looks like a text input and is not one: writing into it shows a value the
-      // widget ignores on its next render. The snapshot already gave it its own kind, so a plan
-      // that still asks for text there is refused instead of half-applied and believed.
-      if (
-        record.field.kind === 'combobox' &&
-        (item.action === 'answer' || item.action === 'select')
-      ) {
-        report.skipped.push({
-          label,
-          reason: 'a JavaScript dropdown the extension does not drive - pick it yourself',
-        });
+      // widget ignores on its next render. Only a *chosen option* is real there - so the applier
+      // opens the widget and clicks the label the plan named.
+      if (record.field.kind === 'combobox' && (item.action === 'answer' || item.action === 'select')) {
+        if (item.action !== 'select') {
+          report.skipped.push({
+            label,
+            reason: 'a JavaScript dropdown needs the option to click - nothing to type into it',
+          });
+          return;
+        }
+        const chosen = await chooseCombobox(record, item.value);
+        if (chosen.ok) report.filled.push({ label, what: chosen.option });
+        else report.failed.push({ label, reason: chosen.error });
         return;
       }
 

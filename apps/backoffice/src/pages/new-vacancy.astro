@@ -1,0 +1,26 @@
+---
+import NewVacancyPage from '../components/NewVacancyPage.tsx';
+import '../styles/global.css';
+
+// The middleware guarantees a session on this route; `session` is name + email only.
+const session = Astro.locals.session!;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New vacancy · CV tailoring backoffice</title>
+    <meta
+      name="description"
+      content="Add a vacancy you found yourself - it lands in Scraped, ready to tailor"
+    />
+  </head>
+  <body class="bg-slate-100 antialiased">
+    <NewVacancyPage
+      client:load
+      session={{ email: session.email, name: session.name ?? null, admin: session.admin }}
+    />
+  </body>
+</html>

@@ -147,9 +147,11 @@ into a card's Application URL and populate from that page (the card is found by 
   either one shows up as a button that answers `Retry scrape`.
 - **Greenhouse is read one job at a time.** Its boards have no listing cards - the job page itself
   *is* the vacancy - so **Scrape & queue this page** queues exactly that job; discovery across a
-  whole board is the scheduled `scout` job's business. Two things on its apply form stay yours: the
+  whole board is the scheduled `scout` job's business. Two things on its apply form start out yours: the
   Cover Letter field only exists after the site's own *Enter manually* is clicked, and the form's
-  dropdowns are React widgets the extension does not type into - it lists them in the report.
+  dropdowns are React widgets - the extension opens one and clicks the option the plan named, so they
+  are filled when a candidate fact gives the label (`Country` from your location, a yes/no from your
+  work rights) and listed in the report when no fact does.
 - **Indeed is read one vacancy at a time, and it is the one site with no feed at all.** Its feed shows
   the full description of the *selected* card only (the cards carry a snippet), it has no RSS/JSON
   endpoint, and it refuses non-browser clients outright - so it can never be scheduled the way

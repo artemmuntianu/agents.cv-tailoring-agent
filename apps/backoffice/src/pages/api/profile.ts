@@ -8,9 +8,9 @@ export const prerender = false;
  * GET /api/profile - the candidate facts an application form is filled from.
  *
  * One `application_profile` row per operator, read by every prompt through the **card's owner**
- * (`apps/worker/utils/candidate.py`): the model may use these facts and must never invent the others. No
- * extension editor writes them any more (removed 2026-10-03); `facts` lists the known keys, so a
- * client never has to hardcode them.
+ * (`apps/worker/utils/candidate.py`): the model may use these facts and must never invent the others.
+ * The editor is `/sources` (`CandidateFactsEditor.tsx`, the extension's own one was removed
+ * 2026-10-03); `facts` lists the known keys, so a client never has to hardcode them.
  */
 export const GET: APIRoute = async ({ locals }) => {
   const session = locals.session;

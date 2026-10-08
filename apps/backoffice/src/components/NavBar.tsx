@@ -3,11 +3,11 @@ import { STAGES } from '../lib/stages';
 import type { StageId } from '../lib/types';
 
 /**
- * The panel's four links - the only routing it knows about. A page that is **not** in the panel (the
- * parsed vacancy text, one vacancy's cover letter - pages that need a vacancy to render at all) simply
- * does not pass `active`, and nothing is highlighted.
+ * The panel's links - the only routing it knows about. A page that is **not** in the panel (the
+ * parsed vacancy text, one vacancy's cover letter - pages that need a vacancy to render at all)
+ * simply does not pass `active`, and nothing is highlighted.
  */
-export type NavSection = 'board' | 'sources' | 'processes' | 'vocabularies';
+export type NavSection = 'board' | 'new-vacancy' | 'sources' | 'processes' | 'vocabularies';
 
 interface NavBarProps {
   /** Which of the four the page being rendered is; it decides the highlighted item. */
@@ -40,8 +40,8 @@ function itemClass(collapsed: boolean, active = false): string {
 }
 
 /**
- * The left panel every page wears: the board, the internal jobs' run log and (for an
- * administrator) the vocabulary screen - three links, one highlighted per page.
+ * The left panel every page wears: the board, the hand-typed vacancy page, the internal jobs' run
+ * log and (for an administrator) the vocabulary screen - one link highlighted per page.
  *
  * The `«` toggle collapses the panel to its icons, so a narrow screen gives the page almost all
  * of its width back; the choice is remembered in `localStorage` and read in an `effect` (never
@@ -129,6 +129,25 @@ export default function NavBar({
         </a>
 
         <ul className={collapsed ? 'mt-2 space-y-2' : 'mt-1 space-y-1'}>
+          <li>
+            <a
+              href="/new-vacancy"
+              className={itemClass(collapsed, active === 'new-vacancy')}
+              title={collapsed ? 'New vacancy · manual entry' : undefined}
+              aria-current={active === 'new-vacancy' ? 'page' : undefined}
+            >
+              <span className="flex items-center gap-2">
+                <span aria-hidden>➕</span>
+                {!collapsed && <span>New vacancy</span>}
+              </span>
+              {!collapsed && (
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                  by hand
+                </span>
+              )}
+            </a>
+          </li>
+
           {session.admin && (
             <li>
               <a

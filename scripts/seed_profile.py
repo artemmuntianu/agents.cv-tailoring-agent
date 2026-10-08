@@ -14,8 +14,14 @@ goes through - so what lands in the database is exactly what a model may see, an
 a cap is reported instead of being silently cut.
 
 A host-side run talks to the cluster's Postgres through `kubectl port-forward svc/postgres 5432:5432`
-and needs `DATABASE_SSLMODE=disable` (the dev Postgres serves plain TCP, while `config` defaults to
-`require`).
+and needs **three** settings, not one: `DB_BACKEND=postgres` (the default is a local JSON file),
+`DATABASE_URL` (empty by default, and `PostgresDb` refuses to start without it) and
+`DATABASE_SSLMODE=disable` (the dev Postgres serves plain TCP, while `config` defaults to `require`).
+
+Forgetting the first one is the trap this script now refuses: without `DB_BACKEND=postgres` the write
+lands in `apps/worker/artifacts/db_state.json` and the row the prompts actually read never changes -
+while the command still reports success. Same rule the chart READMEs state for `scout`/`archiver`
+(`infra/charts/cv-tailoring-scout/README.md`).
 """
 
 import argparse
@@ -91,13 +97,24 @@ def main(argv=None) -> int:
         print("❌ --user is required to write (or use --dry-run to inspect the payload)")
         return 2
 
+    store = db_module.get_db()
+    if store.backend != "postgres":
+        # The trap this guard exists for (hit 2026-10-08): the default backend is a local JSON file,
+        # so the write succeeds and prints its tick while the row every prompt reads is untouched.
+        print(
+            "❌ refusing to write: DB_BACKEND is "
+            f"{store.backend!r}, so this would fill a local JSON file the worker never reads.\n"
+            "   Re-run with DB_BACKEND=postgres and DATABASE_URL set (a host-side run also needs\n"
+            "   `kubectl port-forward svc/postgres 5432:5432` and DATABASE_SSLMODE=disable)."
+        )
+        return 2
+
     try:
-        db_module.get_db().upsert_application_profile(args.user, clean)
+        store.upsert_application_profile(args.user, clean)
     except Exception as exc:  # noqa: BLE001 - one clear failure beats a traceback
         print(f"❌ could not write the profile row: {exc}")
         return 2
-    print(f"✅ candidate facts written for user {args.user} (backend "
-          f"{db_module.get_db().backend})")
+    print(f"✅ candidate facts written for user {args.user} (backend {store.backend})")
     return 0
 
 

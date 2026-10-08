@@ -376,9 +376,13 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     It lives on `resume_board` rather than `resumes` on purpose: only the click reveals the
     redirect, so it is operator data, not something a scrape can know. Both sides go through
     `apps/backoffice/src/lib/applyUrl.ts::normalizeApplyUrl` - written by the Details form, read by
-    `GET /api/vacancies/link` - which drops the fragment and the query string (`?gh_src=…` is not
-    part of the vacancy's identity) and lower-cases the host, so a stored URL can actually match
-    the page it came from. The DB CHECK (`resume_board_details_shape`) admits only `http(s)://…`,
+    `GET /api/vacancies/link` - which drops the fragment and the **tracking** parameters
+    (`?gh_src=…`, `?utm_…`; not part of the vacancy's identity) while **keeping** the rest of the
+    query: on a board that renders every posting at one path the query *is* the vacancy
+    (Greenhouse's `?gh_jid=…`), so dropping it wholesale made the stored URL a dead link *and*
+    ambiguous between two postings (fixed 2026-10-08). The host is lower-cased, so a stored URL
+    can actually match the page it came from. The DB CHECK (`resume_board_details_shape`) admits
+    only `http(s)://…`,
     and the constraint is **widened guard-first** in `SCHEMA_SQL`: it is created `if not exists`,
     so a database that already had the four-field version is rebuilt rather than silently left
     unguarded (`apps/worker/tests/test_postgres_store.py::test_the_details_constraint_is_widened_for_the_application_url`).
@@ -432,7 +436,8 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` still
     merges `standing_answers` so a partial save cannot wipe the question/answer set. The row that
     grounds a card is its **owner's** (invariant 25), and the extension no longer edits facts at
-    all: the one maintenance surface is this row (`/sources` renders it, `seed_profile.py` loads it).
+    all: the one maintenance surface is this row (`/sources` renders it and edits it through
+    `CandidateFactsEditor`, `seed_profile.py` loads a whole answer set into it).
 
 32. **The deliverable can be replaced by hand, and the PDF follows.** The operator downloads the
     tailored DOCX, verifies it, edits what the model could not, and uploads it back through the
@@ -594,8 +599,9 @@ so that a change which depends on them is a conscious one.
   salary, availability, work rights, English level - `PUT /api/profile` from the popup) was removed
   2026-10-03: it was a second writer keyed to whichever account the extension was signed in as, and
   every card is grounded in its **owner's** row anyway (invariant 25). The facts have one maintenance
-  surface - the `application_profile` row, rendered by `/sources` and loaded by
-  `scripts/seed_profile.py`. Do not add a second editor inside the extension.
+  surface - the `application_profile` row, edited by `/sources` (`CandidateFactsEditor.tsx`, added
+  2026-10-08 because nothing wrote the facts) and loaded wholesale by `scripts/seed_profile.py`.
+  Do not add a second editor inside the extension.
 * **kind / k3d / minikube support** in `scripts/local-deploy.ps1`. Docker Desktop's
   kubeadm cluster shares Docker's image store, which is what makes a locally built
   image visible to the kubelet; every other local provider keeps its own store and

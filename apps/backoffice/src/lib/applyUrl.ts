@@ -9,11 +9,14 @@
  *
  * Exactly two callers ask about one of these URLs - the card's Details form, which stores it
  * (`lib/details.ts`), and `GET /api/vacancies/link`, which matches the page the applier is on -
- * so the rule lives here and nowhere else. It is deliberately *lossy*: the fragment and the
- * query string are dropped, because an ATS page's tracking tail (`?gh_src=…`) is not part of
- * the vacancy's identity and a stored URL that kept one would never match the page it came
- * from. The host is lower-cased, the trailing slash goes, and what is left is what the column
- * holds - the DB CHECK (`resume_board_details_shape`) accepts only `http(s)://…`.
+ * so the rule lives here and nowhere else. It drops the **fragment** and the **tracking
+ * parameters** (`?gh_src=…`, `?utm_…`) and keeps everything else. An ATS's tracking tail is not
+ * part of the vacancy's identity and a stored URL that kept one would never match the page it came
+ * from - but on a board that renders every posting at one path the query *is* the vacancy
+ * (Greenhouse's `?gh_jid=7822098003`), so dropping it wholesale made the stored URL a dead link
+ * *and* ambiguous between two postings (reported 2026-10-08). The host is lower-cased, the
+ * trailing slash goes, and what is left is what the column holds - the DB CHECK
+ * (`resume_board_details_shape`) accepts only `http(s)://…`.
  */
 
 /** The length the DB CHECK enforces on `resume_board.apply_url`. */
@@ -22,11 +25,43 @@ export const MAX_APPLY_URL_LENGTH = 1000;
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /**
+ * Query parameters that never identify the page: the tail a tracking link, a referrer app or a
+ * mail client appends. Everything not named here is **kept** - which is the point of the list
+ * being a deny-list rather than the old "drop the whole query": an ATS whose query carries the
+ * vacancy's own id must keep it.
+ *
+ * Deliberately short, and named only where the parameter is known to be noise. A wrong guess here
+ * is a stored URL that stops matching its page, so an unknown parameter survives by default.
+ */
+const TRACKING_PARAMS: RegExp[] = [
+  /^utm($|_)/i,
+  /^gh_src$/i,
+  /^gclid$/i,
+  /^fbclid$/i,
+  /^msclkid$/i,
+  /^mc_(cid|eid)$/i,
+  /^_ga$/i,
+];
+
+/** The query minus its tracking tail, in the order the page wrote it (`''` when nothing is left). */
+function identityQuery(parsed: URL): string {
+  const kept = new URLSearchParams();
+  parsed.searchParams.forEach((value, name) => {
+    if (TRACKING_PARAMS.some((pattern) => pattern.test(name))) return;
+    kept.append(name, value);
+  });
+  const query = kept.toString();
+  return query ? `?${query}` : '';
+}
+
+/**
  * The canonical form of an application URL, or `null` when the value cannot be one.
  *
  * `origin` is what removes any credentials a paste carried (`https://user:pw@host/…`) and
  * lower-cases the scheme and host; the path keeps its case, because a path is case-sensitive on
- * most servers even though the host is not.
+ * most servers even though the host is not. The surviving query keeps the order the page wrote it
+ * in: the operator pastes the URL out of the address bar, so it *is* the page's own order, and
+ * sorting it would be a second, invisible normalisation to explain.
  */
 export function normalizeApplyUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -41,7 +76,7 @@ export function normalizeApplyUrl(raw: unknown): string | null {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
 
-  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}${identityQuery(parsed)}`;
 }
 
 /**

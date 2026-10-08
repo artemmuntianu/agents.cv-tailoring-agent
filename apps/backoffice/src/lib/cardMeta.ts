@@ -39,6 +39,16 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 /**
+ * The slugs the map above names, in declaration order - every site the intake can stamp today.
+ *
+ * Derived from the map rather than repeated: `lib/manual.ts` suggests exactly these plus its "not
+ * listed" slug when the operator types a vacancy in by hand, so a new site is one entry in this
+ * map and nothing else. The list stays outside `SOURCE_LABELS` on purpose - the `other` fallback
+ * is deliberately absent from the labels, so it cannot leak into a suggestion list by accident.
+ */
+export const SOURCE_SLUGS: string[] = Object.keys(SOURCE_LABELS);
+
+/**
  * The name of the site a vacancy came from.
  *
  * An unlisted slug is echoed as it is rather than prettified: the scraper derives a stable slug

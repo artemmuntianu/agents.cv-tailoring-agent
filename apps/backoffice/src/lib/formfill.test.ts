@@ -34,6 +34,43 @@ const TOMSELECT =
   '</div></form>';
 
 /**
+ * A react-select-shaped dropdown. The real widget renders its option list only while the menu is
+ * open, so a saved page carries none - the listeners `wireDropdown` installs are what the widget
+ * does on a `mousedown` (open the menu) and on an option's `click` (commit that label).
+ */
+const DROPDOWN =
+  '<form id="rs-form"><div class="select__container"><label for="country">Country</label>' +
+  '<div class="select__control" id="country-control">' +
+  '<input class="select__input" id="country" role="combobox" aria-haspopup="listbox" type="text">' +
+  '</div></div></form>';
+
+const COUNTRIES = ['Portugal', 'Ukraine'];
+
+/** Make `DROPDOWN` a working widget: open on mousedown, render the options, commit the clicked one. */
+function wireDropdown(document: Document): void {
+  const control = document.getElementById('country-control') as HTMLElement;
+  control.addEventListener('mousedown', () => {
+    if (control.querySelector('.select__menu')) return;
+    const menu = document.createElement('div');
+    menu.className = 'select__menu';
+    for (const name of COUNTRIES) {
+      const option = document.createElement('div');
+      option.setAttribute('role', 'option');
+      option.textContent = name;
+      option.addEventListener('click', () => {
+        const shown = document.createElement('div');
+        shown.className = 'select__single-value';
+        shown.textContent = name;
+        control.appendChild(shown);
+        menu.remove();
+      });
+      menu.appendChild(option);
+    }
+    control.appendChild(menu);
+  });
+}
+
+/**
  * The letter field only exists once the operator pressed "Enter manually" on the site, and it
  * lands inside the Cover Letter group - so its label comes from the group, not from itself.
  */
@@ -178,7 +215,7 @@ describe('application form: reading it', () => {
 });
 
 describe('application form: filling it', () => {
-  it('fills a text field and refuses to type into a JavaScript dropdown', async () => {
+  it('fills a text field, and refuses to type a value into a JavaScript dropdown', async () => {
     const form = filler(FORM);
     const shot = await form.snapshot('#application-form');
     const firstName = shot.fields.find((field) => field.label === 'First Name*');
@@ -197,7 +234,7 @@ describe('application form: filling it', () => {
     expect(report.skipped).toEqual([
       {
         label: 'Country',
-        reason: 'a JavaScript dropdown the extension does not drive - pick it yourself',
+        reason: 'a JavaScript dropdown needs the option to click - nothing to type into it',
       },
     ]);
     expect(report.failed).toEqual([]);
@@ -235,5 +272,46 @@ describe('application form: filling it', () => {
       'Dear Growe',
     );
   });
+});
+
+describe('application form: driving a JavaScript dropdown', () => {
+  it('opens the widget, matches the label and clicks that option', async () => {
+    const form = filler(DROPDOWN);
+    wireDropdown(form.document);
+    const shot = await form.snapshot('#rs-form');
+    const country = shot.fields.find((field) => field.label === 'Country');
+
+    expect(country?.kind).toBe('combobox');
+    const report = await form.apply({
+      root: '#rs-form',
+      pins: {},
+      fields: [{ id: country?.id, action: 'select', value: 'Portugal', label: country?.label }],
+    });
+
+    expect(report.filled).toEqual([{ label: 'Country', what: 'Portugal' }]);
+    expect(report.failed).toEqual([]);
+    // What matters is the value the widget *committed*, not text typed into the box it ignores.
+    expect(form.document.querySelector('.select__single-value')?.textContent).toBe('Portugal');
+  }, 20000);
+
+  it('reports an option the widget does not offer, and commits nothing', async () => {
+    const form = filler(DROPDOWN);
+    wireDropdown(form.document);
+    const shot = await form.snapshot('#rs-form');
+    const country = shot.fields.find((field) => field.label === 'Country');
+
+    const report = await form.apply({
+      root: '#rs-form',
+      pins: {},
+      fields: [{ id: country?.id, action: 'select', value: 'Atlantis', label: country?.label }],
+    });
+
+    expect(report.filled).toEqual([]);
+    expect(report.failed).toEqual([
+      { label: 'Country', reason: 'no option matches "Atlantis" - pick it yourself' },
+    ]);
+    // The search box may hold the filter text; the field itself is still the operator's to pick.
+    expect(form.document.querySelector('.select__single-value')).toBeNull();
+  }, 20000);
 });
 
