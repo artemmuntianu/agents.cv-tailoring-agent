@@ -104,8 +104,35 @@ export function extractVacancies(root, options = {}) {
     for (const card of Array.from(doc.querySelectorAll(plan.card))) {
       if (vacancies.length >= max) break;
 
-      const raw = String(card.getAttribute('id') || '').trim();
-      const externalId = raw.indexOf(plan.idPrefix) === 0 ? raw.slice(plan.idPrefix.length) : raw;
+      const raw = String(
+        card.getAttribute('id') ||
+        card.getAttribute('data-job-post-id') ||
+        card.getAttribute('data-job-id') ||
+        card.getAttribute('data-external-id') ||
+        '',
+      ).trim();
+      let externalId =
+        plan.idPrefix && raw.indexOf(plan.idPrefix) === 0
+          ? raw.slice(plan.idPrefix.length)
+          : raw;
+      if (!externalId) {
+        const innerDataId = card.querySelector('[data-job-post-id], [data-job-id]');
+        if (innerDataId) {
+          externalId = (
+            innerDataId.getAttribute('data-job-post-id') ||
+            innerDataId.getAttribute('data-job-id') ||
+            ''
+          ).trim();
+        }
+      }
+      if (!externalId) {
+        const link = card.querySelector('a[href]');
+        if (link) {
+          const href = link.getAttribute('href') || '';
+          const match = href.match(/(?:job_post_id=|\/jobs\/|id=)(\d+)/i);
+          if (match) externalId = match[1];
+        }
+      }
       const description = pickText(card, plan.description);
       if (!externalId || !description) {
         skipped += 1; // no id or no text: nothing a worker could tailor

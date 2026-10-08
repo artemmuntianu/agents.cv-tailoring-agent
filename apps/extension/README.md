@@ -52,6 +52,11 @@ each vacancy card gets a green **Scrape** button in its footer, next to *Збе�
 - A vacancy the board already has never costs a request: the buttons ask once per page load
   which of the visible vacancies are known, and only the unknown ones offer **Scrape**.
 
+The same button appears on a **Greenhouse job page** (`job-boards.greenhouse.io/<board>/jobs/<id>`),
+where there are no listing cards at all: it sits next to the job title, queues exactly that one
+vacancy, and turns into `Scraped` the same way. Discovery across a whole board stays the scheduled
+`scout` job's business - the extension never walks one.
+
 The popup still works and is the only place to sign in: its *Scrape & queue this page* queues
 every card in one batch (≤25). The per-card buttons are a convenience on top of it - and they
 notice a batch scrape, so they stop offering `Scrape` for cards the popup has just queued.
@@ -66,9 +71,8 @@ same Greenhouse boards you scrape, so each tile carries a read-only pill:
 
 - **Scraped** (green) - that vacancy is on your board under the `greenhouse` source, whatever state
   it is in by now (queued, tailored, refused). Find it on the board to work with it.
-- **Not Scraped** (grey) - the board does not know it yet. Click the tile, then press **Scrape &
-  queue this page** in the popup: that opens the company's Greenhouse board, which is the page a
-  scraper can actually read (a board renders no listing cards, so there is no per-card button there).
+- **Not Scraped** (grey) - the board does not know it yet. Click the tile: it opens the company's
+  Greenhouse board, and that vacancy's own page carries its **Scrape** button beside the job title.
 
 The badges are a status display and nothing else - there is deliberately no scrape action on the
 portal, because the tile's text is not the vacancy (the board page is). They refresh themselves when
@@ -165,8 +169,9 @@ into a card's Application URL and populate from that page (the card is found by 
   `my.greenhouse.io` is granted for the badge script alone - nothing is scraped there, and its host
   is deliberately not one of the `greenhouse` plugin's boards.
 - **Greenhouse is read one job at a time.** Its boards have no listing cards - the job page itself
-  *is* the vacancy - so **Scrape & queue this page** queues exactly that job; discovery across a
-  whole board is the scheduled `scout` job's business. Two things on its apply form start out yours: the
+  *is* the vacancy - so the page's own **Scrape** button (beside the job title) and **Scrape & queue
+  this page** both queue exactly that job; discovery across a whole board is the scheduled `scout`
+  job's business. Two things on its apply form start out yours: the
   Cover Letter field only exists after the site's own *Enter manually* is clicked, and the form's
   dropdowns are React widgets - the extension opens one and clicks the option the plan named, so they
   are filled when a candidate fact gives the label (`Country` from your location, a yes/no from your

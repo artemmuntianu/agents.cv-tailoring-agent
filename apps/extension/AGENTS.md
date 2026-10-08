@@ -71,6 +71,12 @@ validated at load.
   "... at <company>" (falling back to the board's path segment) and the text from
   `.job__description`. The registry routes these hosts to the `greenhouse` plugin, whose slug is a legal
   `resumes.source` value.
+- **That page carries the button, because that is where the vacancy is.** The plugin declares
+  `buttons: 'cards'` - the *manifest wiring*, not a card count - and `src/inject.js` finds no
+  `div[id^="job-item-"]` here, so the **page** becomes the unit its control belongs to: the id from the
+  URL, the button inserted right after the `h1`. The gate is `JOB_PAGE.marker` plus that id, so a bare
+  board (which carries the markup but names no job) gets nothing at all. Verified live 2026-10-08 on
+  `job-boards.greenhouse.io/cresteo/jobs/4740438005`.
 - **Its application form carries no `name` attribute anywhere** and its four react-select
   dropdowns are `role="combobox"`, which is why the annotator keys on `id` as well and gives a
   `role="combobox"` a kind of its own (the rules below): the filler opens such a widget and clicks
@@ -101,10 +107,9 @@ script does exactly one thing: it stamps each tile with a `Scraped` / `Not Scrap
 
 - **No scrape action, deliberately.** The tile's markup is not the vacancy (the text is on the board
   page the link points at), so a scrape here would have to open that board first - which is what
-  clicking the tile already does, and where a scrape *is* possible: press the popup's **Scrape &
-  queue this page** there, because a Greenhouse board renders no cards for `inject.js` to sit a
-  button in (`greenhouse.js` is `buttons: 'none'`). A badge is the honest thing to put on a listing
-  you cannot read.
+  clicking the tile already does, and where the extension *does* put its own button: a Greenhouse board
+  gets `Scrape`/`Scraped` beside the job title. A badge is the honest thing to put on a listing you
+  cannot read.
 - **...and therefore not the `inject.js`/`formfill.js` entry.** `inject.js` looks for
   `div[id^="job-item-"]` cards and `formfill.js` for an application form; the portal renders neither,
   so sharing their entry would put two observers on a page with nothing for them to find.
@@ -144,10 +149,12 @@ added this plugin, 2026-10-07).
   `data-…-job-application-url-value="…/applications/new"` - a turbo-frame/dialog in the *same*
   document. So the operator's sequence is Apply, then **Pick the form** on the overlay, then Populate.
   Nothing here crosses a document boundary: the page's two `<iframe>`s are its chat messenger.
-- **No cards, so no buttons and nothing to scrape.** `buttons: 'none'` leaves `src/inject.js` silent
-  (it finds no `div[id^="job-item-"]`), and `JOB_PAGE` is bound honestly rather than opportunistically:
-  the reader refuses a page whose marker or description it cannot find and answers *no vacancies*
-  (`mode: 'job-page'`) instead of a mangled card.
+- **No buttons, and nothing to scrape.** `buttons: 'none'` leaves `src/inject.js` silent - its gate is
+  Greenhouse's `JOB_PAGE.marker`, which these pages do not carry (their form is an overlay in the same
+  document) - and `JOB_PAGE` is bound honestly rather than opportunistically: the reader refuses a page
+  whose marker or description it cannot find and answers *no vacancies* (`mode: 'job-page'`) instead of
+  a mangled card. A button here would therefore only ever offer a click that answers *that card is not
+  on this page any more*.
 - **Only the verified host is claimed.** Teamtailor also serves customers at
   `<company>.teamtailor.com`, which nobody has injected into yet; a second host is one more `hosts`
   entry plus one more manifest grant, and a claim nobody injects into only *looks* right.
@@ -333,7 +340,7 @@ for `fetch` from a service worker without it).
 | `src/sites/index.js` | The **registry**: routes a URL to a plugin, answers by slug, and validates the set at load (a duplicated slug or host is refused) |
 | `src/sites/plans.js` | The three **strategies** - `CARD_LIST`, `JOB_PAGE`, `PANE` - as selector data, because a plan crosses into the page and a function cannot |
 | `src/sites/<site>.js` | One **plugin** per site: slug + hosts + content-script behaviour + the strategy it binds to (`djinni`, `dou`, `greenhouse`, `indeed`, `teamtailor` - the last one for the filler alone) |
-| `src/inject.js` | The listing-page content script (classic): the per-card `Scrape`/`Scraped` buttons for the `cards` sites (Djinni/DOU, and Greenhouse's filler) |
+| `src/inject.js` | The button content script (classic): `Scrape`/`Scraped` on the `cards` sites - per card on Djinni/DOU, and beside the job title on a board that renders no cards (Greenhouse) |
 | `src/mygreenhouse.js` | The MyGreenhouse portal's content script (classic, its own `content_scripts` entry): the `Scraped`/`Not Scraped` **badges** on `my.greenhouse.io` tiles. Read-only - no scrape action, no scrape selectors of its own, and its one status message names the `greenhouse` source |
 | `src/indeed.js` | The Indeed content script (classic, its own `content_scripts` entry): the same buttons, but a click first selects the card and waits for the pane - the only shape where the text is not in the card. Also answers the sweep's two messages (`indeedCards`, `indeedSelect`) |
 | `src/indeed/sweep.js` | The whole-feed walk behind the popup's **Scrape & queue this page** on Indeed: select each card, read its pane, publish one batch. Runs in the worker (the popup cannot hold a 30-second loop) and knows no selector |
@@ -342,7 +349,7 @@ for `fetch` from a service worker without it).
 | `src/form/worker.js` | The flow, as a module `background.js` delegates to: snapshot -> `POST /api/apply/<job_id>` -> poll -> fetch the letter and the PDF -> apply, recording the phase of each step |
 | `src/form/phases.js` | The progress vocabulary: the step list and the one-line label the popup ticks through while a fill runs (pure, unit tested) |
 | `src/background.js` | The only network client: sign-in, token storage, the status lookup, the page->card lookup (`cardForUrl`), the authenticated batch POST, and the form filler's messages (`pickForm`, `formRecipe`, `saveFormDefaults`, `clearFormRecipe`, `populate`, `phase`) |
-| `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome |
+| `src/popup.html`, `src/popup.js` | Scrape the active tab, hand the batch to the worker, report the outcome. On a page whose URL names its vacancy (`vacancyIdFromUrl`) it also checks on open whether the board already has it, and disables *Scrape & queue this page* for one that is there |
 | `README.md` | The same load-and-use steps as above, for an operator |
 
 ## Contract
@@ -369,15 +376,21 @@ for `fetch` from a service worker without it).
 - Text extraction avoids `innerText`: jsdom does not implement it, and a
   layout-dependent value would make the scraper untestable.
 
-## The injected per-card buttons (`src/inject.js`)
+## The injected buttons (`src/inject.js`)
 
-Loaded as a `content_scripts` entry (`https://djinni.co/*` + the `www` host, `document_idle`), so
-it runs on every Djinni page and injects into whatever vacancy cards that page renders - the
-jobs list **and** the dashboard/subscriptions pages (`/my/dashboard/subs`), which reuse the same
-card component. A page with no cards (a vacancy's own detail page) simply gets nothing: the
-script is a no-op there. It is a **classic script**: MV3 does not load an ESM content
-script from the manifest, so this file must have no `import`/`export` (the test loads it the
-way the browser does, with `window.eval`).
+Loaded as a `content_scripts` entry by host (`document_idle`), so it runs on every page the manifest
+lists for it - Djinni (the jobs list and the dashboard/subscriptions page `/my/dashboard/subs`, which
+reuses the card component), DOU, the three Greenhouse boards and the Teamtailor career host - and works
+on the **unit** a button belongs to:
+
+- **a listing card**: Djinni and DOU. One vacancy per `div[id^="job-item-"]`, and its `id` is the
+  external_id.
+- **the page itself**: a board that renders no cards at all, i.e. Greenhouse. The whole page is one
+  vacancy, so the id comes from its URL (`/jobs/<digits>`) and the button lands beside the job's `h1`.
+
+A page that is neither gets nothing at all (Teamtailor: `buttons: 'none'`, and none of Greenhouse's
+markup). It is a **classic script**: MV3 does not load an ESM content script from the manifest, so this
+file must have no `import`/`export` (the test loads it the way the browser does, with `window.eval`).
 
 - **Two permissions, and they are not interchangeable.** `content_scripts.matches` makes
   Chrome *load* `inject.js` on the page; `host_permissions` is what lets
@@ -386,12 +399,19 @@ way the browser does, with `window.eval`).
   a button *on the page* is not a user invocation, so without the host permission a click fails
   with `Cannot access contents of the page...`. Both lists must name `djinni.co`; a test in
   `inject.test.ts` pins that.
-- **Where the button goes**: inside the card (`div[id^="job-item-"]`), in the footer's action
-  row - the row holding the site's own `Зберегти` / `Сховати` / copy-link controls. That row is
-  found through the site's own `[data-job-id]` hook (on `button.copy-link-item`, the element
-  its analytics reads); when that is missing, the footer block
-  `div.d-flex.flex-column.gap-1` is the fallback. The button gets `margin-left:auto`, i.e. the
-  footer's right bottom corner.
+- **Where the button goes**: inside a card, in the footer's action row - the row holding the site's own
+  `Зберегти` / `Сховати` / copy-link controls. That row is found through the site's own `[data-job-id]`
+  hook (on `button.copy-link-item`, the element its analytics reads); when that is missing, the footer
+  block `div.d-flex.flex-column.gap-1` is the fallback. The button gets `margin-left:auto`, i.e. the
+  footer's right bottom corner. A one-vacancy page has no such row: the button is inserted immediately
+  after the `h1` (or into the marker block, when the layout renders no title), with a plain margin.
+- **One selector is copied into this file, and pinned.** `#application-form, .job__description` *is*
+  `JOB_PAGE.marker` (`sites/plans.js`), carried here because a classic content script cannot import the
+  registry - and it is a **placement** gate, never a reading one (`extract.js` does the reading; this
+  file only says which vacancy a control stands for). The URL id is required as well, which is what
+  separates one vacancy's own page from the bare board that carries the same markup.
+  `inject.test.ts` asserts the copy against the strategy and both halves of the gate - a marker without
+  an id, and a URL id without the marker, each pinning "no button".
 - **States**, readable on the element as `data-cvt-state`: `idle` (green `Scrape`, Bootstrap
   `btn-success`) → `busy` (`Scraping…`, disabled) → `done` (`Scraped`, an `<a>` to
   `<gateway>/?card=<job_id>`, `target=_blank`) or `error` (`Retry scrape`, the reason in the
@@ -414,9 +434,10 @@ way the browser does, with `window.eval`).
   the incoming `{ type: 'boardChanged' }` - sent to every tab after the popup publishes a
   batch with `created > 0`, so the buttons stop offering `Scrape` for cards the popup just
   created.
-- **The buttons survive the site's own htmx swaps**: a `MutationObserver` (200ms debounce)
-  re-injects into any card that lost its button - favouriting, hiding and infinite scroll all
-  replace cards in place. "Not signed in" is a normal state: the buttons stay `Scrape`.
+- **The buttons survive the site's own swaps**: a `MutationObserver` (200ms debounce) re-injects into
+  any unit that lost its button - favouriting, hiding and infinite scroll all replace cards in place,
+  and a board page's title block is re-rendered by React. "Not signed in" is a normal state: the
+  buttons stay `Scrape`.
 
 ## Tests
 
@@ -439,7 +460,8 @@ cd apps/backoffice; npm test
 #                                  tests exercise the real plugins)
 #   src/lib/sites.test.ts     <- the registry: routing, validate(), structured-cloneable plans, the
 #                                 manifest wiring and the board's labels (both pinned against it)
-#   src/lib/inject.test.ts    <- inject.js, window.eval, fixture djinni-card-footer.html
+#   src/lib/inject.test.ts    <- inject.js, window.eval, fixture djinni-card-footer.html + the inline
+#                                 one-vacancy page (Greenhouse's job page, where the page is the unit)
 #   src/lib/mygreenhouse.test.ts <- mygreenhouse.js (eval too), tiles inline: both badge states, the
 #                                 one-per-page `cardStatus` with its explicit `source`, and the
 #                                 re-scan after an Inertia list swap
@@ -515,6 +537,9 @@ cd apps/backoffice; npx esbuild ../extension/src/*.js --bundle --platform=browse
   the portal's tiles are links to the boards, where `inject.js` already offers the button, and the
   tile's text is not the vacancy (the badge's explicit `source` is what keeps its read-only lookup
   honest - the one exception invariant 35 records).
+- Copy another strategy selector into `src/inject.js`, or change `JOB_PAGE.marker` without the copy
+  beside it: that one marker is pinned by `inject.test.ts` so it stays a single *placement* exception
+  rather than a habit (the reading is `extract.js`'s, and the vacancy is the worker's answer).
 - Add a build step, a bundler or a `package.json` to this directory.
 - Move the `fetch` back into the popup, or store credentials anywhere but
   `chrome.storage.local`.

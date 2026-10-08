@@ -6,8 +6,12 @@ import { JOB_PAGE } from './plans.js';
  * data-…-form-overlay-job-application-url-value="…/applications/new">`), so there are no cards to
  * click through.
  *
- * `buttons: 'none'` is deliberate, not an omission - the per-card button needs cards to sit in, and
- * these pages render none (`inject.js` finds no `div[id^="job-item-"]` and stays silent). The host is
+ * `buttons: 'none'` is deliberate, not an omission - `src/inject.js` sits its button either on a card
+ * or, on a one-vacancy page, beside the title *behind Greenhouse's own marker*
+ * (`#application-form, .job__description`), and these pages carry neither (their form is an overlay in
+ * the same document, `data-controller="careersite--jobs--form-overlay"`): a button there could only
+ * ever answer *"that card is not on this page any more"*, because the reader below refuses the page.
+ * The host is
  * still in the manifest's first content-script entry, for the *form filler* (`src/formfill.js`):
  * that is not a scraper - it fills an application, and it is wired by host too - which is exactly
  * how Greenhouse's boards got theirs. Verified live on this host 2026-10-07 (card `353314`'s

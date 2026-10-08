@@ -2,15 +2,21 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { describe, expect, it } from 'vitest';
+import { JOB_PAGE } from '../../../extension/src/sites/plans.js';
 
 /**
- * The injected per-card buttons are a **content script** - a classic script the browser loads
- * into the page - so this test runs it the way the browser does: `window.eval(source)` inside
- * a jsdom page, with a fake `chrome` runtime answering the two messages it sends
- * (`cardStatus`, `scrapeCard`).
+ * The injected `Scrape` / `Scraped` control is a **content script** - a classic script the browser
+ * loads into the page - so this test runs it the way the browser does: `window.eval(source)` inside a
+ * jsdom page, with a fake `chrome` runtime answering the two messages it sends (`cardStatus`,
+ * `scrapeCard`).
  *
- * Fixture: `fixtures/djinni-card-footer.html`, a copy of the live card markup (including the
- * `data-job-id` hook on the site's own copy-link button, which is what the script keys on).
+ * Two shapes of page, one control, so the suite has two fixtures:
+ *
+ * * a **listing page**: `fixtures/djinni-card-footer.html`, a copy of the live card markup including
+ *   the `data-job-id` hook the script keys on - one button per card, in the footer;
+ * * a **job page** whose whole content is one vacancy: `JOB_PAGE_HTML` below, the shape Greenhouse's
+ *   boards render (`.job__title > h1` above `.job__description`, the id only in the URL) - one
+ *   button, beside the title.
  */
 const SOURCE = readFileSync(
   fileURLToPath(new URL('../../../extension/src/inject.js', import.meta.url)),
@@ -38,11 +44,31 @@ interface Sent {
 type Answer = Record<string, unknown> | ((message: Sent) => Record<string, unknown>);
 
 const NOT_SIGNED_IN = { ok: false, error: 'not signed in' };
+const GATEWAY = 'http://localhost:4321';
+const DJINNI_URL = 'https://djinni.co/jobs/?primary_keyword=Python';
+const GREENHOUSE_JOB_URL = 'https://job-boards.greenhouse.io/cresteo/jobs/4740438005';
 
-/** A page with the content script already evaluated in it. */
-function page(html: string, answers: Record<string, Answer> = {}) {
+/**
+ * One vacancy's own page, as Greenhouse renders it (`fixtures/greenhouse-job.html` holds the same
+ * shape): no cards at all, so the page itself is the unit - the id comes from the URL, and the title
+ * block is the only place with room for a button.
+ */
+const JOB_PAGE_HTML = `
+  <div class="job__title">
+    <h1 class="section-header section-header--large">Senior .NET Engineer</h1>
+    <div class="job__location"><div>Anywhere</div></div>
+  </div>
+  <div class="job__description body"><p>Prose details</p></div>`;
+
+/**
+ * A page with the content script already evaluated in it.
+ *
+ * `url` is what tells the script which shape it is standing on: the default Djinni listing, or one
+ * vacancy's own page (`GREENHOUSE_JOB_URL`), where the *page* is the unit rather than a card.
+ */
+function page(html: string, answers: Record<string, Answer> = {}, url = DJINNI_URL) {
   const dom = new JSDOM(`<body>${html}</body>`, {
-    url: 'https://djinni.co/jobs/?primary_keyword=Python',
+    url: url,
     runScripts: 'outside-only',
     // The script logs through `console.info`; jsdom's default console would echo it into the
     // test output.
@@ -343,5 +369,111 @@ describe('per-card buttons (content script)', () => {
     expect(button).not.toBeNull();
     expect(button?.parentElement?.className).toContain('align-items-center');
     expect(button?.parentElement?.lastElementChild).toBe(button);
+  });
+
+  it('puts a Scrape button beside the title on a page that is one vacancy', () => {
+    const { document, sent } = page(
+      JOB_PAGE_HTML,
+      { cardStatus: { ok: true, gateway: GATEWAY, known: {} } },
+      GREENHOUSE_JOB_URL,
+    );
+
+    // No waiting: a card's button is part of the first scan, and so is this one.
+    const button = document.querySelector('button.cvt-scrape');
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute('data-cvt-external-id')).toBe('4740438005');
+    expect(button?.getAttribute('data-cvt-state')).toBe('idle');
+    expect(button?.textContent).toBe('Scrape');
+
+    // Beside the title: the block that holds the `h1`, immediately after it.
+    const title = document.querySelector('h1');
+    expect(button?.parentElement).toBe(title?.parentElement);
+    expect(title?.nextElementSibling).toBe(button);
+
+    // The id is the one the strategy reads from this URL - so the lookup, the button and the scrape
+    // that follows are all about the same vacancy.
+    expect(new RegExp(JOB_PAGE.urlId).exec(GREENHOUSE_JOB_URL)?.[1]).toBe('4740438005');
+    expect(sent[0]?.externalIds).toEqual(['4740438005']);
+  });
+
+  it('turns that button into the board link for a vacancy the board already has', async () => {
+    const known = { '4740438005': { jobId: 'job-9', status: 'completed', archived: false } };
+    const { document } = page(
+      JOB_PAGE_HTML,
+      { cardStatus: { ok: true, gateway: GATEWAY, known } },
+      GREENHOUSE_JOB_URL,
+    );
+    await settle();
+
+    const link = document.querySelector('a.cvt-scrape');
+    expect(link?.textContent).toBe('Scraped');
+    expect(link?.getAttribute('href')).toBe(GATEWAY + '/?card=job-9');
+    expect(link?.getAttribute('data-cvt-state')).toBe('done');
+    expect(document.querySelector('button.cvt-scrape')).toBeNull();
+  });
+
+  it('queues the vacancy the page names when the button is clicked', async () => {
+    const { document, sent } = page(
+      JOB_PAGE_HTML,
+      {
+        cardStatus: { ok: true, gateway: GATEWAY, known: {} },
+        scrapeCard: { ok: true, jobId: 'job-9', gateway: GATEWAY, published: 1 },
+      },
+      GREENHOUSE_JOB_URL,
+    );
+
+    (document.querySelector('button.cvt-scrape') as HTMLButtonElement).click();
+    await settle();
+
+    expect(sent[1]).toEqual({ type: 'scrapeCard', externalId: '4740438005' });
+    expect(document.querySelector('a.cvt-scrape')?.textContent).toBe('Scraped');
+  });
+
+  it('shows nothing on a bare board, which carries the markup but names no job', async () => {
+    const { document, sent } = page(
+      JOB_PAGE_HTML,
+      { cardStatus: { ok: true, gateway: GATEWAY, known: {} } },
+      'https://job-boards.greenhouse.io/cresteo',
+    );
+    await settle();
+
+    expect(document.querySelector('.cvt-scrape')).toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('shows nothing on a career site whose job page this scraper cannot read', async () => {
+    // Teamtailor's career sites are `buttons: 'none'` in the registry and carry none of Greenhouse's
+    // marker, so they get no control at all - rather than one whose every click could only answer
+    // "that card is not on this page any more".
+    const { document, sent } = page(
+      '<div data-controller="careersite--jobs--form-overlay">Apply</div>',
+      { cardStatus: { ok: true, gateway: GATEWAY, known: {} } },
+      'https://careers.blackbird-lab.com/jobs/7530541-senior-net-engineer/2e256c48',
+    );
+    await settle();
+
+    expect(document.querySelector('.cvt-scrape')).toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('falls back to the marker block when the page renders no title', () => {
+    const { document } = page(
+      '<form id="application-form"><label>Name</label></form>',
+      { cardStatus: { ok: true, gateway: GATEWAY, known: {} } },
+      GREENHOUSE_JOB_URL,
+    );
+
+    const button = document.querySelector('form#application-form > button.cvt-scrape');
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute('data-cvt-external-id')).toBe('4740438005');
+  });
+
+  it('carries the marker it gates on as a copy of the registry strategy, pinned here', () => {
+    // `inject.js` is a classic script and cannot import `sites/plans.js`, so it carries
+    // `JOB_PAGE.marker` and the URL shape that names the vacancy. This is the guard that the copies
+    // cannot drift - the same idea as the manifest guards below - and it is the *only* selector in
+    // that file that is not a card's: it decides where a button goes, never what a vacancy says.
+    expect(SOURCE).toContain(JOB_PAGE.marker);
+    expect(SOURCE).toContain('/\\/jobs\\/(\\d+)(?:\\/|$)/');
   });
 });

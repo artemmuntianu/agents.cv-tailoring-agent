@@ -1,7 +1,7 @@
 import { extractVacancies } from './extract.js';
 import { phaseLabel } from './form/phases.js';
 import { describeReport } from './form/plan.js';
-import { siteForPage } from './sites/index.js';
+import { siteForPage, vacancyIdFromUrl } from './sites/index.js';
 
 /**
  * Popup: scrape the active tab, drive the application-form filler. No credential ever reaches this
@@ -40,7 +40,38 @@ async function refresh() {
     ? `Signed in as ${state.user}\nGateway: ${state.gateway}`
     : 'Not signed in - use the account your administrator provisioned.';
   if (!signedIn) $('gateway').value = state.gateway;
-  if (signedIn) await refreshRecipe();
+  if (signedIn) {
+    await refreshRecipe();
+    await checkPageScraped();
+  }
+}
+
+/**
+ * Check whether the current page's vacancy is already on the board and, if so, disable the
+ * Scrape button. This runs whenever the popup opens (from `refresh()`) so the operator gets
+ * immediate feedback on a page they have already queued.
+ *
+ * Only job-page sites carry a vacancy id in the URL (Greenhouse, Teamtailor, …). Listing-page
+ * sites (Djinni, DOU) show many cards - the per-card buttons already reflect their state, so
+ * the popup button stays enabled for those.
+ */
+async function checkPageScraped() {
+  const scrapeBtn = $('scrape');
+  const tab = await activeTab();
+  if (!tab || !tab.url) return;
+
+  const externalId = vacancyIdFromUrl(tab.url);
+  if (!externalId) return; // listing page - no single id to check
+
+  const response = await send({ type: 'cardStatus', externalIds: [externalId] });
+  if (!response || !response.ok) return; // not signed in yet, or gateway down - leave enabled
+
+  const entry = response.known && response.known[externalId];
+  if (!entry || !entry.jobId) return; // not on the board yet
+
+  const hint = entry.archived ? 'refused' : entry.status === 'completed' ? 'tailored' : 'tailoring in progress';
+  scrapeBtn.disabled = true;
+  scrapeBtn.title = `Already on the board (${hint}) — open the backoffice to see it`;
 }
 
 /**
@@ -196,7 +227,11 @@ async function scrapeAndQueue() {
   } catch (error) {
     status(error && error.message ? error.message : String(error), 'error');
   } finally {
+    // Re-enable for the next attempt, then let the page's own check have the last word: a page that
+    // *just* became scraped must not go back to offering `Scrape`. This is the popup's half of what
+    // the injected button shows on the page itself.
     $('scrape').disabled = false;
+    await checkPageScraped();
   }
 }
 
