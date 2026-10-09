@@ -9,8 +9,9 @@ export const prerender = false;
  *
  * One `application_profile` row per operator, read by every prompt through the **card's owner**
  * (`apps/worker/utils/candidate.py`): the model may use these facts and must never invent the others.
- * The editor is `/sources` (`CandidateFactsEditor.tsx`, the extension's own one was removed
- * 2026-10-03); `facts` lists the known keys, so a client never has to hardcode them.
+ * The editors are `/sources` - `CandidateFactsEditor.tsx` for the facts and
+ * `StandingAnswersEditor.tsx` for the standing answers, since the extension's own one was removed
+ * 2026-10-03 - and `facts` lists the known keys, so a client never has to hardcode them.
  */
 export const GET: APIRoute = async ({ locals }) => {
   const session = locals.session;
@@ -32,9 +33,10 @@ export const GET: APIRoute = async ({ locals }) => {
  * in a Gemini prompt. An empty profile is a legitimate save (the operator may want to clear it); a
  * non-object body is not.
  *
- * `standing_answers` is merged rather than replaced: leaving the key out keeps the stored
- * question/answer set (a caller whose form shows only the facts must not wipe it). Send an explicit
- * `{}` to clear it.
+ * `standing_answers` is guarded rather than blindly replaced: leaving the key out keeps the stored
+ * question/answer set (a caller whose form shows only the facts must not wipe it), while a caller
+ * that *does* send the object replaces the set key for key - which is how `/sources` removes or
+ * rewords a question (`lib/profile.ts`). Send an explicit `{}` to clear it.
  */
 export const PUT: APIRoute = async ({ request, locals }) => {
   const session = locals.session;

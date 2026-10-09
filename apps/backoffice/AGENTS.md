@@ -30,8 +30,8 @@ npm run dev               # http://localhost:4321 -> sign in
 
 npm test           # vitest: auth, board + archive, filters, actions, interviews, details + the
                    # application URL, history lines, run log, ingest, the manual add, artifacts,
-                   # scraper and the form filler (jsdom), and the filler's page->card resolution
-                   # (fake chrome/fetch)
+                   # scraper and the form filler (jsdom), the filler's page->card resolution (fake
+                   # chrome/fetch), the candidate-facts edit rules and the answers editor's render
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -100,7 +100,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
 | `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the deliverable's five states) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
-| `src/pages/sources.astro`, `src/components/SourcesPage.tsx`, `src/pages/api/sources.ts` | The **Sources of truth** page (`/sources`): *what a generated CV or cover letter is built from* - the master CV model (`cv_data.json`, rendered as the sections the prompt and the document share), the master document (`input/cv.docx`) and the model rotation state (`model_state.json`) read through the artifact mirror, plus the operator's candidate facts row (`application_profile`, sanitized exactly as `apps/worker/utils/candidate.py` does). Read-only: `src/lib/sources.ts` resolves the paths from `artifacts.ts`'s root, reports a file this machine does not have as **absent with its path** (never as empty), and never writes a *file*: its one write is the candidate facts (`CandidateFactsEditor` -> `PUT /api/profile`, the row an application form is filled from), because that is operator data in Postgres rather than an artifact on the volume |
+| `src/pages/sources.astro`, `src/components/SourcesPage.tsx`, `src/components/JsonTree.tsx`, `src/pages/api/sources.ts` | The **Sources of truth** page (`/sources`): *what a generated CV or cover letter is built from* - the master CV model (`cv_data.json`, parsed and shown as a **read-only tree** with `JsonTree.tsx`, the same surface the recruiter Q&A set uses; only the title, the summary and the relevant skills are ever rewritten, the experience and projects are context the prompt reads - `cv_replacements.py::drop_read_only_replacements`), the master document (`input/cv.docx`) and the model rotation state (`model_state.json`) read through the artifact mirror, plus the operator's candidate facts row (`application_profile`, sanitized exactly as `apps/worker/utils/candidate.py` does). Read-only: `src/lib/sources.ts` resolves the paths from `artifacts.ts`'s root, reports a file this machine does not have as **absent with its path** (never as empty), and never writes a *file*: its one write is the candidate facts (`CandidateFactsEditor` for the short facts and `StandingAnswersEditor` for the recruiter Q&A set, both -> `PUT /api/profile`, the row every prompt is grounded in and an application form is filled from, with the edit rules in `src/lib/profile.ts`), because that is operator data in Postgres rather than an artifact on the volume |
 | `src/lib/missing.ts` | The *Missing fields* section: which card fields the scrape left empty, the request fragment they become, and the fill-only company rule (`resolveCompany`) |
 | `src/pages/vacancy/[jobId].astro`, `src/components/VacancyTextPage.tsx` | The **parsed vacancy text** (`/vacancy/<job_id>`), opened from a card's *Parsed vacancy text* button: `resumes.description_raw` verbatim with the site, id, posting link, board state and its size. Read-only |
 | `src/pages/cover/[jobId].astro`, `src/components/CoverLetterPage.tsx` | The **cover letter** (`/cover/<job_id>`), opened from a card's *Cover letter* link: the text an application sends, its state/model/when, and the *Generate*/*Regenerate* button - the letter's only writer. The card keeps the state as that link's label |
@@ -287,16 +287,22 @@ polls for the plan. Same shape as the cover-letter route: claim the row, publish
 * `GET /api/apply/<job_id>?schema=<hash>` is the poll: `completed` (with the plan), `running`,
   `queued`, `failed`, `stale` (the stored plan belongs to a different form - POST again) or `none`.
 * `GET`/`PUT /api/profile` read and write the **candidate facts**: one `application_profile` jsonb
-  row per operator (`lib/candidate.ts` sanitises against the known keys and the caps - the mirror of
-  `apps/worker/utils/candidate.py`, `MAX_VALUE_CHARS` per fact and `MAX_ANSWER_CHARS` per standing answer). A
+  row per operator (`lib/candidateFacts.ts` owns the known keys, the caps and the sanitiser - the
+  mirror of `apps/worker/utils/candidate.py`, `MAX_VALUE_CHARS` per fact and `MAX_ANSWER_CHARS` per
+  standing answer - and `lib/candidate.ts` is the Postgres row around it, re-exporting them). A
   database row rather than a file, because the board runs on the host and the `apply` worker runs in
-  the cluster - the shared Postgres is the only place both can see. `PUT` **merges**
-  `standing_answers`, so a partial caller (one whose form shows the facts but not the question/answer
-  set) cannot wipe it (send `{}` to clear it deliberately); the extension no longer calls this route -
-  its *Candidate facts* editor was removed 2026-10-03, and the facts are edited on `/sources`
-  (`CandidateFactsEditor.tsx`) instead. The same row grounds the tailoring and
-  cover-letter prompts as well (`CONSTITUTION.md` invariants 25/30/31), and the row a prompt reads is
-  the **card owner's**.
+  the cluster - the shared Postgres is the only place both can see. `PUT` keeps `standing_answers`
+  when the key is **absent**, so a partial caller (one whose form shows the facts but not the
+  question/answer set) cannot wipe it, and replaces the set key for key when it *is* sent - which is
+  what lets `/sources` remove or reword a question - while an explicit `{}` clears it deliberately.
+  The row has **two** editors there: `CandidateFactsEditor.tsx` for the short facts (the eleven
+  fields an application form asks for by name) and `StandingAnswersEditor.tsx` for the recruiter Q&A
+  set, a `json-edit-react` tree (the POC's one UI dependency, added 2026-10-08) whose rules live in
+  `lib/profile.ts` - `answerIssues` gates the save so a value the server would cut or drop is
+  reported instead of silently truncated, and `savePayload` sends the whole set. The extension no
+  longer calls this route: its *Candidate facts* editor was removed 2026-10-03. The same row grounds
+  the tailoring and cover-letter prompts as well (`CONSTITUTION.md` invariants 25/30/31), and the row
+  a prompt reads is the **card owner's**.
 * `GET /api/cover/<job_id>` serves the generated letter to the extension, which pastes it into a
   form; the board itself keeps reading it through the card payload.
 

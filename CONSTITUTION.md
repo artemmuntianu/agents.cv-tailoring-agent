@@ -439,11 +439,14 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     fabrication. It is **evidence, never document text**: no prompt may write contacts, salary,
     availability, work format, location or job-search status into the CV or the letter. Facts cap at
     `MAX_VALUE_CHARS`, standing answers at `MAX_ANSWER_CHARS` (a project deep-dive does not fit in a
-    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` still
-    merges `standing_answers` so a partial save cannot wipe the question/answer set. The row that
-    grounds a card is its **owner's** (invariant 25), and the extension no longer edits facts at
-    all: the one maintenance surface is this row (`/sources` renders it and edits it through
-    `CandidateFactsEditor`, `seed_profile.py` loads a whole answer set into it).
+    form field); `scripts/seed_profile.py` loads a whole answer set, and `PUT /api/profile` keeps
+    `standing_answers` while the key is absent (a partial save cannot wipe the question/answer set)
+    but replaces it key for key when a caller sends the whole set - which is what lets the `/sources`
+    answers editor remove or reword a question. The row that grounds a card is its **owner's**
+    (invariant 25), and the extension no longer edits facts at all: the one maintenance surface is
+    this row (`/sources` renders it and edits it through `CandidateFactsEditor` - the short facts -
+    and `StandingAnswersEditor`, a `json-edit-react` tree over the recruiter Q&A set;
+    `seed_profile.py` loads a whole answer set into it).
 
 32. **The deliverable can be replaced by hand, and the PDF follows.** The operator downloads the
     tailored DOCX, verifies it, edits what the model could not, and uploads it back through the
@@ -613,8 +616,9 @@ so that a change which depends on them is a conscious one.
   salary, availability, work rights, English level - `PUT /api/profile` from the popup) was removed
   2026-10-03: it was a second writer keyed to whichever account the extension was signed in as, and
   every card is grounded in its **owner's** row anyway (invariant 25). The facts have one maintenance
-  surface - the `application_profile` row, edited by `/sources` (`CandidateFactsEditor.tsx`, added
-  2026-10-08 because nothing wrote the facts) and loaded wholesale by `scripts/seed_profile.py`.
+  surface - the `application_profile` row, edited by `/sources` (`CandidateFactsEditor.tsx` for the
+  facts and `StandingAnswersEditor.tsx` for the standing answers, added 2026-10-08 because nothing
+  wrote the facts) and loaded wholesale by `scripts/seed_profile.py`.
   Do not add a second editor inside the extension.
 * **kind / k3d / minikube support** in `scripts/local-deploy.ps1`. Docker Desktop's
   kubeadm cluster shares Docker's image store, which is what makes a locally built

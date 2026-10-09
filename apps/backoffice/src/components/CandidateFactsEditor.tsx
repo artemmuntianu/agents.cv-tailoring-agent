@@ -1,32 +1,30 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { factLabel } from '../lib/profile';
 
 /**
- * The `application_profile` row as a form - the one editor the candidate facts have.
+ * The `application_profile` row's short facts as a form - the half of the row a form field can hold.
  *
  * They are per-operator data in Postgres, read by all three prompts, and until now the only way to
  * change them was `scripts/seed_profile.py` over a JSON file (`/sources` rendered them, nothing
  * wrote them). That is the wrong shape for the fact an application form asks for by name: a fact
  * the prompt *has* is a field the extension can fill, and a missing one is a field left to the
  * operator - so the surface for "the form asked for my phone" belongs beside the row it changes.
+ * The recruiter Q&A set in that same row is prose rather than a field and is edited next to this
+ * form (`StandingAnswersEditor`), which is why this component only ever touches the facts.
  *
  * `GET /api/profile` supplies the values *and* the key list (`facts`), so this component never
  * hardcodes a vocabulary that `apps/worker/utils/candidate.py` owns. The same call reports how many
  * standing answers the row carries: `PUT` replaces the facts wholesale - that is what makes an
- * emptied field a deletion rather than a blank - but it *merges* `standing_answers`, and this
- * component deliberately never sends that key, so a save here cannot wipe the recruiter answers.
+ * emptied field a deletion rather than a blank - while an absent `standing_answers` key keeps the
+ * stored set, and this component deliberately never sends it, so a save here cannot wipe the
+ * answers the other editor owns.
  */
 
 interface ProfilePayload {
   ok: boolean;
   profile: { facts: Record<string, string>; standing_answers: Record<string, string> } | null;
   facts: string[];
-}
-
-/** `full_name` -> `Full name`: the route owns the keys, this is only what the label reads. */
-function labelFor(key: string): string {
-  const words = key.replace(/_/g, ' ');
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export default function CandidateFactsEditor({ onSaved }: { onSaved?: () => void }) {
@@ -98,7 +96,7 @@ export default function CandidateFactsEditor({ onSaved }: { onSaved?: () => void
       <div className="grid gap-2 sm:grid-cols-2">
         {keys.map((key) => (
           <label key={key} className="text-xs text-slate-600">
-            <span className="block font-medium">{labelFor(key)}</span>
+            <span className="block font-medium">{factLabel(key)}</span>
             <input
               value={values[key] ?? ''}
               onChange={(event) => setValues({ ...values, [key]: event.target.value })}
@@ -128,8 +126,8 @@ export default function CandidateFactsEditor({ onSaved }: { onSaved?: () => void
         </button>
         <span className="text-xs text-slate-500">
           {answers > 0
-            ? `${answers} standing answers are kept untouched - scripts/seed_profile.py is what changes those.`
-            : 'No standing answers stored yet (scripts/seed_profile.py loads a whole set).'}
+            ? `${answers} standing answers are kept untouched here - the answers editor below changes those.`
+            : 'No standing answers stored yet (add them below, or load a whole set with scripts/seed_profile.py).'}
         </span>
       </div>
       {error && <p className="text-sm text-rose-700">{error}</p>}

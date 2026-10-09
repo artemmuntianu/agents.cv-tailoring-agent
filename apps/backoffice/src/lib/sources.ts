@@ -26,16 +26,13 @@ export interface FileSource {
   modifiedAt: string | null;
 }
 
-export interface CvSection {
-  title: string;
-  lines: string[];
-}
-
 export interface CvModelSource extends FileSource {
+  /**
+   * The parsed document, as the model's own keys - the page renders it with the shared JSON tree
+   * (`components/JsonTree.tsx`, read-only), so it needs no second, flattened shape here.
+   */
   model: Record<string, unknown> | null;
   parseError: string | null;
-  /** The sections the tailoring prompt and the document share, in document order. */
-  sections: CvSection[];
 }
 
 export interface ModelStateSource extends FileSource {
@@ -83,70 +80,18 @@ export function readFileSource(label: string, path: string): FileSource {
 export function readCvModel(path: string): CvModelSource {
   const base = describe('Master CV model (cv_data.json)', path);
   if (!base.present) {
-    return { ...base, model: null, parseError: null, sections: [] };
+    return { ...base, model: null, parseError: null };
   }
   try {
     const model = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-    return { ...base, model, parseError: null, sections: cvModelSections(model) };
+    return { ...base, model, parseError: null };
   } catch (error) {
     return {
       ...base,
       model: null,
       parseError: error instanceof Error ? error.message : String(error),
-      sections: [],
     };
   }
-}
-
-/** The CV model as displayable sections - pure, so the wording is unit tested. */
-export function cvModelSections(model: Record<string, unknown> | null): CvSection[] {
-  if (!model) return [];
-  const sections: CvSection[] = [];
-  const header = (model.header ?? {}) as Record<string, unknown>;
-  const headerLines = [
-    header.name ? `NAME: ${header.name}` : null,
-    header.title ? `TITLE: ${header.title}` : null,
-  ].filter((line): line is string => Boolean(line));
-  if (headerLines.length) sections.push({ title: 'Header', lines: headerLines });
-
-  if (typeof model.summary === 'string' && model.summary.trim()) {
-    sections.push({ title: 'Summary', lines: [model.summary] });
-  }
-
-  const skills = (model.skills ?? {}) as Record<string, unknown>;
-  const skillLines = Object.entries(skills)
-    .filter(([, value]) => String(value ?? '').trim() !== '')
-    .map(([key, value]) => `${key}: ${value}`);
-  if (skillLines.length) sections.push({ title: 'Relevant skills', lines: skillLines });
-
-  const experience = (model.professional_experience ?? []) as Record<string, unknown>[];
-  // One entry is four separate paragraphs in the document (role | context / period | employer),
-  // so the page shows all four rather than inventing a single composite line.
-  const experienceLines = experience.flatMap((entry) => [
-    `${entry.role ?? ''} - ${entry.company_info ?? ''}`.replace(/ - $/, ''),
-    ...(entry.context ? [String(entry.context)] : []),
-    ...(entry.dates ? [String(entry.dates)] : []),
-    ...((entry.highlights ?? []) as string[]).map((highlight) => `• ${highlight}`),
-  ]);
-  if (experienceLines.length) {
-    // Only the title, the summary and the skills are ever rewritten, so the experience block is
-    // read-only context too - the same note the projects section carries.
-    sections.push({ title: 'Professional experience (read-only context)', lines: experienceLines });
-  }
-
-  const projects = (model.personal_projects ?? []) as Record<string, unknown>[];
-  const projectLines = projects.flatMap((entry) => [
-    String(entry.heading ?? 'Project'),
-    ...(entry.year ? [String(entry.year)] : []),
-    ...(entry.description ? [String(entry.description)] : []),
-    ...((entry.highlights ?? []) as string[]).map((highlight) => `• ${highlight}`),
-    ...(entry.stack ? [`Tech Stack: ${entry.stack}`] : []),
-    ...((entry.links ?? []) as string[]),
-  ]);
-  if (projectLines.length) {
-    sections.push({ title: 'Personal projects (read-only context)', lines: projectLines });
-  }
-  return sections;
 }
 
 /**

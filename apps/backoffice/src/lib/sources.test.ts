@@ -2,56 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  cvModelSections,
-  modelStateView,
-  readCvModel,
-  readFileSource,
-  sourcePaths,
-} from './sources';
-
-describe('the CV model as the page shows it', () => {
-  it('keeps document order and skips what the model does not have', () => {
-    const sections = cvModelSections({
-      header: { name: 'Jane Doe', title: 'Senior Engineer' },
-      summary: 'Twenty years of it.',
-      skills: { Languages: 'Python', Empty: '   ' },
-      professional_experience: [
-        {
-          role: 'Lead',
-          company_info: 'Acme',
-          context: 'Payments',
-          dates: '2020 - 2024',
-          highlights: ['Did things'],
-        },
-      ],
-      personal_projects: [
-        { heading: 'Project A', year: '2026', stack: 'Python', links: ['Repo: x'] },
-      ],
-    });
-    expect(sections.map((section) => section.title)).toEqual([
-      'Header',
-      'Summary',
-      'Relevant skills',
-      'Professional experience (read-only context)',
-      'Personal projects (read-only context)',
-    ]);
-    expect(sections[0].lines).toEqual(['NAME: Jane Doe', 'TITLE: Senior Engineer']);
-    expect(sections[2].lines).toEqual(['Languages: Python']);
-    expect(sections[3].lines).toEqual([
-      'Lead - Acme',
-      'Payments',
-      '2020 - 2024',
-      '• Did things',
-    ]);
-    expect(sections[4].lines).toEqual(['Project A', '2026', 'Tech Stack: Python', 'Repo: x']);
-  });
-
-  it('never invents a section for a model that is not there', () => {
-    expect(cvModelSections(null)).toEqual([]);
-    expect(cvModelSections({})).toEqual([]);
-  });
-});
+import { modelStateView, readCvModel, readFileSource, sourcePaths } from './sources';
 
 describe('reading a source file', () => {
   it('reports a missing file as absent with its path, not as empty content', () => {
@@ -59,14 +10,17 @@ describe('reading a source file', () => {
     const missing = readFileSource('x', join(dir, 'nope.json'));
     expect(missing.present).toBe(false);
     expect(missing.path).toContain('nope.json');
-    expect(readCvModel(join(dir, 'nope.json')).sections).toEqual([]);
+    expect(readCvModel(join(dir, 'nope.json')).model).toBeNull();
   });
 
-  it('reads the model, and says so when the JSON is broken', () => {
+  it('hands the model over as the parsed document, and says so when the JSON is broken', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sources-'));
     const path = join(dir, 'cv_data.json');
-    writeFileSync(path, JSON.stringify({ summary: 'ok' }));
-    expect(readCvModel(path).sections.map((section) => section.title)).toEqual(['Summary']);
+    const model = { summary: 'ok', professional_experience: [{ role: 'Lead' }] };
+    writeFileSync(path, JSON.stringify(model));
+    // The page renders this object with the shared tree (`components/JsonTree.tsx`), so the reader
+    // hands over the model's own keys - a flattened second shape would be a duplicate of it.
+    expect(readCvModel(path).model).toEqual(model);
 
     writeFileSync(path, '{oops');
     const broken = readCvModel(path);

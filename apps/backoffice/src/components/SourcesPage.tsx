@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from './AppShell';
 import CandidateFactsEditor from './CandidateFactsEditor';
-import type { CandidateProfile } from '../lib/candidate';
+import StandingAnswersEditor from './StandingAnswersEditor';
+import JsonTree from './JsonTree';
+import type { CandidateProfile } from '../lib/candidateFacts';
+import { answerSummary, factLines } from '../lib/profile';
 import type { CvModelSource, FileSource, ModelStateSource } from '../lib/sources';
 
 /**
@@ -13,10 +16,14 @@ import type { CvModelSource, FileSource, ModelStateSource } from '../lib/sources
  * model wrote the last document. The vacancy itself (`resumes.description_raw`) is the fourth input
  * and stays on the card, where it belongs.
  *
- * Read-only except for one row: the three *files* are only ever rendered - the route reads, and a
- * source that is not on this machine is reported with its path and the command that mirrors it
- * rather than shown as empty - while the candidate facts are operator data in Postgres and have an
- * editor of their own (`CandidateFactsEditor`, over `PUT /api/profile`).
+ * Read-only except for one row: the *files* are only ever rendered, and through the same JSON tree
+ * the candidate facts use (`JsonTree` - a document deserves a JSON view, not a dump of flattened
+ * lines), while a source that is not on this machine is reported with its path and the command that
+ * mirrors it rather than shown as empty. The candidate facts are operator data in Postgres and have
+ * two editors over `PUT /api/profile`: the short facts as a form (`CandidateFactsEditor`) and the
+ * recruiter Q&A set as an editable tree (`StandingAnswersEditor`), because a 1500-character answer is
+ * not a form field. The model's tree is the *viewer* on purpose - the board reads the artifact
+ * volume and never writes it, so an edit there would have nowhere to go.
  */
 
 interface FactsSource {
@@ -158,18 +165,24 @@ export default function SourcesPage({ session }: SourcesPageProps) {
             {sources.cvModel.parseError && (
               <p className="text-sm text-rose-700">Unreadable: {sources.cvModel.parseError}</p>
             )}
-            {sources.cvModel.sections.map((section) => (
-              <div key={section.title}>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  {section.title}
-                </p>
-                <Pre lines={section.lines} />
-              </div>
-            ))}
+            {sources.cvModel.model && (
+              <JsonTree
+                data={sources.cvModel.model}
+                rootName="cv_data.json"
+                readOnly
+                searchPlaceholder="Find a section, a role, a highlight"
+              />
+            )}
             <p className="text-xs text-slate-500">
               A section that exists in the document but not in this model never reaches the prompt
               (the JSON ⊆ DOCX rule), which is why the model - not the document - is what every
-              replacement is checked against.
+              replacement is checked against. Only the title, the summary and the relevant skills are
+              ever rewritten: the experience and the projects are context the prompt reads, and the
+              worker drops any replacement aimed at them
+              (<code>cv_replacements.py::drop_read_only_replacements</code>). The file is not editable
+              here because the board reads the artifact volume and never writes it - regenerate the
+              model from the master document, then push it with{' '}
+              <code>.\scripts\storage-files.ps1 -Action seed</code>.
             </p>
           </Block>
 
@@ -196,13 +209,11 @@ export default function SourcesPage({ session }: SourcesPageProps) {
             )}
             {facts?.present && (
               <>
-                <p className="text-xs text-slate-500">Stored {when(facts.updatedAt)}</p>
-                <Pre
-                  lines={Object.entries(facts.profile ?? {}).map(
-                    ([key, value]) =>
-                      `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`,
-                  )}
-                />
+                <p className="text-xs text-slate-500">
+                  Stored {when(facts.updatedAt)} · {factLines(facts.profile).length} facts ·{' '}
+                  {answerSummary(facts.profile?.standing_answers).count} standing answers
+                </p>
+                <Pre lines={factLines(facts.profile)} />
                 <p className="text-xs text-slate-500">
                   Ground truth about the candidate, never document text: a prompt may surface a fact
                   the CV omits, and no prompt may write contacts, salary, availability or work
@@ -210,6 +221,11 @@ export default function SourcesPage({ session }: SourcesPageProps) {
                 </p>
               </>
             )}
+            <StandingAnswersEditor
+              key={facts?.updatedAt ?? 'no-row'}
+              profile={facts?.profile ?? null}
+              onSaved={() => void load()}
+            />
             <CandidateFactsEditor onSaved={() => void load()} />
           </Block>
 
