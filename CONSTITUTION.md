@@ -485,7 +485,8 @@ The numbers are **stable addresses**: code, charts, SQL and the layer docs cite 
     `teamtailor`. The last is the **filler's alone**: an employer's own ATS page reached from a card's
     Application URL, where `JOB_PAGE` answers *no vacancies* rather than a mangled card and the host is
     granted for `src/formfill.js` (2026-10-07, card `353314` - before the grant, Populate answered
-    "no form filler on it"). Meanwhile `indeed` **only the browser can
+    "no form filler on it"; a second customer host, `career.avenga.com`, was claimed the same way on
+    2026-10-08). Meanwhile `indeed` **only the browser can
     produce**: Indeed serves no feed and no API. Verified
     2026-10-05: `pt.indeed.com/rss` returns no feed and `robots.txt` disallows `/rss` and `/*?rss`
     for `User-agent: *`; the old Publisher Job Search API host `api.indeed.com` no longer resolves;

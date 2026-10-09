@@ -47,6 +47,11 @@ describe('the site registry', () => {
     expect(
       siteForUrl('https://careers.blackbird-lab.com/jobs/7530541-senior-net-engineer/2e256c48')?.slug,
     ).toBe('teamtailor');
+    // The second customer host - the page that answered "no form filler on it" (2026-10-08): same
+    // vendor, same `/jobs/<id>-<slug>` shape, so it is a `hosts` entry and nothing else.
+    expect(
+      siteForUrl('https://career.avenga.com/jobs/7400200-senior-ai-engineer')?.slug,
+    ).toBe('teamtailor');
     expect(siteForUrl('https://pt.indeed.com/')?.slug).toBe('indeed');
 
     // A host that merely *ends* like a claimed one is not its subdomain, and an unlisted host is not a
@@ -92,6 +97,9 @@ describe('the site registry', () => {
         'https://careers.blackbird-lab.com/jobs/7530541-senior-net-engineer-for-toromont-cat/2e256c48-dd6e-4bf5-a5ad-356709384de1',
       ),
     ).toBe('7530541');
+    expect(
+      vacancyIdFromUrl('https://career.avenga.com/jobs/7400200-senior-ai-engineer'),
+    ).toBe('7400200');
     expect(vacancyIdFromUrl('https://pt.indeed.com/viewjob?jk=510f8e399c212ca1')).toBe(
       '510f8e399c212ca1',
     );
@@ -176,6 +184,20 @@ describe('the site registry', () => {
       for (const host of site.hosts) {
         const url = 'https://' + host + '/x';
         expect(granted.some((pattern) => pattern.test(url)), site.slug + ' ' + url).toBe(true);
+      }
+    }
+
+    // ...and every host is *loaded* somewhere - a host granted but named by no `content_scripts`
+    // entry has no filler on the page at all, which is what Populate reports as "no form filler on
+    // it - reload the page" (`career.avenga.com`, 2026-10-08). Which entry it is stays each plugin's
+    // business: Indeed's hosts are matched by the pane script's own entry, not the filler's.
+    const injected = MANIFEST.content_scripts
+      .flatMap((entry) => entry.matches)
+      .map(patternToRegex);
+    for (const site of SITES) {
+      for (const host of site.hosts) {
+        const url = 'https://' + host + '/x';
+        expect(injected.some((pattern) => pattern.test(url)), site.slug + ' ' + url).toBe(true);
       }
     }
 

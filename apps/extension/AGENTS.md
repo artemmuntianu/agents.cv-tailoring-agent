@@ -138,11 +138,11 @@ script does exactly one thing: it stamps each tile with a `Scraped` / `Not Scrap
 
 ## Teamtailor career pages (the `job-page` strategy, filler only)
 
-An employer's own career site on Teamtailor (`careers.blackbird-lab.com` today) is the second half of
+An employer's own career site on Teamtailor (the Blackbird and Avenga career sites today) is the second half of
 the story Greenhouse's boards tell: the vacancy's Apply button leaves DOU, the card is still
 `dou`/`353314`, and the filler resolves the page by the cards' own **Application URL** - so the host
 must be granted or Populate answers *"no form filler on it - reload the page"* (the live failure that
-added this plugin, 2026-10-07).
+added this plugin, 2026-10-07, and the one that added its second host, 2026-10-08).
 
 - **The form is an overlay the page fetches into itself** - `<div
   data-controller="careersite--jobs--form-overlay"` with a
@@ -155,9 +155,11 @@ added this plugin, 2026-10-07).
   whose marker or description it cannot find and answers *no vacancies* (`mode: 'job-page'`) instead of
   a mangled card. A button here would therefore only ever offer a click that answers *that card is not
   on this page any more*.
-- **Only the verified host is claimed.** Teamtailor also serves customers at
-  `<company>.teamtailor.com`, which nobody has injected into yet; a second host is one more `hosts`
-  entry plus one more manifest grant, and a claim nobody injects into only *looks* right.
+- **Only verified hosts are claimed, one employer at a time.** Teamtailor also serves customers at
+  `<company>.teamtailor.com`, which nobody has injected into yet; a further host is one more `hosts`
+  entry plus one more manifest grant, and a claim nobody injects into only *looks* right. The two
+  wired hosts share the plugin's slug, so a pick saved as default on one covers the other
+  (`boardKeyForUrl`) - which is correct here, because both are the same vendor's overlay.
 
 ## Indeed's job feed (a fourth page shape, and the only pane-driven one)
 

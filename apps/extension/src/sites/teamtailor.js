@@ -11,27 +11,31 @@ import { JOB_PAGE } from './plans.js';
  * (`#application-form, .job__description`), and these pages carry neither (their form is an overlay in
  * the same document, `data-controller="careersite--jobs--form-overlay"`): a button there could only
  * ever answer *"that card is not on this page any more"*, because the reader below refuses the page.
- * The host is
+ * A host is
  * still in the manifest's first content-script entry, for the *form filler* (`src/formfill.js`):
  * that is not a scraper - it fills an application, and it is wired by host too - which is exactly
- * how Greenhouse's boards got theirs. Verified live on this host 2026-10-07 (card `353314`'s
+ * how Greenhouse's boards got theirs. Verified live on the Blackbird host 2026-10-07 (card `353314`'s
  * Application URL, a DOU vacancy applied to on the employer's own ATS): before the grant, Populate
- * answered *"this page cannot be filled (no form filler on it - reload the page)"*.
+ * answered *"this page cannot be filled (no form filler on it - reload the page)"* - the same answer
+ * Avenga's host gave until it was granted (2026-10-08).
  *
  * `JOB_PAGE` is the honest binding even though nothing here is scraped: the reader refuses a page
  * whose marker or description it cannot find (`extract.js::readJobPage` answers *no vacancies*
  * rather than a mangled card), so **Scrape & queue this page** on such a page reports an empty read
  * instead of inventing a vacancy the DOU card already holds. Discovery stays the feeds' business.
  *
- * Only the verified customer host is claimed. Teamtailor also serves customers at
- * `<company>.teamtailor.com`, but that is the vendor's own marketing apex plus domains nobody has
- * injected into yet, and *"a claim nobody injects into is a claim that only looks right"* - a second
- * Teamtailor host is one more entry in `hosts` and one more manifest grant.
+ * Only verified customer hosts are claimed, and each one has been injected into and seen: the
+ * Blackbird career site (2026-10-07) and Avenga's (2026-10-08, also `/jobs/<id>-<slug>`, whose
+ * *Apply now* fetches the same overlay into the same document and whose footer names the vendor).
+ * Teamtailor also serves customers at `<company>.teamtailor.com`, but that is the vendor's own
+ * marketing apex plus domains nobody has injected into yet, and *"a claim nobody injects into is a
+ * claim that only looks right"* - a further host is one more entry in `hosts` and one more manifest
+ * grant.
  */
 export const teamtailor = {
   slug: 'teamtailor',
-  /** The one host wired today (see the docstring): a named customer's career site. */
-  hosts: ['careers.blackbird-lab.com'],
+  /** The customer career sites wired today (see the docstring): one per verified employer. */
+  hosts: ['careers.blackbird-lab.com', 'career.avenga.com'],
   /** `/jobs/<id>-<slug>` on the customer domain, the same shape the vendor's own hosting uses. */
   urlId: '\\/jobs\\/(\\d+)',
   buttons: 'none',
