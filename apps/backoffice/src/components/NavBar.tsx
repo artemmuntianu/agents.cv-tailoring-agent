@@ -7,7 +7,7 @@ import type { StageId } from '../lib/types';
  * parsed vacancy text, one vacancy's cover letter - pages that need a vacancy to render at all)
  * simply does not pass `active`, and nothing is highlighted.
  */
-export type NavSection = 'board' | 'new-vacancy' | 'sources' | 'processes' | 'vocabularies';
+export type NavSection = 'board' | 'new-vacancy' | 'sources' | 'processes' | 'analytics' | 'vocabularies';
 
 interface NavBarProps {
   /** Which of the four the page being rendered is; it decides the highlighted item. */
@@ -183,6 +183,25 @@ export default function NavBar({
               {!collapsed && (
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
                   run log
+                </span>
+              )}
+            </a>
+          </li>
+
+          <li>
+            <a
+              href="/analytics"
+              className={itemClass(collapsed, active === 'analytics')}
+              title={collapsed ? 'Analytics · funnel by day' : undefined}
+              aria-current={active === 'analytics' ? 'page' : undefined}
+            >
+              <span className="flex items-center gap-2">
+                <span aria-hidden>📈</span>
+                {!collapsed && <span>Analytics</span>}
+              </span>
+              {!collapsed && (
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                  chart
                 </span>
               )}
             </a>

@@ -1,0 +1,26 @@
+---
+import AnalyticsPage from '../components/AnalyticsPage.tsx';
+import '../styles/global.css';
+
+// The middleware guarantees a session on this route; `session` is name + email only.
+const session = Astro.locals.session!;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Analytics · CV tailoring backoffice</title>
+    <meta
+      name="description"
+      content="Vacancies per stage, day by day - each stage's share of the board"
+    />
+  </head>
+  <body class="bg-slate-100 antialiased">
+    <AnalyticsPage
+      client:load
+      session={{ email: session.email, name: session.name ?? null, admin: session.admin }}
+    />
+  </body>
+</html>

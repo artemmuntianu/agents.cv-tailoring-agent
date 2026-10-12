@@ -83,8 +83,17 @@ export interface DateWindow {
   to: number | null;
 }
 
+/**
+ * The range choice, as far as `dateWindow` is concerned.
+ *
+ * A page that has a range control but no board - the Analytics chart - passes just these three
+ * fields instead of a whole `BoardFilters`, so the *rule* stays in one place while the page that
+ * only owns a range does not have to invent filter state it never reads.
+ */
+export type DateRangeChoice = Pick<BoardFilters, 'range' | 'from' | 'to'>;
+
 /** Turn the range choice into concrete bounds. Pure: `now` is injected. */
-export function dateWindow(filters: BoardFilters, now: Date = new Date()): DateWindow {
+export function dateWindow(filters: DateRangeChoice, now: Date = new Date()): DateWindow {
   switch (filters.range) {
     case 'all':
       return { from: null, to: null };

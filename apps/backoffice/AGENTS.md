@@ -31,7 +31,8 @@ npm run dev               # http://localhost:4321 -> sign in
 npm test           # vitest: auth, board + archive, filters, actions, interviews, details + the
                    # application URL, history lines, run log, ingest, the manual add, artifacts,
                    # scraper and the form filler (jsdom), the filler's page->card resolution (fake
-                   # chrome/fetch), the candidate-facts edit rules and the answers editor's render
+                   # chrome/fetch), the candidate-facts edit rules, the answers editor's render and
+                   # the analytics daily series + the chart's own render
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -60,6 +61,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/403.astro` | Where a non-admin who asks for `/admin` lands |
 | `src/pages/index.astro` | The board page (the shell + `App`); passes the session name/email down |
 | `src/pages/processes.astro`, `src/components/ProcessesPage.tsx`, `src/components/ProcessRunTable.tsx` | `/processes` - the internal jobs' run log as a page (read-only, unpolled) |
+| `src/pages/analytics.astro`, `src/components/AnalyticsPage.tsx`, `src/components/StageMixChart.tsx`, `src/lib/analytics.ts` | `/analytics` - **the funnel by day**, as 100% stacked columns: one column per local day, one segment per board column (Scraped at the bottom), each segment's share of that day's board with its `%` printed on it. Read-only, computed from the cards `GET /api/board` already returns - no table, no route, no poll |
 | `src/pages/new-vacancy.astro`, `src/components/NewVacancyPage.tsx` | `/new-vacancy` - **the manual intake**: a page that posts one hand-typed vacancy to the scrape gateway, so it lands in Scraped exactly like a scraped one (`lib/manual.ts`) |
 | `src/pages/api/board.ts` | `GET` the cards |
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
@@ -105,7 +107,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/vacancy/[jobId].astro`, `src/components/VacancyTextPage.tsx` | The **parsed vacancy text** (`/vacancy/<job_id>`), opened from a card's *Parsed vacancy text* button: `resumes.description_raw` verbatim with the site, id, posting link, board state and its size. Read-only |
 | `src/pages/cover/[jobId].astro`, `src/components/CoverLetterPage.tsx` | The **cover letter** (`/cover/<job_id>`), opened from a card's *Cover letter* link: the text an application sends, its state/model/when, and the *Generate*/*Regenerate* button - the letter's only writer. The card keeps the state as that link's label |
 | `src/lib/vacancyText.ts` | The parsed-vacancy page's pure rules: the `job_id` shape guard (`resumes_job_id_shape`, invariant 4) and the text's size (characters / non-blank lines / words) |
-| `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `VacancyTextPage` · `CoverLetterPage` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `ActionCombobox` · `LoginForm` |
+| `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `VacancyTextPage` · `CoverLetterPage` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `AnalyticsPage` · `StageMixChart` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
 ## Vocabulary admin (`/admin`)
@@ -653,6 +655,88 @@ render at all - so they simply omit `active` and nothing is highlighted (`NavSec
 vocabulary; the cover-letter page links back here beside the posting link). The planned *Vacancies* nav
 item is a different thing: a list with filters.
 
+## Analytics (`/analytics`)
+
+The board answers "what is where now"; the funnel's *shape over time* had nowhere to be read.
+`/analytics` is that reading: a **100% stacked column per day** - one column per local day, one segment
+per board column, stacked bottom-to-top in board order (`STAGES`: Scraped at the bottom, Offer on top),
+each segment's height that stage's **share of the board that day** and its label the rounded `%`. The
+panel item sits between *Processes* and *Sources of truth*.
+
+**Why columns, and not the stream graph the page was first modelled on.** A day's number here is a
+*snapshot*, and it only changes when a card actually moves - so most of the series is flat plateaus. A
+smoothed flowing band (`offsetType: 'wiggle'` + `catmullRom`) draws waves through those plateaus, which
+implies a gradual change that never happened, and a stage holding 1% of the board becomes a sliver with
+nowhere to put its number: the pretty shape and the readable numbers are mutually exclusive here.
+Discrete columns state discrete days, every value is printed, and the picture stays honest at six
+stages across up to thirty days.
+
+- **Nothing new is stored, and there is no new route.** The page reads the board's own
+  `GET /api/board` - those cards already carry their `history` - and `lib/analytics.ts` reconstructs
+  the answer: a card is Scraped from the day it was scraped (`resumes.created_at`; a card with no
+  `resume_board` row yet already reads as Scraped through the join's default) and every `move` row
+  moves it, so `stageOnDay` is "the latest move at or before the end of that day". `archive`/`restore`/
+  `tailoring` rows are not column changes and are ignored - a refusal keeps its column (invariant 19).
+  Scraping a page, moving a card or correcting a history line therefore changes the picture with no
+  extra bookkeeping, and the chart can never disagree with the board.
+- **The last bucket may never disagree with the board either.** An audit trail can be corrected or
+  pruned (`PATCH`/`DELETE /api/board/history/<id>`, invariant 29), so the card's **current** column wins
+  from its last activity onward (`resume_board.updated_at`, the board's own clock). Without that,
+  pruning a move line today would redraw today as an older column.
+- **A day is a local calendar day** - the unit `cardMeta.ts` dates a card by - and a bucket is
+  `[local midnight, next midnight)`, so the last slice is *today* rather than "the last 24 hours".
+  `dateWindow`'s upper bound is **exclusive** - the board's own filter compares against it the same way
+  (`at >= to` is outside) - so the last column is the day that bound falls *inside*: "Last week" runs
+  Monday 00:00 to Monday 00:00 and draws its seven days, not eight (an eighth Oct-12 column, fixed
+  2026-10-12). The range control is the board toolbar's own `DATE_RANGES`/`dateWindow` (`lib/filters.ts`,
+  whose parameter was widened to take a bare range instead of a whole `BoardFilters`); a range wider than
+  `MAX_DAYS` (90) is drawn as its newest 90 days and `summarizeSeries` says so in the subtitle, because a
+  column a day has to stay wide enough to hold its own number - past roughly that many, the segments are
+  thinner than their labels.
+- **The chart is `@nivo/bar`** (the POC's second UI dependency, after `json-edit-react`), used for the
+  half worth not hand-rolling: the stacking, the band scale and the axes. `keys` is `STAGES` order, and
+  d3 stacks the first key from the baseline - the **bottom** of a vertical bar - so Scraped really is
+  the bottom segment; the axis is a fixed `valueScale.max = 100`, because every column is a whole board.
+  Four things are ours, each through one of the library's documented extension points (`layers`, the
+  `colors` function, `onMouseEnter`/`onMouseLeave`):
+  1. **the numbers on the segments**: each segment carries its **count over its share** - `12` on one
+     line, `25%` on the next (`segmentLabel`). They are drawn by a `layers` entry, because a two-line
+     label needs two `<tspan>`s while Nivo's `label` is a single string (its `labelFormat` is declared in
+     the library's types but never read at runtime in 0.99, so setting it silently does nothing). A
+     segment too short for both lines gets no label rather than a shrunk or clipped one
+     (`SEGMENT_LABEL_HEIGHT`), and the anchor is the segment's own centre, `bar.x + bar.width / 2`: a
+     layer draws *inside* `SvgWrapper`'s margin group, whereas Nivo's `labelX` is bar-relative and its
+     `absX` already adds the margin - copying either one is a silent error of a whole column's width.
+  2. **the legend** is an HTML row, not Nivo's `BoxLegendSvg` (which always redraws its own `data`,
+     reversed, so Offer would lead - and cannot be a hover target);
+  3. **the hover fade** (`bandFill`, and `labelOpacity` so a segment's numbers fade with it): the
+     hovered stage keeps its colour and every other segment is blended toward white - `diagram1.png`'s
+     rule. Nivo dims nothing by itself, it only shows a tooltip.
+  4. **not clipping that tooltip.** Nivo's tooltip is absolutely positioned inside the chart
+     (`position: absolute; z-index: 10`) and its `TooltipWrapper` never clamps itself to the box - it
+     only offsets by the anchor - so it depends on no ancestor clipping it. The panel is therefore
+     unclipped and `relative z-10`; an `overflow-hidden` there swallowed the tooltip of a segment near
+     the top of a column (reported on *Interviewing*, fixed 2026-10-12), and `StageMixChart.test.tsx`
+     pins the markup.
+  The hover is read from Nivo's own `onMouseEnter`/`onMouseLeave` and drives both the fade and the
+  one-line readout under the chart (`describeShare`), so a keyboard focus on a legend item highlights its
+  segment exactly like a hover does. The whole thing is measured with a `ResizeObserver` and handed an
+  explicit width rather than using `ResponsiveBar`, so the SSR pass and the first client render agree.
+- **A missing key is the one way this chart could grow a hole**, so `mixRows` writes **every** stage key
+  on **every** day, zeros included: the chart stacks `datum[key]`, and an `undefined` is a `NaN` segment
+  height. Each row also carries the count behind its share (`count_<stage>`), which is what lets a column
+  show percentages while the hover answers in vacancies. `analytics.test.ts` pins that completeness, the
+  shares-sum-to-exactly-100 rule (`sharePercents` gives the residue to the largest segment, so no column
+  overshoots the fixed axis) and the palette; `StageMixChart.test.tsx` pins the render - server-rendered
+  without a DOM, the legend's board order, the board palette, the empty state.
+- **Refused vacancies are counted by default** - they keep the column they dropped out of - with an
+  *Include refused* checkbox to leave them out. The page is read when it opens and on demand, **never
+  polled**: the board's 5s cadence answers a question ("what changed?") that a day-by-day diagram does
+  not ask.
+- The segment colours are the board's own hue families as hex (`STAGE_BAND_COLORS` - SVG needs a colour
+  and the chips are Tailwind classes), so a colour means the same thing on both pages. Scraped and
+  Prepare are a light and a dark grey deliberately, being adjacent in the stack.
+
 ## Deliberately missing (it is a POC)
 
 - No `applications.submit` producer: the design's third queue is declared in the chart
@@ -701,6 +785,9 @@ item is a different thing: a list with filters.
   one is a migration plus a UI change, not a row in a vocabulary table.
 - **No server-side paging or sorting for the run log** (the newest 100 rows, `GET /api/processes`),
   and no filtering by process or status.
+- **The chart has no zoom, pan, CSV or PNG export.** The only way to look at a narrower window is to
+  pick a different range, and the daily shares cannot be downloaded. (The hover *does* read the exact day
+  under the cursor, unlike the stream graph this page started as.)
 - Not deployed in-cluster yet (`CONSTITUTION.md` D11) - run it against port-forwards.
 - **The parsed text is read-only, and there is no raw-mark-up view.** Only the *parsed* text is stored
   (`resumes.description_raw`) - a posting's HTML is never kept - so "why did the parser miss this?" is
