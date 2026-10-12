@@ -18,8 +18,12 @@ describe('the site chip names the site, not the stored slug', () => {
   it('knows every slug the intake can produce', () => {
     expect(sourceLabel('djinni')).toBe('Djinni');
     expect(sourceLabel('dou')).toBe('DOU');
+    // The scout's third feed site, and the one with no extension plugin: without this entry its
+    // cards read `landing-jobs` on the card face, and it was missing from the Site suggestions.
+    expect(sourceLabel('landing-jobs')).toBe('Landing.Jobs');
     expect(sourceLabel('greenhouse')).toBe('Greenhouse');
     expect(sourceLabel('indeed')).toBe('Indeed');
+    expect(sourceLabel('teamtailor')).toBe('Teamtailor');
   });
 
   it('tolerates the case and the whitespace of a stored value', () => {

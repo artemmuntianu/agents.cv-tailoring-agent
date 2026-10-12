@@ -21,18 +21,26 @@
 export const RELATIVE_DAYS = 9;
 
 /**
- * The `resumes.source` slugs in use today. `scout` produces the first two from its feeds
- * (`apps/worker/scout/sources.py`), and the extension's site registry
- * (`apps/extension/src/sites/index.js`, one plugin per site) produces the rest from the host of the
+ * The `resumes.source` slugs the intakes produce, and the name the card face shows for each.
+ *
+ * `scout` emits three of them from its feeds - `djinni`, `dou` and `landing-jobs`
+ * (`apps/worker/scout/parsers/`, one module per feed site) - and the extension's site registry
+ * (`apps/extension/src/sites/index.js`, one plugin per site) emits the rest from the host of the
  * page it is injected into. `indeed` is the browser scrape's alone: Indeed serves no feed at all
  * (`/rss` is gone and `robots.txt` disallows it), so no parser can ever emit that slug.
  * `teamtailor` is the same shape from the other end: an employer's ATS page reached from a card's
  * Application URL, where the browser's *form filler* is the only producer - such a page renders no
  * cards, so no scrape can originate from it.
+ *
+ * A *hand-typed* card is deliberately not on this list: `/new-vacancy`'s Site field is a combobox,
+ * so a site nobody scrapes carries the operator's own slug (`adaptiq`, `trading`) and `sourceLabel`
+ * echoes it rather than inventing a name. One entry here is what gives a site both its label and its
+ * place in that suggestion list.
  */
 const SOURCE_LABELS: Record<string, string> = {
   djinni: 'Djinni',
   dou: 'DOU',
+  'landing-jobs': 'Landing.Jobs',
   greenhouse: 'Greenhouse',
   indeed: 'Indeed',
   teamtailor: 'Teamtailor',
