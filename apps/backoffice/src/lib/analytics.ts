@@ -3,37 +3,53 @@ import { STAGES, isStageId, stageLabel } from './stages';
 import type { BoardCard, StageId } from './types';
 
 /**
- * The Analytics page's pure half: *how many vacancies stood in each column, on each day*.
+ * The Analytics page's pure half: *what happened in each period*.
  *
- * The chart is a **100% stacked column per day** - one segment per board column, stacked
- * bottom-to-top in the board's own order (Scraped at the bottom, Offer on top), each segment's
- * height its share of that day's board - so the page needs two things and nothing else: a count
- * per column per day, and a vocabulary to read it with. Both live here, so the page and the chart
- * component stay rendering layers, exactly like the board's `lib/board.ts` and `lib/filters.ts`.
+ * A column is one **period** and its stack is that period's own activity: one segment per board
+ * column, bottom-to-top in the board's own order (Scraped at the bottom, Offer on top), each
+ * segment counting the entries the operator recorded *into* that column inside that period. The
+ * axis is a count, so a quiet period and a busy one are different heights - these are daily
+ * statistics, not a running picture of the board. Refusals and restores are counted beside the
+ * stack rather than inside it (`refused`/`restored`): they are outcomes rather than funnel steps,
+ * so they are read on hover and in the subtitle and never drawn.
  *
- * **Where a day's number comes from.** The board's cards carry their own audit trail
- * (`resume_history`: one row per confirmed change, `lib/db.ts::fetchHistory`), and that trail is
- * the only record of *when* a card changed column. A card therefore starts in Scraped on the day
- * it was scraped (`resumes.created_at` - the day the intake created the row, which is also the
- * day a card that has no `resume_board` row yet appears in Scraped) and every `move` row moves
- * it. Nothing is stored twice and no second source of board state is added: the chart is a
- * *reading* of the cards the board already loads.
+ * **Where a period's number comes from.** The board's cards carry their own audit trail
+ * (`resume_history`: one row per confirmed change, `lib/db.ts::fetchHistory`), and that trail is the
+ * only record of *when* a card changed column. Every entry is attributed to the bucket its own
+ * timestamp falls in and to no other: the intake's row (`resumes.created_at`) is one entry into
+ * Scraped on the day it was created, every `move` row is one entry into the column it moved into,
+ * and `archive`/`restore` rows are counted as themselves. Nothing is stored twice and no second
+ * source of board state is added, so this reading can never disagree with the board it reads.
  *
- * The window is measured in **local calendar days**, the same unit `cardMeta.ts` dates a card by
- * (`today`, `yesterday`, ...), so "a day" means one thing in this app.
+ * A period is a **local calendar day, ISO week or calendar month** - the same unit `cardMeta.ts`
+ * dates a card by (`today`, `yesterday`, ...) - so "a day" means one thing in this app.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Which period one column is: a local day, an ISO week (Monday-started) or a calendar month. */
+export type Granularity = 'day' | 'week' | 'month';
+
 /**
- * Most days the chart draws at once.
- *
- * A column a day has to stay wide enough to hold its own number: past roughly this many columns
- * the segments are thinner than their labels and the picture stops being readable - and `All time`
- * on a board that goes back months would be hundreds of them. The newest `MAX_DAYS` are kept and
- * `dayBuckets` stops there; `summarizeSeries` says so rather than dropping the start silently.
+ * The aggregation the page offers, in the order the dropdown lists them. `day` is the finest and
+ * therefore the default: the question the page answers is "what did I do that day".
  */
-export const MAX_DAYS = 90;
+export const GRANULARITIES: { id: Granularity; label: string }[] = [
+  { id: 'day', label: 'Day' },
+  { id: 'week', label: 'Week' },
+  { id: 'month', label: 'Month' },
+];
+
+/**
+ * Most columns the chart draws at once, per granularity.
+ *
+ * A column has to stay wide enough to hold its own number: past roughly this many the segments are
+ * thinner than their labels and the picture stops being readable. `All time` on a board that goes
+ * back months would be hundreds of columns, so the newest ones are kept, `bucketsFor` stops there
+ * and `summarizeSeries` says so rather than dropping the start silently. The coarser the period,
+ * the fewer columns are worth drawing - and the longer a window each of them stands for.
+ */
+export const MAX_BUCKETS: Record<Granularity, number> = { day: 90, week: 52, month: 24 };
 
 /**
  * How much of a segment's colour survives while **another** segment is hovered - `diagram1.png`'s
@@ -67,7 +83,7 @@ export function dayKey(ms: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-/** `12 Oct` - the bucket's own label, for the axis and the hover caption. */
+/** `12 Oct` - a day's own label, for the axis and the hover caption. */
 export function dayLabel(day: string): string {
   const [year, month, date] = day.split('-').map(Number);
   if (!year || !month || !date) return day;
@@ -77,13 +93,101 @@ export function dayLabel(day: string): string {
   });
 }
 
-/** One local calendar day the chart draws a column for. */
+/** `Week of 5 Oct` - a week is named by the Monday it starts on, never by an ISO number. */
+export function weekLabel(day: string): string {
+  return `Week of ${dayLabel(day)}`;
+}
+
+/** `Oct 2026` - a month's own label. */
+export function monthLabel(day: string): string {
+  const [year, month] = day.split('-').map(Number);
+  if (!year || !month) return day;
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+/** The label a bucket's key carries, in the granularity that produced it. */
+export function bucketLabel(key: string, granularity: Granularity): string {
+  if (granularity === 'week') return weekLabel(key);
+  if (granularity === 'month') return monthLabel(key);
+  return dayLabel(key);
+}
+
+/**
+ * The local start of the ISO week a moment is in - Monday, the same week `filters.ts` weeks by.
+ *
+ * `Date` arithmetic through `addDays` rather than `- day * DAY_MS`: a week containing a DST change
+ * is not seven times 24 hours, and a bucket bound an hour off midnight would file an entry into the
+ * wrong week.
+ */
+function startOfWeek(ms: number): number {
+  const date = new Date(ms);
+  return addDays(startOfDay(ms), -((date.getDay() + 6) % 7));
+}
+
+function startOfMonth(ms: number): number {
+  const date = new Date(ms);
+  return new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+}
+
+/** The local start of the period `ms` falls in. */
+function periodStart(ms: number, granularity: Granularity): number {
+  if (granularity === 'week') return startOfWeek(ms);
+  if (granularity === 'month') return startOfMonth(ms);
+  return startOfDay(ms);
+}
+
+/**
+ * The next period's start - `Date` arithmetic again, so a 23- or 25-hour DST day is still one day
+ * and a month of 28 to 31 days is still one month.
+ */
+function nextPeriod(ms: number, granularity: Granularity): number {
+  if (granularity === 'week') return addDays(ms, 7);
+  if (granularity === 'month') {
+    const date = new Date(ms);
+    return new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
+  }
+  return nextMidnight(ms);
+}
+
+/** How many periods `first`..`last` covers, both being period starts. */
+function periodSpan(first: number, last: number, granularity: Granularity): number {
+  if (granularity === 'week') return Math.round((last - first) / (7 * DAY_MS)) + 1;
+  if (granularity === 'month') {
+    const from = new Date(first);
+    const to = new Date(last);
+    return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth()) + 1;
+  }
+  return Math.round((last - first) / DAY_MS) + 1;
+}
+
+/** A period start shifted by whole periods - how the cap keeps the **newest** columns. */
+function shiftPeriods(ms: number, periods: number, granularity: Granularity): number {
+  if (granularity === 'week') return addDays(ms, periods * 7);
+  if (granularity === 'month') {
+    const date = new Date(ms);
+    return new Date(date.getFullYear(), date.getMonth() + periods, 1).getTime();
+  }
+  return addDays(ms, periods);
+}
+
+/** One period the chart draws a column for. */
 export interface AnalyticsBucket {
-  /** `yyyy-mm-dd`, local. */
-  day: string;
-  /** Inclusive lower bound: local midnight. */
+  /**
+   * The bucket's name - `yyyy-mm-dd` of its own start, never a timestamp: `2026-10-12` for a day,
+   * `2026-10-05` for the week starting that Monday, `2026-10-01` for October 2026. Unique inside one
+   * granularity, sortable, and the chart's own `indexBy`.
+   */
+  key: string;
+  /** `12 Oct` · `Week of 5 Oct` · `Oct 2026` - what the axis and the hover read. */
+  label: string;
+  /** Which period this is, so a caller never has to parse the key to label it again. */
+  granularity: Granularity;
+  /** Inclusive lower bound: the period's local start. */
   from: number;
-  /** Exclusive upper bound: the next local midnight. */
+  /** Exclusive upper bound: the next period's start. */
   to: number;
 }
 
@@ -111,74 +215,117 @@ export function resolveWindow(
 }
 
 /**
- * One bucket per local calendar day the window `[from, to)` covers.
+ * One bucket per period the window `[from, to)` covers, in the requested granularity.
  *
  * `to` is **exclusive** - it is `filters.ts::dateWindow`'s upper bound, the same field the board's
- * own filter compares against (`at >= window.to` is outside it) - so the last column is the day that
- * bound falls *inside*, not the day it lands on. That is the difference between "Last week" being its
- * seven days and being eight: the range runs Monday 00:00 to Monday 00:00, and that second Monday is
- * not part of last week (an eighth Oct-12 column, fixed 2026-10-12).
+ * own filter compares against (`at >= window.to` is outside it) - so the last column is the period
+ * that bound falls *inside*, not the one it lands on. That is the difference between "Last week"
+ * being its seven days and being eight: the range runs Monday 00:00 to Monday 00:00, and that second
+ * Monday is not part of last week (an eighth Oct-12 column, fixed 2026-10-12).
  *
- * The last bucket's own `to` is the next midnight, so a card created later today still lands in
- * today's column rather than being dropped. A window longer than `MAX_DAYS` (or a `from` after its
- * `to`) still returns something: the chart never has nothing to draw.
+ * The last bucket's own `to` is the next period's start, so an entry recorded later today still
+ * lands in today's column rather than being dropped. A window longer than `MAX_BUCKETS` (or a `from`
+ * after its `to`) still returns something: the chart never has nothing to draw.
  */
-export function dayBuckets(from: number, to: number): AnalyticsBucket[] {
-  const first = startOfDay(from);
-  const last = startOfDay(to - 1);
-  const span = Math.round((last - first) / DAY_MS) + 1;
-  const start = span > MAX_DAYS ? addDays(last, -(MAX_DAYS - 1)) : first;
+export function bucketsFor(
+  from: number,
+  to: number,
+  granularity: Granularity = 'day',
+): AnalyticsBucket[] {
+  const first = periodStart(from, granularity);
+  const last = periodStart(to - 1, granularity);
+  const cap = MAX_BUCKETS[granularity];
+  const start =
+    periodSpan(first, last, granularity) > cap
+      ? shiftPeriods(last, -(cap - 1), granularity)
+      : first;
+
+  const bucketAt = (cursor: number): AnalyticsBucket => {
+    const key = dayKey(cursor);
+    return {
+      key,
+      label: bucketLabel(key, granularity),
+      granularity,
+      from: cursor,
+      to: nextPeriod(cursor, granularity),
+    };
+  };
 
   const buckets: AnalyticsBucket[] = [];
-  for (let cursor = start; cursor <= last; cursor = nextMidnight(cursor)) {
-    buckets.push({ day: dayKey(cursor), from: cursor, to: nextMidnight(cursor) });
+  for (let cursor = start; cursor <= last; cursor = nextPeriod(cursor, granularity)) {
+    buckets.push(bucketAt(cursor));
   }
-  if (buckets.length === 0) {
-    buckets.push({ day: dayKey(first), from: first, to: nextMidnight(first) });
-  }
+  if (buckets.length === 0) buckets.push(bucketAt(first));
   return buckets;
 }
 
 /**
- * The column a card stood in at the end of `dayEnd` - `null` while the card did not exist yet.
+ * The stages a card **entered inside** the bucket, oldest row first.
  *
- * Rebuilt from the card's own trail: Scraped by default, then the **latest** `move` row dated at
- * or before the end of the day. `archive`/`restore`/`tailoring` rows are not column changes and
- * are ignored (refusing a vacancy keeps its column, invariant 19).
+ * Two things count as an entry: the intake created the row (`resumes.created_at` inside the bucket,
+ * so a scraped or hand-typed vacancy lands in Scraped on the day it was created) and every confirmed
+ * `move` row dated inside it that actually **changes** the column, which is the column it moved
+ * *into*. `archive`/`restore` rows are not column entries - a refusal keeps its column (invariant 19)
+ * - and `tailoring` rows mirror the worker's own statuses rather than the operator's funnel; both are
+ * read separately (`refusalCounts`).
  *
- * The card's **current** column wins from the card's last activity onward
- * (`resume_board.updated_at`): the audit trail is correctable and prunable
- * (`PATCH`/`DELETE /api/board/history/<id>`), and the last bucket must never disagree with the
- * board the operator is looking at.
+ * A card can appear more than once in a bucket (two drags in one afternoon are two entries), and
+ * never in two buckets: an entry belongs to the period its own timestamp falls in and to no other,
+ * which is what makes these daily numbers rather than a running total. A `move` row the operator
+ * later corrected or removed is simply not in the trail any more, so this follows the trail.
  */
-export function stageOnDay(card: BoardCard, dayEnd: number): StageId | null {
+export function stageEventsInBucket(card: BoardCard, bucket: AnalyticsBucket): StageId[] {
+  const entered: StageId[] = [];
   const createdAt = Date.parse(card.createdAt);
-  if (!Number.isNaN(createdAt) && createdAt > dayEnd) return null;
-
-  let stage: StageId = 'scraped';
-  let movedAt = Number.NEGATIVE_INFINITY;
-  for (const entry of card.history) {
-    if (entry.kind !== 'move') continue;
-    const at = Date.parse(entry.at);
-    // Skipping only an *earlier* row keeps the trail's own `at asc, id asc` order, so two moves
-    // recorded in the same second still resolve to the later one.
-    if (Number.isNaN(at) || at > dayEnd || at < movedAt) continue;
-    if (isStageId(entry.to)) {
-      stage = entry.to;
-      movedAt = at;
-    }
+  if (!Number.isNaN(createdAt) && createdAt >= bucket.from && createdAt < bucket.to) {
+    entered.push('scraped');
   }
+  for (const entry of card.history) {
+    if (entry.kind !== 'move' || !isStageId(entry.to)) continue;
+    // `from_state = to_state` is **activity, not a transition**. `lib/db.ts::recordCardActivity`
+    // writes exactly that row for the *Add action* button and for every interview add/edit/remove,
+    // and a drag into Prepare that retries tailoring writes it too: they move the card's clock - the
+    // field that dates a card everywhere else (invariant 26) - and never its column. Counting them
+    // drew two entries for one drag: the transition into Interviewing, plus the interview that was
+    // scheduled on the card that afternoon (reported 2026-10-14).
+    if (entry.from === entry.to) continue;
+    const at = Date.parse(entry.at);
+    if (Number.isNaN(at) || at < bucket.from || at >= bucket.to) continue;
+    entered.push(entry.to);
+  }
+  return entered;
+}
 
-  const touchedAt = Date.parse(card.updatedAt);
-  if (!Number.isNaN(touchedAt) && touchedAt <= dayEnd && isStageId(card.stage)) stage = card.stage;
-  return stage;
+/**
+ * The refusals and restores a card recorded **inside** the bucket.
+ *
+ * These are the two readings the chart keeps beside its stack rather than in it: a refusal is an
+ * outcome, not a funnel step, and stacking it above Offer would make a column's height stop meaning
+ * "how much happened". They are per-period facts all the same, so they belong to the bucket their
+ * own row is dated in - a refusal recorded today is today's, not the day the card was scraped.
+ */
+export function refusalCounts(
+  card: BoardCard,
+  bucket: AnalyticsBucket,
+): { refused: number; restored: number } {
+  let refused = 0;
+  let restored = 0;
+  for (const entry of card.history) {
+    if (entry.kind !== 'archive' && entry.kind !== 'restore') continue;
+    const at = Date.parse(entry.at);
+    if (Number.isNaN(at) || at < bucket.from || at >= bucket.to) continue;
+    if (entry.kind === 'archive') refused += 1;
+    else restored += 1;
+  }
+  return { refused, restored };
 }
 
 export interface AnalyticsOptions {
   /**
-   * Count refused vacancies too (a refusal keeps the card in the column it dropped out of). On by
-   * default: the chart asks "how many vacancies stood where", and a refusal is a fact about a
-   * vacancy rather than a column of its own.
+   * Count refused vacancies' activity too. On by default: the entries a card recorded before it was
+   * refused did happen, and a refusal is a fact about a vacancy rather than a column of its own.
+   * Switched off it drops the refused cards' entries *and* the `refused`/`restored` counters - which
+   * is what the page's own *Include refused* checkbox says.
    */
   includeArchived?: boolean;
 }
@@ -187,18 +334,27 @@ export interface AnalyticsSeries {
   buckets: AnalyticsBucket[];
   /** One entry per column, **bottom-to-top in `STAGES` order** - Scraped is the bottom band. */
   stages: { stage: StageId; values: number[] }[];
-  /** The board's size on each day: every column summed. */
+  /** Everything recorded in the bucket: the six columns summed. The stack's own height. */
   totals: number[];
-  /** The busiest day's total, for scaling and for the empty state. */
+  /** The busiest bucket, for scaling the axis and for the empty state. */
   maxTotal: number;
+  /** Refusals recorded in each bucket - counted **beside** the stack, never drawn in it. */
+  refused: number[];
+  /** Restores recorded in each bucket, likewise beside the stack. */
+  restored: number[];
+  /** The window's refusals, for the page's subtitle. */
+  refusedTotal: number;
+  /** The window's restores, for the page's subtitle. */
+  restoredTotal: number;
 }
 
 /**
- * The per-day counts the diagram is drawn from.
+ * The per-period counts the diagram is drawn from.
  *
- * One pass per card: for every bucket, ask the trail where the card stood at the end of that day.
- * A card that did not exist yet contributes nothing, so each day is a genuine snapshot of the
- * funnel rather than a count of changes.
+ * One pass per card and bucket, asking the trail what the card *entered* in that period. An entry
+ * belongs to its own bucket only, so a move made on the 11th is the 11th's business and never
+ * reappears on the 12th - which is the whole difference between this and a running picture of the
+ * board. A period nobody touched a card in is a zero, and that zero is the answer.
  */
 export function buildSeries(
   cards: BoardCard[],
@@ -211,15 +367,21 @@ export function buildSeries(
   const stages = STAGES.map((meta) => ({ stage: meta.id, values: buckets.map(() => 0) }));
   const rowOf = new Map(stages.map((serie, index) => [serie.stage, index]));
   const totals = buckets.map(() => 0);
+  const refused = buckets.map(() => 0);
+  const restored = buckets.map(() => 0);
 
   for (const card of counted) {
     for (let index = 0; index < buckets.length; index += 1) {
-      const stage = stageOnDay(card, buckets[index].to - 1);
-      if (stage === null) continue;
-      const row = rowOf.get(stage);
-      if (row === undefined) continue;
-      stages[row].values[index] += 1;
-      totals[index] += 1;
+      const bucket = buckets[index];
+      for (const stage of stageEventsInBucket(card, bucket)) {
+        const row = rowOf.get(stage);
+        if (row === undefined) continue;
+        stages[row].values[index] += 1;
+        totals[index] += 1;
+      }
+      const beside = refusalCounts(card, bucket);
+      refused[index] += beside.refused;
+      restored[index] += beside.restored;
     }
   }
 
@@ -228,15 +390,21 @@ export function buildSeries(
     stages,
     totals,
     maxTotal: totals.reduce((max, total) => Math.max(max, total), 0),
+    refused,
+    restored,
+    refusedTotal: refused.reduce((sum, count) => sum + count, 0),
+    restoredTotal: restored.reduce((sum, count) => sum + count, 0),
   };
 }
 
 /**
- * One day's shares, in percent, **summing to exactly 100**.
+ * One bucket's shares, in percent, **summing to exactly 100**.
  *
- * The largest segment absorbs the rounding residue, so a day's column fills the axis precisely
- * (`valueScale.max = 100`) instead of overshooting it by a float's worth of pixels. A day with no
- * vacancies is all zeroes rather than six NaNs.
+ * The axis counts entries now, so these are not what the chart stacks: they are what the segments'
+ * second line prints (`share_<stage>`), because a label saying `3` with no share would leave the
+ * operator dividing by the bucket's total in their head. The largest segment absorbs the rounding
+ * residue, so the six printed shares add up to a whole bucket and never to 100.4%. A bucket with
+ * nothing in it is all zeroes rather than six NaNs.
  */
 export function sharePercents(values: number[], total: number): number[] {
   const shares = values.map(() => 0);
@@ -253,24 +421,33 @@ export function sharePercents(values: number[], total: number): number[] {
 }
 
 /**
- * One row per day, in the shape `@nivo/bar` draws.
+ * One row per bucket, in the shape `@nivo/bar` draws.
  *
- * `day` is the index (`indexBy`), each **stage id** carries that day's **percentage** - the stack
- * - and `count_<stage>` carries the count behind it, so a column shows shares while the hover
- * answers in vacancies.
+ * `bucket` is the index (`indexBy`) and its own `label` rides beside it, each **stage id** carries
+ * that bucket's **count** - the stack, and therefore the axis' unit - and `share_<stage>` carries
+ * that count's share of the bucket, which is what the segment's second line prints.
+ * `refused`/`restored` are in the datum but deliberately **not** in `keys`: the chart stacks the
+ * keys and nothing else, so the two outcomes stay readable on hover without ever adding to a
+ * column's height.
  */
 export interface MixRow extends Record<string, string | number> {
-  /** The day (`yyyy-mm-dd`), the chart's `indexBy`. */
-  day: string;
-  /** Vacancies on the board that day. */
+  /** The bucket's key (`yyyy-mm-dd` of its start), the chart's `indexBy`. */
+  bucket: string;
+  /** The bucket's label, so the tooltip and the axis need no key parsing. */
+  label: string;
+  /** Everything recorded in the bucket: the stack's height. */
   total: number;
+  /** That bucket's refusals, read on hover - outside `keys`, so never stacked. */
+  refused: number;
+  /** That bucket's restores, likewise. */
+  restored: number;
 }
 
 /**
- * **Every** stage key is written on **every** day, zeros included.
+ * **Every** stage key is written on **every** bucket, zeros included.
  *
  * The chart stacks `datum[key]`, so a missing key is `undefined` and an `undefined` segment is a
- * `NaN` height - the one way this picture could grow a hole. A day with nothing in a column is a
+ * `NaN` height - the one way this picture could grow a hole. A bucket with nothing in a column is a
  * real zero, and this is where it is made explicit.
  */
 export function mixRows(series: AnalyticsSeries): { data: MixRow[]; keys: StageId[] } {
@@ -279,23 +456,60 @@ export function mixRows(series: AnalyticsSeries): { data: MixRow[]; keys: StageI
     const values = series.stages.map((serie) => serie.values[index] ?? 0);
     const total = series.totals[index] ?? 0;
     const shares = sharePercents(values, total);
-    const row: Record<string, string | number> = { day: bucket.day, total };
+    const row: Record<string, string | number> = {
+      bucket: bucket.key,
+      label: bucket.label,
+      total,
+      refused: series.refused[index] ?? 0,
+      restored: series.restored[index] ?? 0,
+    };
     series.stages.forEach((serie, position) => {
-      row[serie.stage] = shares[position] ?? 0;
-      row[`count_${serie.stage}`] = values[position] ?? 0;
+      row[serie.stage] = values[position] ?? 0;
+      row[`share_${serie.stage}`] = shares[position] ?? 0;
     });
     return row as MixRow;
   });
   return { data, keys };
 }
 
-/** The day keys the axis labels: every `n`-th day, always including the newest one. */
+/**
+ * The count axis: its top and its gridlines.
+ *
+ * The axis is not a fixed `0-100%` any more - with counts, three entries and sixty have to look
+ * different - so the top is the busiest bucket rounded **up** to a readable step with equal
+ * gridlines, and every tick is a whole number of entries (never `0.5`). A window with nothing in it
+ * is `0`/`[0]`, which the chart reads as its empty state before it ever asks for an axis.
+ */
+export function countAxis(busiest: number): { max: number; ticks: number[] } {
+  const top = Math.max(0, Math.ceil(busiest));
+  if (top <= 0) return { max: 0, ticks: [0] };
+  // A handful of entries needs no rounding at all: one tick per entry draws the busiest day at the
+  // top of the panel instead of a quarter of the way up it, which is the common case for a board
+  // only a few moves a day touch.
+  if (top <= 4) return { max: top, ticks: Array.from({ length: top + 1 }, (_, value) => value) };
+  const step = niceCountStep(top / 4);
+  const max = step * 4;
+  return { max, ticks: [0, step, step * 2, step * 3, max] };
+}
+
+/** The smallest whole number on the `1, 2, 3, 4, 5, 6, 8, 10, 20, …` ladder that is at least `value`. */
+function niceCountStep(value: number): number {
+  let magnitude = 1;
+  while (magnitude * 10 <= value) magnitude *= 10;
+  for (const candidate of [1, 2, 3, 4, 5, 6, 8, 10]) {
+    const step = candidate * magnitude;
+    if (step >= value) return step;
+  }
+  return magnitude * 10;
+}
+
+/** The bucket keys the axis labels: every `n`-th one, always including the newest. */
 export function tickValues(series: AnalyticsSeries, max = 12): string[] {
-  const days = series.buckets;
-  if (days.length === 0) return [];
-  const step = Math.max(1, Math.ceil(days.length / max));
-  const keys = days.filter((_, index) => index % step === 0).map((bucket) => bucket.day);
-  const newest = days[days.length - 1].day;
+  const buckets = series.buckets;
+  if (buckets.length === 0) return [];
+  const step = Math.max(1, Math.ceil(buckets.length / max));
+  const keys = buckets.filter((_, index) => index % step === 0).map((bucket) => bucket.key);
+  const newest = buckets[buckets.length - 1].key;
   if (keys[keys.length - 1] !== newest) keys.push(newest);
   return keys;
 }
@@ -338,20 +552,20 @@ export function bandFill(stage: string, hovered: string | null): string {
   return hovered !== null && stage !== hovered ? fadeHex(base, FADED_FILL) : base;
 }
 
-/** A segment's own two numbers, each as digits: the vacancies behind it, and its share of the day. */
+/** A segment's own two numbers, each as digits: the entries it holds, and its share of the bucket. */
 export interface SegmentLabel {
-  /** How many vacancies stood in this stage, on this day. */
+  /** How many entries this period recorded into this stage. */
   count: string;
-  /** That stage's share of that day's board, rounded, with its `%`. */
+  /** That stage's share of that period's activity, rounded, with its `%`. */
   share: string;
 }
 
 /**
  * The numbers a segment carries, as its two lines - `12` over `25%`.
  *
- * The count is what a share cannot answer on its own (10% of a board of ten is one vacancy, 10% of
- * a board of a hundred is ten), and **two lines** rather than `12, 25%` is what fits: at a month's
- * worth of days a column is barely 30px wide, and both numbers on one line overflow into their
+ * The count is what a share cannot answer on its own (10% of a bucket of ten is one entry, 10% of a
+ * bucket of a hundred is ten), and **two lines** rather than `12, 25%` is what fits: at a month's
+ * worth of buckets a column is barely 30px wide, and both numbers on one line overflow into their
  * neighbours. The chart draws these itself (`StageMixChart.tsx`), because a two-line label needs
  * `<tspan>`s - Nivo's `label` is a single string, and its `labelFormat` is declared in the library's
  * types but never read at runtime.
@@ -379,7 +593,14 @@ export function labelOpacity(stage: string, hovered: string | null): number {
   return hovered === null || stage === hovered ? 1 : FADED_LABEL_OPACITY;
 }
 
-/** The hover caption: `Applied — 12 vacancies · 25% · 12 Oct`. */
+/**
+ * The hover caption: `Applied — 3 entries · 25% · 12 Oct · 1 refused · 2 restored`.
+ *
+ * `entries` rather than `vacancies` on purpose: one vacancy can be counted several times in a day
+ * (two moves are two entries), and a share is always a share of that period's activity rather than
+ * of the board. The two outcomes that live beside the stack are appended **only when the bucket has
+ * them** - a day with no refusals should not carry a `0 refused` nobody asked about.
+ */
 export function describeShare(series: AnalyticsSeries, stage: StageId, index: number): string {
   const serie = series.stages.find((item) => item.stage === stage);
   const bucket = series.buckets[index];
@@ -387,27 +608,40 @@ export function describeShare(series: AnalyticsSeries, stage: StageId, index: nu
   const value = serie.values[index] ?? 0;
   const total = series.totals[index] ?? 0;
   const share = total > 0 ? Math.round((value / total) * 100) : 0;
-  const vacancies = value === 1 ? 'vacancy' : 'vacancies';
-  return `${stageLabel(stage)} — ${value} ${vacancies} · ${share}% · ${dayLabel(bucket.day)}`;
+  const parts = [
+    `${stageLabel(stage)} — ${value} ${value === 1 ? 'entry' : 'entries'} · ${share}% · ${bucket.label}`,
+  ];
+  const refused = series.refused[index] ?? 0;
+  const restored = series.restored[index] ?? 0;
+  if (refused > 0) parts.push(`${refused} refused`);
+  if (restored > 0) parts.push(`${restored} restored`);
+  return parts.join(' · ');
 }
 
 /**
- * `30 days · 236 vacancies on 12 Oct` - the page's subtitle.
+ * `30 days · 12 entries on 12 Oct · busiest 40 · 3 refused · 2 restored` - the page's subtitle.
  *
- * `busiest` is only worth saying when the newest day is not already the peak, and the truncation
- * note is what keeps a capped `All time` honest: the chart drew its newest `MAX_DAYS` days, not
- * everything, and the subtitle is the only place that says so.
+ * `busiest` is only worth saying when the newest bucket is not already the peak, the two outcomes
+ * only when the window has any, and the truncation note is what keeps a capped `All time` honest:
+ * the chart drew its newest `MAX_BUCKETS` columns, not everything, and the subtitle is the only
+ * place that says so.
  */
 export function summarizeSeries(series: AnalyticsSeries): string {
-  const days = series.buckets.length;
-  const last = series.buckets[series.buckets.length - 1];
-  const latest = series.totals[series.totals.length - 1] ?? 0;
-  const vacancies = latest === 1 ? 'vacancy' : 'vacancies';
+  const buckets = series.buckets.length;
+  const last = series.buckets[buckets - 1];
+  const latest = series.totals[buckets - 1] ?? 0;
+  const granularity = series.buckets[0]?.granularity ?? 'day';
+  const unit = granularity === 'month' ? 'month' : granularity === 'week' ? 'week' : 'day';
   const parts = [
-    `${days} ${days === 1 ? 'day' : 'days'}`,
-    `${latest} ${vacancies} on ${last ? dayLabel(last.day) : dayKey(Date.now())}`,
+    `${buckets} ${buckets === 1 ? unit : `${unit}s`}`,
+    `${latest} ${latest === 1 ? 'entry' : 'entries'} ${granularity === 'day' ? 'on' : 'in'} ${
+      last ? last.label : dayKey(Date.now())
+    }`,
   ];
   if (series.maxTotal > latest) parts.push(`busiest ${series.maxTotal}`);
-  if (days >= MAX_DAYS) parts.push(`newest ${MAX_DAYS} days`);
+  if (series.refusedTotal > 0) parts.push(`${series.refusedTotal} refused`);
+  if (series.restoredTotal > 0) parts.push(`${series.restoredTotal} restored`);
+  const cap = MAX_BUCKETS[granularity];
+  if (buckets >= cap) parts.push(`newest ${cap} ${unit}s`);
   return parts.join(' · ');
 }

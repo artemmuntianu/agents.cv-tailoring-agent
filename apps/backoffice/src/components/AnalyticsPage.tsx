@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from './AppShell';
 import StageMixChart from './StageMixChart';
-import { buildSeries, dayBuckets, resolveWindow, summarizeSeries } from '../lib/analytics';
+import {
+  GRANULARITIES,
+  buildSeries,
+  bucketsFor,
+  resolveWindow,
+  summarizeSeries,
+  type Granularity,
+} from '../lib/analytics';
 import { DATE_RANGES, dateWindow, type DateRangeId } from '../lib/filters';
 import type { BoardCard } from '../lib/types';
 
@@ -10,17 +17,17 @@ interface AnalyticsPageProps {
 }
 
 /**
- * `/analytics` - how many vacancies stood in each column, day by day.
+ * `/analytics` - what happened in each column, period by period.
  *
  * Same shape as `/processes`, and for the same reason: the panel, the header and the page's own
  * controls are the application's chrome, and a window over the board would hide them. The data is
  * the board's own `GET /api/board` - those cards already carry their `history`, and this page is a
- * *reading* of them (`lib/analytics.ts` reconstructs "which column was this card in on that day"
- * from the trail), so nothing new is stored and the chart can never disagree with the board.
+ * *reading* of it (`lib/analytics.ts` counts each period's own entries), so nothing new is stored
+ * and the chart can never disagree with the board.
  *
  * Read when the page opens and on demand, never polled: the board's 5s cadence answers a question
- * - "what changed?" - that a day-by-day diagram does not ask. Moving the range re-slices what is
- * already in memory, so changing it costs no request.
+ * - "what changed?" - that a period-by-period diagram does not ask. Moving the range or changing the
+ * aggregation re-slices what is already in memory, so neither costs a request.
  */
 export default function AnalyticsPage({ session }: AnalyticsPageProps) {
   const [cards, setCards] = useState<BoardCard[]>([]);
@@ -30,6 +37,11 @@ export default function AnalyticsPage({ session }: AnalyticsPageProps) {
   const [range, setRange] = useState<DateRangeId>('last30');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  /**
+   * How wide one column is: a local day by default, or the same window redrawn as weeks or months.
+   * Aggregation is a way of *reading* the cards already loaded, so changing it costs no request.
+   */
+  const [granularity, setGranularity] = useState<Granularity>('day');
   /** Refused vacancies keep the column they dropped out of; the chart counts them by default. */
   const [includeArchived, setIncludeArchived] = useState(true);
 
@@ -63,14 +75,14 @@ export default function AnalyticsPage({ session }: AnalyticsPageProps) {
 
   const series = useMemo(() => {
     const bounds = resolveWindow(dateWindow({ range, from, to }), cards);
-    return buildSeries(cards, dayBuckets(bounds.from, bounds.to), { includeArchived });
-  }, [cards, range, from, to, includeArchived]);
+    return buildSeries(cards, bucketsFor(bounds.from, bounds.to, granularity), { includeArchived });
+  }, [cards, range, from, to, granularity, includeArchived]);
 
   return (
     <AppShell
       active="analytics"
       title="Analytics"
-      subtitle={`Vacancies per stage, day by day · ${summarizeSeries(series)}`}
+      subtitle={`Entries per stage, per ${granularity} · ${summarizeSeries(series)}`}
       session={session}
       actions={
         <>
@@ -113,6 +125,24 @@ export default function AnalyticsPage({ session }: AnalyticsPageProps) {
           )}
 
           <label className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700">
+            <span aria-hidden className="text-slate-400">
+              Σ
+            </span>
+            <span className="sr-only">Aggregate by</span>
+            <select
+              value={granularity}
+              onChange={(event) => setGranularity(event.target.value as Granularity)}
+              className="bg-transparent text-sm text-slate-800 outline-none"
+            >
+              {GRANULARITIES.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={includeArchived}
@@ -147,16 +177,20 @@ export default function AnalyticsPage({ session }: AnalyticsPageProps) {
       )}
 
       <p className="mt-4 text-[11px] leading-relaxed text-slate-400">
-        One column per local day, one segment per stage, stacked bottom-to-top in board order:
-        Scraped is the bottom segment, Offer the top. A segment&apos;s height is that stage&apos;s
-        share of the board that day, so every column fills the axis and the six add up to 100% - and
-        the number on a segment is that rounded share. A segment too thin to hold its number drops
-        the label rather than shrinking it; hovering one reads it out in vacancies (and fades the
-        other stages). A card is placed by its own history - the last column it was moved into on or
-        before that day - so it appears in Scraped the day it was scraped and moves the day the
-        operator moved it. Nothing here is stored: the chart is computed from the board&apos;s own
-        cards, so it can never disagree with them. A range wider than 90 days is drawn as its newest
-        90.
+        One column per period, one segment per stage, stacked bottom-to-top in board order: Scraped
+        is the bottom segment, Offer the top. A segment counts the entries recorded into that stage
+        in that period - a vacancy the intake created counts once as Scraped, every drag counts once
+        as the column it landed in, and an action recorded without a move (a note, an interview
+        scheduled or corrected) counts nowhere: it moves the card&apos;s clock, not its column. So
+        nothing accumulates: a day nobody touched a card is a zero, and its column is empty. The axis
+        counts entries, so a busy period is taller than a quiet one, and the number on a segment is
+        that count with its share of the period under it.
+        Refusals and restores are recorded beside the stack rather than in it - they are outcomes,
+        not funnel steps, so they must not inflate a column: hover a segment (or its name above) to
+        read them, and the subtitle totals them for the window. A segment too thin to hold its
+        number drops the label rather than shrinking it. Nothing here is stored: the chart is
+        computed from the board&apos;s own cards, so it can never disagree with them. A window wider
+        than the cap - 90 days, 52 weeks or 24 months - is drawn as its newest columns.
       </p>
     </AppShell>
   );

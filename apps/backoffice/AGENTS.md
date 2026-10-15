@@ -32,7 +32,7 @@ npm test           # vitest: auth, board + archive, filters, actions, interviews
                    # application URL, history lines, run log, ingest, the manual add, artifacts,
                    # scraper and the form filler (jsdom), the filler's page->card resolution (fake
                    # chrome/fetch), the candidate-facts edit rules, the answers editor's render and
-                   # the analytics daily series + the chart's own render
+                   # the analytics per-period series + the chart's own render
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -61,7 +61,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/pages/403.astro` | Where a non-admin who asks for `/admin` lands |
 | `src/pages/index.astro` | The board page (the shell + `App`); passes the session name/email down |
 | `src/pages/processes.astro`, `src/components/ProcessesPage.tsx`, `src/components/ProcessRunTable.tsx` | `/processes` - the internal jobs' run log as a page (read-only, unpolled) |
-| `src/pages/analytics.astro`, `src/components/AnalyticsPage.tsx`, `src/components/StageMixChart.tsx`, `src/lib/analytics.ts` | `/analytics` - **the funnel by day**, as 100% stacked columns: one column per local day, one segment per board column (Scraped at the bottom), each segment's share of that day's board with its `%` printed on it. Read-only, computed from the cards `GET /api/board` already returns - no table, no route, no poll |
+| `src/pages/analytics.astro`, `src/components/AnalyticsPage.tsx`, `src/components/StageMixChart.tsx`, `src/lib/analytics.ts` | `/analytics` - **what happened, period by period**, as stacked count columns: one column per local day (or ISO week, or calendar month - the header's `Day`/`Week`/`Month` dropdown), one segment per board column (Scraped at the bottom), each segment counting the entries recorded **into** that column in that period and printing its count over its share. Refusals and restores are read beside the stack, never stacked. Read-only, computed from the cards `GET /api/board` already returns - no table, no route, no poll |
 | `src/pages/new-vacancy.astro`, `src/components/NewVacancyPage.tsx` | `/new-vacancy` - **the manual intake**: a page that posts one hand-typed vacancy to the scrape gateway, so it lands in Scraped exactly like a scraped one (`lib/manual.ts`) |
 | `src/pages/api/board.ts` | `GET` the cards |
 | `src/pages/api/board/move.ts`, `archive.ts`, `restore.ts`, `remove.ts` | The four mutations: move a card (optionally with the first interview when it enters Interviewing, and with the cover-letter request when it enters Prepare), refuse it, undo a refusal, purge it for good |
@@ -657,49 +657,74 @@ item is a different thing: a list with filters.
 
 ## Analytics (`/analytics`)
 
-The board answers "what is where now"; the funnel's *shape over time* had nowhere to be read.
-`/analytics` is that reading: a **100% stacked column per day** - one column per local day, one segment
-per board column, stacked bottom-to-top in board order (`STAGES`: Scraped at the bottom, Offer on top),
-each segment's height that stage's **share of the board that day** and its label the rounded `%`. The
+The board answers "what is where now"; *how much happened, and when* had nowhere to be read.
+`/analytics` is that reading: a **stacked count column per period** - one column per local day by
+default, one segment per board column, stacked bottom-to-top in board order (`STAGES`: Scraped at the
+bottom, Offer on top) - where each segment counts the entries the operator recorded *into* that column
+in that period and prints that count with its share of the period under it. Nothing accumulates: a
+period nobody touched a card in is a zero, so a quiet week looks quiet and a busy one looks busy. The
 panel item sits between *Processes* and *Sources of truth*.
 
-**Why columns, and not the stream graph the page was first modelled on.** A day's number here is a
-*snapshot*, and it only changes when a card actually moves - so most of the series is flat plateaus. A
-smoothed flowing band (`offsetType: 'wiggle'` + `catmullRom`) draws waves through those plateaus, which
-implies a gradual change that never happened, and a stage holding 1% of the board becomes a sliver with
-nowhere to put its number: the pretty shape and the readable numbers are mutually exclusive here.
-Discrete columns state discrete days, every value is printed, and the picture stays honest at six
-stages across up to thirty days.
+**Why columns, and not the stream graph the page was first modelled on.** Periods are discrete things,
+and a smoothed flowing band (`offsetType: 'wiggle'` + `catmullRom`) draws waves through them and implies
+a change that never happened. Discrete columns state discrete days, every value is printed, and a segment
+holding one of a period's two entries still has room for its own number.
 
 - **Nothing new is stored, and there is no new route.** The page reads the board's own
-  `GET /api/board` - those cards already carry their `history` - and `lib/analytics.ts` reconstructs
-  the answer: a card is Scraped from the day it was scraped (`resumes.created_at`; a card with no
-  `resume_board` row yet already reads as Scraped through the join's default) and every `move` row
-  moves it, so `stageOnDay` is "the latest move at or before the end of that day". `archive`/`restore`/
-  `tailoring` rows are not column changes and are ignored - a refusal keeps its column (invariant 19).
-  Scraping a page, moving a card or correcting a history line therefore changes the picture with no
-  extra bookkeeping, and the chart can never disagree with the board.
-- **The last bucket may never disagree with the board either.** An audit trail can be corrected or
-  pruned (`PATCH`/`DELETE /api/board/history/<id>`, invariant 29), so the card's **current** column wins
-  from its last activity onward (`resume_board.updated_at`, the board's own clock). Without that,
-  pruning a move line today would redraw today as an older column.
-- **A day is a local calendar day** - the unit `cardMeta.ts` dates a card by - and a bucket is
-  `[local midnight, next midnight)`, so the last slice is *today* rather than "the last 24 hours".
+  `GET /api/board` - those cards already carry their `history` - and `lib/analytics.ts` counts what the
+  trail says: `stageEventsInBucket` returns the stages a card **entered inside** the bucket, which is
+  the intake's own row (`resumes.created_at` -> Scraped, so a scraped or hand-typed vacancy lands in
+  Scraped on the day it was created) plus every `kind='move'` row dated inside it that **changes the
+  column** -> the column it moved *into*. An entry belongs to its own bucket and to no other, which is
+  the whole difference between this and a running picture of the board; `archive`/`restore` rows are not
+  column entries - a refusal keeps its column (invariant 19) - and `tailoring` rows mirror the worker's
+  statuses rather than the operator's funnel, so `refusalCounts` reads the first two separately.
+- **A row that does not change the column is activity, not a transition.** `from_state = to_state` is
+  what `recordCardActivity` writes for the *Add action* button and for every interview add/edit/remove
+  (`lib/db.ts`), and a drag into Prepare that retries tailoring writes it too. They bump the card's clock
+  - the field that dates a card everywhere else (invariant 26) - and must not draw a segment: left
+  counted, one drag into Interviewing plus the interview scheduled on that card the same afternoon read
+  as *two* entries in Interviewing (reported 2026-10-14). Nothing in the trail changes, only the
+  reading, so the History section still lists every one of those lines.
+- **A corrected or pruned trail needs no correction rule.** `PATCH`/`DELETE /api/board/history/<id>`
+  (invariant 29) rewrites or removes the row that *was* the entry, so the column it used to draw simply
+  stops being drawn. The replay this page used to do also needed `resume_board.updated_at` to drag its
+  last bucket back in line with the board; a count of what the trail says cannot disagree with the trail,
+  so that rule is gone.
+- **A period is a local calendar day, an ISO week or a calendar month** (`bucketsFor(from, to,
+  granularity)`, the `granularity` being the header's own `GRANULARITIES` dropdown - **Day** by default,
+  `Week` and `Month` the aggregations). A bucket is `[period start, next period start)` - local midnight
+  / Monday 00:00 / the 1st - so the last slice is *today* rather than "the last 24 hours", a week is
+  named by the Monday it starts on (`Week of 5 Oct`) and a month by itself (`Oct 2026`). Week and month
+  bounds are built with `Date` arithmetic rather than `± n * 24h`, because a week containing a DST change
+  is not 168 hours long and a bound an hour off midnight would file an entry into the wrong week.
   `dateWindow`'s upper bound is **exclusive** - the board's own filter compares against it the same way
-  (`at >= to` is outside) - so the last column is the day that bound falls *inside*: "Last week" runs
+  (`at >= to` is outside) - so the last column is the period that bound falls *inside*: "Last week" runs
   Monday 00:00 to Monday 00:00 and draws its seven days, not eight (an eighth Oct-12 column, fixed
   2026-10-12). The range control is the board toolbar's own `DATE_RANGES`/`dateWindow` (`lib/filters.ts`,
-  whose parameter was widened to take a bare range instead of a whole `BoardFilters`); a range wider than
-  `MAX_DAYS` (90) is drawn as its newest 90 days and `summarizeSeries` says so in the subtitle, because a
-  column a day has to stay wide enough to hold its own number - past roughly that many, the segments are
-  thinner than their labels.
+  whose parameter was widened to take a bare range instead of a whole `BoardFilters`).
+- **The cap is per granularity** (`MAX_BUCKETS`): a window wider than 90 days, 52 weeks or 24 months is
+  drawn as its newest that many columns, and `summarizeSeries` says so in the subtitle, because a column
+  has to stay wide enough to hold its own number.
+- **The axis counts entries** (`countAxis`) and is no longer a fixed `0-100%`: three entries and sixty
+  have to look different. Its top is the busiest period rounded up - one tick per entry for a busiest of
+  four or fewer, then a whole-number step from the `1, 2, 3, 4, 5, 6, 8, 10, 20, ...` ladder - so no tick
+  is ever `0.5`. A window with nothing in it is `maxTotal` 0, which the chart reads as its empty state
+  before it ever asks for an axis.
+- **Refusals and restores are read beside the stack, never stacked.** A refusal is an outcome rather
+  than a funnel step, and stacking it above Offer would stop a column's height meaning "how much
+  happened" - so `refused`/`restored` ride in the row *outside* `keys` and show up in the tooltip, in the
+  hover caption (`describeShare`) and - when the window has any - in the subtitle (`summarizeSeries`).
+  They are still per-period facts, dated by their own `resume_history` row. *Include refused* keeps its
+  meaning: switched off, it drops the refused cards' entries *and* the two counters.
 - **The chart is `@nivo/bar`** (the POC's second UI dependency, after `json-edit-react`), used for the
   half worth not hand-rolling: the stacking, the band scale and the axes. `keys` is `STAGES` order, and
   d3 stacks the first key from the baseline - the **bottom** of a vertical bar - so Scraped really is
-  the bottom segment; the axis is a fixed `valueScale.max = 100`, because every column is a whole board.
+  the bottom segment; `valueScale.max` is `countAxis(series.maxTotal).max`, because every column is a
+  count that has to be comparable with its neighbours.
   Four things are ours, each through one of the library's documented extension points (`layers`, the
   `colors` function, `onMouseEnter`/`onMouseLeave`):
-  1. **the numbers on the segments**: each segment carries its **count over its share** - `12` on one
+  1. **the numbers on the segments**: each segment carries its **count over its share** - `3` on one
      line, `25%` on the next (`segmentLabel`). They are drawn by a `layers` entry, because a two-line
      label needs two `<tspan>`s while Nivo's `label` is a single string (its `labelFormat` is declared in
      the library's types but never read at runtime in 0.99, so setting it silently does nothing). A
@@ -708,7 +733,8 @@ stages across up to thirty days.
      layer draws *inside* `SvgWrapper`'s margin group, whereas Nivo's `labelX` is bar-relative and its
      `absX` already adds the margin - copying either one is a silent error of a whole column's width.
   2. **the legend** is an HTML row, not Nivo's `BoxLegendSvg` (which always redraws its own `data`,
-     reversed, so Offer would lead - and cannot be a hover target);
+     reversed, so Offer would lead - and cannot be a hover target); each item shows its stage's count in
+     the newest bucket;
   3. **the hover fade** (`bandFill`, and `labelOpacity` so a segment's numbers fade with it): the
      hovered stage keeps its colour and every other segment is blended toward white - `diagram1.png`'s
      rule. Nivo dims nothing by itself, it only shows a tooltip.
@@ -720,19 +746,21 @@ stages across up to thirty days.
      pins the markup.
   The hover is read from Nivo's own `onMouseEnter`/`onMouseLeave` and drives both the fade and the
   one-line readout under the chart (`describeShare`), so a keyboard focus on a legend item highlights its
-  segment exactly like a hover does. The whole thing is measured with a `ResizeObserver` and handed an
-  explicit width rather than using `ResponsiveBar`, so the SSR pass and the first client render agree.
+  segment exactly like a hover does. The axis labels a bucket through the bucket's own `label` (`labelOf`
+  - a lookup, never a second labelling rule living in the component). The whole thing is measured with a
+  `ResizeObserver` and handed an explicit width rather than using `ResponsiveBar`, so the SSR pass and
+  the first client render agree.
 - **A missing key is the one way this chart could grow a hole**, so `mixRows` writes **every** stage key
-  on **every** day, zeros included: the chart stacks `datum[key]`, and an `undefined` is a `NaN` segment
-  height. Each row also carries the count behind its share (`count_<stage>`), which is what lets a column
-  show percentages while the hover answers in vacancies. `analytics.test.ts` pins that completeness, the
-  shares-sum-to-exactly-100 rule (`sharePercents` gives the residue to the largest segment, so no column
-  overshoots the fixed axis) and the palette; `StageMixChart.test.tsx` pins the render - server-rendered
-  without a DOM, the legend's board order, the board palette, the empty state.
-- **Refused vacancies are counted by default** - they keep the column they dropped out of - with an
-  *Include refused* checkbox to leave them out. The page is read when it opens and on demand, **never
-  polled**: the board's 5s cadence answers a question ("what changed?") that a day-by-day diagram does
-  not ask.
+  on **every** bucket, zeros included: the chart stacks `datum[key]`, and an `undefined` is a `NaN`
+  segment height. Each row carries the bucket's `key` and `label`, the stack's counts, each count's share
+  (`share_<stage>`, what the segment's second line prints) and the two readings beside the stack.
+  `analytics.test.ts` pins that completeness, the shares-sum-to-exactly-100 rule (`sharePercents` gives
+  the residue to the largest segment, so the printed labels always add up) and the palette;
+  `StageMixChart.test.tsx` pins the render - server-rendered without a DOM, the legend's board order, the
+  board palette, the empty state.
+- The page is read when it opens and on demand, **never polled**: the board's 5s cadence answers a
+  question ("what changed?") that a period-by-period diagram does not ask. Changing the range or the
+  aggregation re-slices what is already in memory, so neither costs a request.
 - The segment colours are the board's own hue families as hex (`STAGE_BAND_COLORS` - SVG needs a colour
   and the chips are Tailwind classes), so a colour means the same thing on both pages. Scraped and
   Prepare are a light and a dark grey deliberately, being adjacent in the stack.
@@ -786,8 +814,10 @@ stages across up to thirty days.
 - **No server-side paging or sorting for the run log** (the newest 100 rows, `GET /api/processes`),
   and no filtering by process or status.
 - **The chart has no zoom, pan, CSV or PNG export.** The only way to look at a narrower window is to
-  pick a different range, and the daily shares cannot be downloaded. (The hover *does* read the exact day
-  under the cursor, unlike the stream graph this page started as.)
+  pick a different range, the only aggregations are the three in the dropdown (day, ISO week, month -
+  there is no quarter or year, and a week is Monday-started because the board's own weeks are), and the
+  counts behind the columns cannot be downloaded. (The hover *does* read the exact period under the
+  cursor, unlike the stream graph this page started as.)
 - Not deployed in-cluster yet (`CONSTITUTION.md` D11) - run it against port-forwards.
 - **The parsed text is read-only, and there is no raw-mark-up view.** Only the *parsed* text is stored
   (`resumes.description_raw`) - a posting's HTML is never kept - so "why did the parser miss this?" is

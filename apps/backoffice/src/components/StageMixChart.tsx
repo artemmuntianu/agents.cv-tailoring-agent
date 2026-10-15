@@ -4,7 +4,7 @@ import {
   SEGMENT_LABEL_HEIGHT,
   bandColor,
   bandFill,
-  dayLabel,
+  countAxis,
   describeShare,
   labelOpacity,
   mixRows,
@@ -17,25 +17,26 @@ import { STAGES, stageLabel } from '../lib/stages';
 import type { StageId } from '../lib/types';
 
 /**
- * The analytics diagram: how many vacancies stood in each column, on each day.
+ * The analytics diagram: what happened in each column, in each period.
  *
- * A **100% stacked column per day**: one column per local day, one segment per board stage stacked
- * bottom-to-top in board order (Scraped at the bottom), each segment's height that stage's **share
- * of the board that day**, with its own count and share printed on it - `12` over `25%`. Nivo draws
- * the columns; the numbers on them are ours (`SegmentLabels`).
+ * A **stacked column per period** - a local day by default, or a week or a month - with one segment
+ * per board stage, stacked bottom-to-top in board order (Scraped at the bottom). Each segment is the
+ * number of entries the operator recorded into that column in that period, and carries both that
+ * count and its share of the period - `3` over `25%`. The axis counts entries, so a quiet day and a
+ * busy one are different heights and a day nobody touched a card is a zero. Refusals and restores
+ * are read *beside* the stack (the tooltip, the caption and the page's subtitle) rather than stacked
+ * in it: they are outcomes, not funnel steps. Nivo draws the columns; the numbers on them are ours
+ * (`SegmentLabels`).
  *
- * The picture is columns rather than a stream graph on purpose. A day's number here is a
- * **snapshot** - it only changes when a card actually moves - so most of the series is flat
- * plateaus; a smoothed flowing band (`offsetType: 'wiggle'` + `catmullRom`) would draw waves
- * through those plateaus and imply a gradual change that never happened, and a band that is 1% of
- * the board becomes a sliver with nowhere to put its number. Discrete columns state discrete days,
- * and a printed label in each segment is readable at any size (a segment too short for its two
- * lines drops the label rather than shrinking it - `SEGMENT_LABEL_HEIGHT`).
+ * Discrete columns rather than a stream graph, for the same reason as before: periods are discrete
+ * things, and a smoothed flowing band (`offsetType: 'wiggle'` + `catmullRom`) would draw waves
+ * through them and imply a change that never happened. A printed label in each segment is readable
+ * at any size, and a segment too short for its two lines drops the label rather than shrinking it
+ * (`SEGMENT_LABEL_HEIGHT`).
  *
- * The data is the same in both cases: `lib/analytics.ts` replays each card's own trail, so nothing
- * here decides anything about the vacancies - this file is a rendering layer, and every rule it
- * follows (percentages, colours, the hover fade, the axis ticks) is a pure function in that module
- * and unit tested.
+ * The data is `lib/analytics.ts`' own reading of each card's trail, so nothing here decides
+ * anything about the vacancies - this file is a rendering layer, and every rule it follows (the
+ * shares, the colours, the hover fade, both axes) is a pure function in that module.
  */
 
 /** What the chart is drawn at before the container has been measured (SSR and the first paint). */
@@ -64,23 +65,33 @@ function useMeasuredWidth<T extends HTMLElement>() {
 }
 
 /**
- * The hover readout: the segment's share, and the counts behind it.
+ * The hover readout: the segment's count, its share of the period, and the period's two outcomes.
  *
- * A column shows percentages, so the tooltip answers in vacancies - `12 of 236 · 5%` - because a
- * share without its base is not a fact the operator can act on.
+ * A column is drawn to a count, so the tooltip answers with the count **and the base** it is a share
+ * of - `3 of 12 · 25%` - because a share without its base is not a fact the operator can act on.
+ * Refusals and restores are named here instead of being stacked, and only when the period has them.
  */
-function ShareTooltip({ id, indexValue, data }: BarTooltipProps<MixRow>) {
+function ShareTooltip({ id, data }: BarTooltipProps<MixRow>) {
   const stage = String(id) as StageId;
-  const count = Number(data[`count_${stage}`] ?? 0);
+  const count = Number(data[stage] ?? 0);
   const total = Number(data.total ?? 0);
-  const share = Math.round(Number(data[stage] ?? 0));
+  const share = Math.round(Number(data[`share_${stage}`] ?? 0));
+  const refused = Number(data.refused ?? 0);
+  const restored = Number(data.restored ?? 0);
   return (
     <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
       <p className="font-semibold text-slate-900">{stageLabel(stage)}</p>
       <p className="text-slate-600">
-        {count} {count === 1 ? 'vacancy' : 'vacancies'} of {total} · {share}%
+        {count} {count === 1 ? 'entry' : 'entries'} of {total} · {share}%
       </p>
-      <p className="text-slate-400">{dayLabel(String(indexValue))}</p>
+      <p className="text-slate-400">{data.label}</p>
+      {(refused > 0 || restored > 0) && (
+        <p className="mt-1 text-slate-500">
+          {refused > 0 && `${refused} refused`}
+          {refused > 0 && restored > 0 && ' · '}
+          {restored > 0 && `${restored} restored`}
+        </p>
+      )}
     </div>
   );
 }
@@ -164,8 +175,8 @@ function SegmentLabels({ bars }: BarCustomLayerProps<MixRow>) {
         const stage = String(bar.data.id);
         if (bar.height < SEGMENT_LABEL_HEIGHT) return null;
         const label = segmentLabel(
-          Number(bar.data.data[`count_${stage}`] ?? 0),
-          Number(bar.data.value ?? 0),
+          Number(bar.data.data[stage] ?? 0),
+          Number(bar.data.data[`share_${stage}`] ?? 0),
         );
         const x = bar.x + bar.width / 2;
         const y = bar.y + bar.height / 2;
@@ -200,27 +211,37 @@ interface StageMixChartProps {
   height?: number;
 }
 
-/** One column per local day, one segment per board stage, stacked bottom-to-top in board order. */
+/** One column per period, one segment per board stage, stacked bottom-to-top in board order. */
 export default function StageMixChart({ series, height = 440 }: StageMixChartProps) {
-  /** The stage under the cursor - from a segment or from its name above - and the day it was on. */
+  /** The stage under the cursor - from a segment or from its name above - and the period it was in. */
   const [hovered, setHovered] = useState<string | null>(null);
-  const [hoveredDay, setHoveredDay] = useState<number | null>(null);
+  const [hoveredBucket, setHoveredBucket] = useState<number | null>(null);
   const [width, containerRef] = useMeasuredWidth<HTMLDivElement>();
   const { data, keys } = useMemo(() => mixRows(series), [series]);
   const labels = useMemo(() => tickValues(series), [series]);
+  /** The count axis: the busiest period rounded up, and its whole-number gridlines. */
+  const axis = useMemo(() => countAxis(series.maxTotal), [series.maxTotal]);
+  /**
+   * Buckets carry their own label (`Week of 5 Oct`, `Oct 2026`) and the axis labels them by **key**,
+   * so this is a lookup rather than a second labelling rule living in the component.
+   */
+  const labelOf = useMemo(
+    () => new Map(series.buckets.map((item) => [item.key, item.label])),
+    [series.buckets],
+  );
 
-  // The legend has no day of its own, so it reads the newest one; a hovered segment reads its own.
-  const day = hoveredDay ?? series.buckets.length - 1;
+  // The legend has no period of its own, so it reads the newest one; a hovered segment reads its own.
+  const bucket = hoveredBucket ?? series.buckets.length - 1;
   const caption =
-    hovered !== null && series.buckets[day]
-      ? describeShare(series, hovered as StageId, day)
-      : 'Hover a segment (or a name above) to read one day.';
+    hovered !== null && series.buckets[bucket]
+      ? describeShare(series, hovered as StageId, bucket)
+      : 'Hover a segment (or a name above) to read one period.';
 
   if (series.maxTotal === 0) {
     return (
       <p className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
-        Nothing stood on the board in this window. Widen the range, or scrape a vacancy and drag it
-        from Scraped.
+        Nothing happened in this window. Widen the range, or scrape a vacancy and drag it from
+        Scraped.
       </p>
     );
   }
@@ -242,13 +263,14 @@ export default function StageMixChart({ series, height = 440 }: StageMixChartPro
             <Bar<MixRow>
               data={data}
               keys={keys}
-              indexBy="day"
+              indexBy="bucket"
               width={width}
               height={height}
               groupMode="stacked"
               layout="vertical"
-              // Every column is a whole board, so the axis is the percentage and it is maxed at 100.
-              valueScale={{ type: 'linear', min: 0, max: 100 }}
+              // The axis counts entries, and its top is the busiest period rounded up to a readable
+              // step: a busy period has to look busy.
+              valueScale={{ type: 'linear', min: 0, max: axis.max }}
               indexScale={{ type: 'band', round: true }}
               colors={(datum) => bandFill(String(datum.id), hovered)}
               // No stroke and no radius: a column's segments read as one bar, like the reference.
@@ -270,28 +292,28 @@ export default function StageMixChart({ series, height = 440 }: StageMixChartPro
                 tickPadding: 6,
                 tickRotation: 0,
                 tickValues: labels,
-                format: (value) => dayLabel(String(value)),
+                format: (value) => labelOf.get(String(value)) ?? String(value),
               }}
               axisLeft={{
                 tickSize: 0,
                 tickPadding: 6,
-                tickValues: [0, 25, 50, 75, 100],
-                format: (value) => `${value}%`,
+                tickValues: axis.ticks,
+                format: (value) => String(value),
               }}
               margin={{ top: 8, right: 12, bottom: 34, left: 44 }}
               animate={false}
               isInteractive
               onMouseEnter={(datum) => {
                 setHovered(String(datum.id));
-                setHoveredDay(datum.index);
+                setHoveredBucket(datum.index);
               }}
               onMouseLeave={() => {
                 setHovered(null);
-                setHoveredDay(null);
+                setHoveredBucket(null);
               }}
               tooltip={ShareTooltip}
               role="img"
-              ariaLabel="Vacancies per stage per day, as a share of the board"
+              ariaLabel="Entries per stage per period, as a count"
             />
           </div>
         </div>

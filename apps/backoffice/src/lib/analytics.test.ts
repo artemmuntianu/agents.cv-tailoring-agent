@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   FADED_FILL,
-  MAX_DAYS,
+  MAX_BUCKETS,
   bandColor,
   bandFill,
   buildSeries,
-  dayBuckets,
+  bucketsFor,
   dayKey,
   dayLabel,
   describeShare,
@@ -14,9 +14,10 @@ import {
   resolveWindow,
   segmentLabel,
   sharePercents,
-  stageOnDay,
+  stageEventsInBucket,
   summarizeSeries,
   tickValues,
+  type AnalyticsBucket,
   type AnalyticsSeries,
 } from './analytics';
 import { dateWindow } from './filters';
@@ -26,11 +27,12 @@ import type { BoardCard, HistoryEntry, HistoryKind, StageId } from './types';
 /**
  * The Analytics chart's rules, pinned to one instant: 12 Oct 2026, 12:00 local.
  *
- * Three things carry most of these tests. A card's column on a day is rebuilt from its own audit
- * trail (so "the latest move at or before the end of that day" is the whole rule); **every** day
- * must carry **every** stage key, because a missing key is an `undefined` the chart stacks into a
- * `NaN` segment; and a day's shares must add up to exactly 100, because a column is drawn against
- * a fixed 0-100% axis.
+ * Three things carry most of these tests. A period's numbers are counted from the card's own audit
+ * trail, each entry in the bucket its own timestamp falls in and in no other (so nothing
+ * accumulates and a day nobody touched is a real zero); **every** bucket must carry **every** stage
+ * key, because a missing key is an `undefined` the chart stacks into a `NaN` segment; and a
+ * bucket's six printed shares must add up to exactly 100, because that is what the labels on its
+ * segments claim.
  */
 
 const NOW = new Date(2026, 9, 12, 12, 0, 0);
@@ -40,9 +42,11 @@ function at(year: number, month: number, day: number, hour = 10, minute = 0): st
   return new Date(year, month - 1, day, hour, minute).toISOString();
 }
 
-/** The last millisecond of a local day - the instant `buildSeries` asks each bucket about. */
-function endOf(year: number, month: number, day: number): number {
-  return new Date(year, month - 1, day + 1).getTime() - 1;
+/** The local day a date is, as the one bucket the event rule is asked about. */
+function bucketOn(year: number, month: number, day: number): AnalyticsBucket {
+  const from = new Date(year, month - 1, day).getTime();
+  const to = new Date(year, month - 1, day + 1).getTime();
+  return bucketsFor(from, to)[0];
 }
 
 /** One `resume_history` row. `id` arrives as a string from node-pg (`int8`), but is typed number. */
@@ -94,24 +98,25 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
   };
 }
 
-describe('where a card stood on a day', () => {
-  it('is Scraped from the day it was scraped, and nothing before that', () => {
+describe('what a card entered in a day', () => {
+  it('is Scraped on the day it was scraped, and nothing before that', () => {
     const scraped = card();
-    expect(stageOnDay(scraped, endOf(2026, 10, 10))).toBe('scraped');
-    expect(stageOnDay(scraped, endOf(2026, 10, 9))).toBeNull();
+    expect(stageEventsInBucket(scraped, bucketOn(2026, 10, 10))).toEqual(['scraped']);
+    expect(stageEventsInBucket(scraped, bucketOn(2026, 10, 9))).toEqual([]);
   });
 
-  it('counts a move from its own day, never earlier', () => {
+  it('counts a move on its own day, never earlier', () => {
     const moved = card({
       updatedAt: at(2026, 10, 11),
       stage: 'applied',
       history: [move(at(2026, 10, 11), 'applied')],
     });
-    expect(stageOnDay(moved, endOf(2026, 10, 10))).toBe('scraped');
-    expect(stageOnDay(moved, endOf(2026, 10, 11))).toBe('applied');
+    // The 10th is the intake's own row, the 11th the drag - each belongs to its own day only.
+    expect(stageEventsInBucket(moved, bucketOn(2026, 10, 10))).toEqual(['scraped']);
+    expect(stageEventsInBucket(moved, bucketOn(2026, 10, 11))).toEqual(['applied']);
   });
 
-  it('takes the latest move at or before the end of the day', () => {
+  it('counts every move in the day it was made, and a later one leaks nowhere', () => {
     const journey = card({
       updatedAt: at(2026, 10, 12),
       stage: 'interviewing',
@@ -123,19 +128,21 @@ describe('where a card stood on a day', () => {
         move(at(2026, 10, 20), 'offer', 4),
       ],
     });
-    expect(stageOnDay(journey, endOf(2026, 10, 10))).toBe('prepare');
-    expect(stageOnDay(journey, endOf(2026, 10, 11))).toBe('applied');
-    expect(stageOnDay(journey, endOf(2026, 10, 12))).toBe('interviewing');
-    expect(stageOnDay(journey, endOf(2026, 10, 19))).toBe('interviewing');
+    expect(stageEventsInBucket(journey, bucketOn(2026, 10, 10))).toEqual(['scraped', 'prepare']);
+    expect(stageEventsInBucket(journey, bucketOn(2026, 10, 11))).toEqual(['applied']);
+    expect(stageEventsInBucket(journey, bucketOn(2026, 10, 12))).toEqual(['interviewing']);
+    expect(stageEventsInBucket(journey, bucketOn(2026, 10, 19))).toEqual([]);
+    // ... and the future row is a fact about its own day rather than nobody's.
+    expect(stageEventsInBucket(journey, bucketOn(2026, 10, 20))).toEqual(['offer']);
   });
 
-  it('resolves two moves recorded in the same second to the later one', () => {
+  it("counts two moves recorded in the same second, in the trail's own order", () => {
     const sameSecond = card({
       updatedAt: at(2026, 10, 11),
       stage: 'applied',
       history: [move(at(2026, 10, 11), 'prepare', 1), move(at(2026, 10, 11), 'applied', 2)],
     });
-    expect(stageOnDay(sameSecond, endOf(2026, 10, 11))).toBe('applied');
+    expect(stageEventsInBucket(sameSecond, bucketOn(2026, 10, 11))).toEqual(['prepare', 'applied']);
   });
 
   it('ignores the rows that are not column changes', () => {
@@ -150,44 +157,56 @@ describe('where a card stood on a day', () => {
         entry('archive', at(2026, 10, 10), 'archived', 1, 'active'),
         entry('restore', at(2026, 10, 11), 'active', 2, 'archived'),
         entry('tailoring', at(2026, 10, 12), 'tailored', 3, 'in_progress'),
+        // The `from_state = to_state` row `lib/db.ts::recordCardActivity` writes for an *Add action*
+        // and for every interview add/edit/remove - the card's clock, not its column.
+        entry('move', at(2026, 10, 12), 'scraped', 4, 'scraped'),
       ],
     });
-    // A refusal keeps the card in its column, so the chart still reads Scraped.
-    expect(stageOnDay(refused, endOf(2026, 10, 12))).toBe('scraped');
+    // A refusal keeps the card in its column, so the 12th's tailoring row is not an entry at all -
+    // and neither is the same-column `move` beside it. Left counted, one drag into Interviewing plus
+    // the interview scheduled that afternoon read as two entries (the bug, reported 2026-10-14).
+    expect(stageEventsInBucket(refused, bucketOn(2026, 10, 10))).toEqual(['scraped']);
+    expect(stageEventsInBucket(refused, bucketOn(2026, 10, 11))).toEqual([]);
+    expect(stageEventsInBucket(refused, bucketOn(2026, 10, 12))).toEqual([]);
   });
 
-  it("lets the card's own column win from its last activity onward", () => {
-    // The trail was pruned after the fact: the board says Offer, the remaining row says Applied.
+  it("does not invent an entry for the card's current column", () => {
+    // The trail was pruned after the fact: the board says Offer, the remaining row says Applied -
+    // and a column a card merely *sits* in is not something that happened on any day.
     const corrected = card({
       updatedAt: at(2026, 10, 11),
       stage: 'offer',
       history: [move(at(2026, 10, 10), 'applied')],
     });
-    expect(stageOnDay(corrected, endOf(2026, 10, 10))).toBe('applied');
-    expect(stageOnDay(corrected, endOf(2026, 10, 11))).toBe('offer');
-    expect(stageOnDay(corrected, endOf(2026, 10, 12))).toBe('offer');
+    expect(stageEventsInBucket(corrected, bucketOn(2026, 10, 10))).toEqual(['scraped', 'applied']);
+    expect(stageEventsInBucket(corrected, bucketOn(2026, 10, 11))).toEqual([]);
+    expect(stageEventsInBucket(corrected, bucketOn(2026, 10, 12))).toEqual([]);
   });
 });
 
-describe('the day buckets', () => {
+describe('the buckets', () => {
   it('is one bucket per local day the window covers, back to back', () => {
-    const buckets = dayBuckets(Date.parse(at(2026, 10, 10)), Date.parse(at(2026, 10, 12)));
-    expect(buckets.map((bucket) => bucket.day)).toEqual(['2026-10-10', '2026-10-11', '2026-10-12']);
+    const buckets = bucketsFor(Date.parse(at(2026, 10, 10)), Date.parse(at(2026, 10, 12)));
+    expect(buckets.map((bucket) => bucket.key)).toEqual([
+      '2026-10-10',
+      '2026-10-11',
+      '2026-10-12',
+    ]);
     for (let i = 1; i < buckets.length; i += 1) {
       // No gap and no overlap: each day starts where the previous one ended.
       expect(buckets[i].from).toBe(buckets[i - 1].to);
     }
-    expect(buckets[0].day).toBe(dayKey(buckets[0].from));
+    expect(buckets[0].key).toBe(dayKey(buckets[0].from));
   });
 
   it('keeps an upper bound that lands on a midnight out of the window', () => {
     // "Last week" is a Monday-to-Monday range: 12 Oct 2026 *is* a Monday, so its upper bound is
     // 12 Oct 00:00 - which is outside the window. The bug drew eight columns, through Oct 12.
-    const buckets = dayBuckets(new Date(2026, 9, 5).getTime(), new Date(2026, 9, 12).getTime());
+    const buckets = bucketsFor(new Date(2026, 9, 5).getTime(), new Date(2026, 9, 12).getTime());
     expect(buckets).toHaveLength(7);
-    expect(buckets[0].day).toBe('2026-10-05');
-    expect(buckets[buckets.length - 1].day).toBe('2026-10-11');
-    // ... and the last day still ends where the bound is, so its snapshot is that whole day.
+    expect(buckets[0].key).toBe('2026-10-05');
+    expect(buckets[buckets.length - 1].key).toBe('2026-10-11');
+    // ... and the last column still ends where the bound is, so it counts that whole day.
     expect(buckets[buckets.length - 1].to).toBe(new Date(2026, 9, 12).getTime());
   });
 
@@ -198,7 +217,7 @@ describe('the day buckets', () => {
       [card()],
       now,
     );
-    expect(dayBuckets(bounds.from, bounds.to).map((bucket) => bucket.day)).toEqual([
+    expect(bucketsFor(bounds.from, bounds.to).map((bucket) => bucket.key)).toEqual([
       '2026-10-05',
       '2026-10-06',
       '2026-10-07',
@@ -210,21 +229,25 @@ describe('the day buckets', () => {
   });
 
   it('puts a moment mid-day in that day, and ends the bucket at the next midnight', () => {
-    const [bucket] = dayBuckets(Date.parse(at(2026, 10, 12)), Date.parse(at(2026, 10, 12, 12)));
-    expect(bucket.day).toBe('2026-10-12');
+    const [bucket] = bucketsFor(Date.parse(at(2026, 10, 12)), Date.parse(at(2026, 10, 12, 12)));
+    expect(bucket.key).toBe('2026-10-12');
+    expect(bucket.label).toBe(dayLabel('2026-10-12'));
+    expect(bucket.granularity).toBe('day');
     expect(bucket.from).toBe(new Date(2026, 9, 12).getTime());
     expect(bucket.to).toBe(new Date(2026, 9, 13).getTime());
   });
 
   it('clamps an all-time window to the newest days it will draw', () => {
-    const buckets = dayBuckets(Date.parse(at(2020, 1, 1)), Date.parse(at(2026, 10, 12, 12)));
-    expect(buckets).toHaveLength(MAX_DAYS);
-    expect(buckets[buckets.length - 1].day).toBe('2026-10-12');
-    expect(buckets[0].day).toBe(dayKey(new Date(2026, 9, 12 - (MAX_DAYS - 1)).getTime()));
+    const buckets = bucketsFor(Date.parse(at(2020, 1, 1)), Date.parse(at(2026, 10, 12, 12)));
+    expect(buckets).toHaveLength(MAX_BUCKETS.day);
+    expect(buckets[buckets.length - 1].key).toBe('2026-10-12');
+    expect(buckets[0].key).toBe(dayKey(new Date(2026, 9, 12 - (MAX_BUCKETS.day - 1)).getTime()));
   });
 
   it('still returns one day when the window is empty or backwards', () => {
-    expect(dayBuckets(Date.parse(at(2026, 10, 12)), Date.parse(at(2026, 10, 10)))).toHaveLength(1);
+    expect(
+      bucketsFor(Date.parse(at(2026, 10, 12)), Date.parse(at(2026, 10, 10))),
+    ).toHaveLength(1);
   });
 });
 
@@ -249,14 +272,14 @@ describe('closing an open window against the data', () => {
 
 /** The three days every series test is drawn over: 10, 11 and 12 Oct 2026. */
 function buckets() {
-  return dayBuckets(Date.parse(at(2026, 10, 10)), Date.parse(at(2026, 10, 12)));
+  return bucketsFor(Date.parse(at(2026, 10, 10)), Date.parse(at(2026, 10, 12)));
 }
 
 function valuesOf(series: AnalyticsSeries, stage: StageId): number[] {
   return series.stages.find((serie) => serie.stage === stage)?.values ?? [];
 }
 
-describe('the per-day series', () => {
+describe('the per-period series', () => {
   /** Scraped on the 10th, dragged into Applied on the 11th. */
   const journey = card({
     jobId: 'a',
@@ -264,20 +287,21 @@ describe('the per-day series', () => {
     stage: 'applied',
     history: [move(at(2026, 10, 11), 'applied')],
   });
-  /** Never touched: Scraped from the day it was scraped. */
+  /** Never touched: one entry into Scraped, on the day it was scraped. */
   const newcomer = card({ jobId: 'b', createdAt: at(2026, 10, 11), updatedAt: at(2026, 10, 11) });
 
-  it('counts each card in the column it stood in, day by day', () => {
+  it('counts each entry in its own bucket, and nothing that happened elsewhere', () => {
     const series = buildSeries([journey, newcomer], buckets(), {});
-    expect(valuesOf(series, 'scraped')).toEqual([1, 1, 1]);
-    expect(valuesOf(series, 'applied')).toEqual([0, 1, 1]);
-    expect(series.totals).toEqual([1, 2, 2]);
+    // The 10th: journey's own intake. The 11th: its drag and newcomer's intake. The 12th: nothing.
+    expect(valuesOf(series, 'scraped')).toEqual([1, 1, 0]);
+    expect(valuesOf(series, 'applied')).toEqual([0, 1, 0]);
+    expect(series.totals).toEqual([1, 2, 0]);
     expect(series.maxTotal).toBe(2);
   });
 
-  it('counts a card nowhere before it existed', () => {
+  it('counts an entry nowhere before the bucket it happened in', () => {
     const series = buildSeries([newcomer], buckets(), {});
-    expect(series.totals).toEqual([0, 1, 1]);
+    expect(series.totals).toEqual([0, 1, 0]);
   });
 
   it('stacks bottom-to-top in board order, Scraped at the bottom', () => {
@@ -295,8 +319,8 @@ describe('the per-day series', () => {
       archivedActor: 'Company',
       archivedReason: 'No response',
     });
-    expect(buildSeries([journey, refused], buckets(), {}).totals[2]).toBe(2);
-    expect(buildSeries([journey, refused], buckets(), { includeArchived: false }).totals[2]).toBe(1);
+    expect(buildSeries([journey, refused], buckets(), {}).totals[0]).toBe(2);
+    expect(buildSeries([journey, refused], buckets(), { includeArchived: false }).totals[0]).toBe(1);
   });
 });
 
@@ -311,41 +335,55 @@ describe('the rows the bar chart is handed', () => {
     card({ jobId: 'b', createdAt: at(2026, 10, 12), updatedAt: at(2026, 10, 12) }),
   ];
 
-  it('is one row per day, keyed bottom-to-top in board order', () => {
+  it('is one row per period, keyed bottom-to-top in board order', () => {
     const { data, keys } = mixRows(buildSeries(cards, buckets(), {}));
     expect(data).toHaveLength(3);
     expect(keys).toEqual(STAGES.map((meta) => meta.id));
     expect(keys[0]).toBe('scraped');
-    expect(data.map((row) => row.day)).toEqual(['2026-10-10', '2026-10-11', '2026-10-12']);
+    expect(data.map((row) => row.bucket)).toEqual(['2026-10-10', '2026-10-11', '2026-10-12']);
+    // Each row carries its label, so neither the axis nor the tooltip has to parse a key.
+    expect(data.map((row) => row.label)).toEqual([
+      dayLabel('2026-10-10'),
+      dayLabel('2026-10-11'),
+      dayLabel('2026-10-12'),
+    ]);
   });
 
-  it('writes every stage key and its own count on every day, so no segment can be NaN', () => {
+  it('writes every stage key and its own count on every period, so no segment can be NaN', () => {
     // A missing key is an `undefined` the chart stacks as a `NaN` height - the one way this
     // picture could grow a hole. Every row must be complete, and every value a real number.
     const { data, keys } = mixRows(buildSeries(cards, buckets(), {}));
     for (const row of data) {
       for (const key of keys) {
-        expect(key in row, `${key} missing on ${String(row.day)}`).toBe(true);
+        expect(key in row, `${key} missing on ${String(row.bucket)}`).toBe(true);
         expect(Number.isFinite(row[key]), `${key} on ${JSON.stringify(row)}`).toBe(true);
-        expect(Number.isFinite(row[`count_${key}`]), `count_${key}`).toBe(true);
+        expect(Number.isFinite(row[`share_${key}`]), `share_${key}`).toBe(true);
       }
+      // The two readings beside the stack ride on every row as well - just never in `keys`.
+      expect(Number.isFinite(row.refused)).toBe(true);
+      expect(Number.isFinite(row.restored)).toBe(true);
     }
+    expect(keys).not.toContain('refused');
+    expect(keys).not.toContain('restored');
   });
 
-  it('states a stage with no vacancies as an explicit zero', () => {
+  it('states a stage with nothing in it as an explicit zero', () => {
     const { data } = mixRows(buildSeries(cards, buckets(), {}));
-    // Nobody is in Negotiating on the first day - a zero, not a missing key.
+    // Nobody entered Negotiating on the first day - a zero, not a missing key.
     expect(data[0].negotiating).toBe(0);
-    expect(data[0].count_negotiating).toBe(0);
+    expect(data[0].share_negotiating).toBe(0);
   });
 
-  it('carries the count behind the share, so the hover can answer in vacancies', () => {
+  it('carries the count as the stack and its share beside it, so the hover answers both', () => {
     const { data } = mixRows(buildSeries(cards, buckets(), {}));
-    // 12 Oct: one card in Interviewing, one still in Scraped - half the board each, of two.
-    expect(data[2].total).toBe(2);
-    expect(data[2].interviewing).toBe(50);
-    expect(data[2].count_interviewing).toBe(1);
-    expect(data[2].count_scraped).toBe(1);
+    // 11 Oct: one entry, into Interviewing - so it is all of that day's activity.
+    expect(data[1].total).toBe(1);
+    expect(data[1].interviewing).toBe(1);
+    expect(data[1].share_interviewing).toBe(100);
+    expect(data[1].share_scraped).toBe(0);
+    // 12 Oct: card b's own intake, and nothing else - a quiet day is a short column.
+    expect(data[2].total).toBe(1);
+    expect(data[2].scraped).toBe(1);
   });
 });
 
@@ -368,24 +406,28 @@ describe('the shares a column is drawn from', () => {
     expect(sharePercents([0, 0, 0, 0, 0, 0], 0)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
-  it('sizes a day exactly, so the axis can be a fixed 0-100%', () => {
+  it("sizes a bucket's printed shares exactly, so its labels always add up to 100", () => {
     const { data, keys } = mixRows(buildSeries([card({ jobId: 'a' })], buckets(), {}));
+    // The last two days saw nothing at all - zeroes rather than a division by zero.
+    expect(data[1].total).toBe(0);
+    expect(data[2].total).toBe(0);
     for (const row of data) {
-      const sum = keys.reduce((total, key) => total + Number(row[key]), 0);
+      if (row.total === 0) continue;
+      const sum = keys.reduce((total, key) => total + Number(row[`share_${key}`]), 0);
       expect(sum).toBeCloseTo(100, 10);
     }
   });
 });
 
-describe('the day axis', () => {
-  it('labels a handful of days and always the newest one', () => {
+describe('the period axis', () => {
+  it('labels a handful of periods and always the newest one', () => {
     expect(tickValues(buildSeries([card()], buckets(), {}), 2)).toEqual([
       '2026-10-10',
       '2026-10-12',
     ]);
   });
 
-  it('labels every day when the window fits', () => {
+  it('labels every period when the window fits', () => {
     expect(tickValues(buildSeries([card()], buckets(), {}))).toEqual([
       '2026-10-10',
       '2026-10-11',
@@ -393,8 +435,19 @@ describe('the day axis', () => {
     ]);
   });
 
-  it('has nothing to label when there are no days', () => {
-    expect(tickValues({ buckets: [], stages: [], totals: [], maxTotal: 0 })).toEqual([]);
+  it('has nothing to label when there are no periods', () => {
+    expect(
+      tickValues({
+        buckets: [],
+        stages: [],
+        totals: [],
+        maxTotal: 0,
+        refused: [],
+        restored: [],
+        refusedTotal: 0,
+        restoredTotal: 0,
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -447,25 +500,28 @@ describe('the words around the chart', () => {
     );
     // The date half is the locale's own rendering, so it is derived rather than hardcoded.
     expect(describeShare(series, 'applied', 1)).toBe(
-      `Applied — 1 vacancy · 100% · ${dayLabel('2026-10-11')}`,
+      `Applied — 1 entry · 100% · ${dayLabel('2026-10-11')}`,
     );
     expect(describeShare(series, 'applied', 0)).toBe(
-      `Applied — 0 vacancies · 0% · ${dayLabel('2026-10-10')}`,
+      `Applied — 0 entries · 0% · ${dayLabel('2026-10-10')}`,
     );
     expect(describeShare(series, 'offer', 1)).toBe(
-      `Offer — 0 vacancies · 0% · ${dayLabel('2026-10-11')}`,
+      `Offer — 0 entries · 0% · ${dayLabel('2026-10-11')}`,
     );
   });
 
-  it('summarizes the window from its last day', () => {
+  it('summarizes the window from its last period', () => {
     const series = buildSeries([card()], buckets(), {});
-    expect(summarizeSeries(series)).toBe(`3 days · 1 vacancy on ${dayLabel('2026-10-12')}`);
+    // The card was scraped on the 10th, so the newest day saw nothing - and that is a fact.
+    expect(summarizeSeries(series)).toBe(
+      `3 days · 0 entries on ${dayLabel('2026-10-12')} · busiest 1`,
+    );
   });
 
   it('says so when a wider range was cut to the newest days it draws', () => {
-    const wide = dayBuckets(Date.parse(at(2020, 1, 1)), Date.parse(at(2026, 10, 12)));
+    const wide = bucketsFor(Date.parse(at(2020, 1, 1)), Date.parse(at(2026, 10, 12)));
     const series = buildSeries([card()], wide, {});
-    expect(series.buckets).toHaveLength(MAX_DAYS);
-    expect(summarizeSeries(series)).toContain(`newest ${MAX_DAYS} days`);
+    expect(series.buckets).toHaveLength(MAX_BUCKETS.day);
+    expect(summarizeSeries(series)).toContain(`newest ${MAX_BUCKETS.day} days`);
   });
 });

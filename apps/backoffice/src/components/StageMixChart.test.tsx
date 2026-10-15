@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import StageMixChart from './StageMixChart';
-import { buildSeries, dayBuckets } from '../lib/analytics';
+import { buildSeries, bucketsFor } from '../lib/analytics';
 import { STAGES } from '../lib/stages';
 import type { BoardCard, HistoryEntry, StageId } from '../lib/types';
 
@@ -73,19 +73,22 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
   };
 }
 
-/** 10, 11 and 12 Oct 2026: one card Scraped then Applied, and a second one Scraped from the 11th. */
+/**
+ * 10, 11 and 12 Oct 2026: a card Scraped on the 10th and then Applied on the 12th, and a second one
+ * Scraped on the 12th.
+ */
 function fixture() {
   // `to` is exclusive, so it has to land *inside* the 12th for the 12th to be drawn at all.
-  const buckets = dayBuckets(new Date(2026, 9, 10).getTime(), new Date(2026, 9, 12, 12).getTime());
+  const buckets = bucketsFor(new Date(2026, 9, 10).getTime(), new Date(2026, 9, 12, 12).getTime());
   return buildSeries(
     [
       card({
         jobId: 'a',
-        updatedAt: at(11),
+        updatedAt: at(12),
         stage: 'applied',
-        history: [move(at(11), 'applied')],
+        history: [move(at(12), 'applied')],
       }),
-      card({ jobId: 'b', createdAt: at(11), updatedAt: at(11) }),
+      card({ jobId: 'b', createdAt: at(12), updatedAt: at(12) }),
     ],
     buckets,
     {},
@@ -117,21 +120,21 @@ describe('the stage mix chart', () => {
     expect(html).toContain('background-color:#0ea5e9');
   });
 
-  it('shows each stage its own count on the newest day', () => {
+  it('shows each stage its own count in the newest period', () => {
     const html = rendered(<StageMixChart series={fixture()} />);
-    // Two cards on 12 Oct: one Applied, one Scraped - so exactly two legend items read "1".
+    // 12 Oct recorded two entries: one Scraped, one Applied - so exactly two legend items read "1".
     expect(html.match(/>1<\/span>/g)).toHaveLength(2);
   });
 
-  it('invites the hover that reads a day out', () => {
+  it('invites the hover that reads a period out', () => {
     const html = rendered(<StageMixChart series={fixture()} />);
-    expect(html).toContain('Hover a segment (or a name above) to read one day.');
+    expect(html).toContain('Hover a segment (or a name above) to read one period.');
   });
 
   it('writes each segment its count over its share, as two lines', () => {
     const html = rendered(<StageMixChart series={fixture()} />);
     // Two `<tspan>`s per label - the count on the first line, the share on the second - never one
-    // string: on 12 Oct there are two cards, one in Scraped and one in Applied, so `1` over `50%`.
+    // string: 12 Oct recorded two entries, one Scraped and one Applied, so `1` over `50%`.
     const tspans = html.match(/<tspan/g) ?? [];
     expect(tspans.length).toBeGreaterThan(0);
     expect(tspans.length % 2).toBe(0);
@@ -150,9 +153,9 @@ describe('the stage mix chart', () => {
   });
 
   it('says so instead of drawing an empty chart', () => {
-    const empty = buildSeries([], dayBuckets(Date.now(), Date.now()), {});
+    const empty = buildSeries([], bucketsFor(Date.now(), Date.now()), {});
     const html = rendered(<StageMixChart series={empty} />);
-    expect(html).toContain('Nothing stood on the board in this window');
+    expect(html).toContain('Nothing happened in this window');
     expect(html).not.toContain('<svg');
   });
 });
