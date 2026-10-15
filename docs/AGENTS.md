@@ -20,6 +20,7 @@ and the disagreement is recorded.
 | `docs/diagrams/` | The runtime architecture diagram: `cv-tailoring-runtime.archify.json` is the authored source, the delivered `cv-tailoring-runtime.html` is the artifact. Dense `standard` profile by design - see the section below |
 | `docs/images/` | Screenshots the root `README.md` embeds (e.g. `kanban-board.png`, the board hero image). Assets for the README, not documents |
 | `docs/template_agents.md` | A reference copy of the CommonAgentSDK layered-docs standard (the authoritative copy lives outside this repo, at `E:\CommonAgentSDK\instructions\template_agents.md`). `tools/analyze.mjs` is the same kind of copy of the SDK's CLI - TypeScript-only, and not wired up here |
+| `openspec/AGENTS.md` | The **change-planning layer**: how a change is proposed, validated, applied and archived, the capability backlog, and the rule that `openspec/specs/` states observable behaviour while `CONSTITUTION.md` keeps the architecture and the invariants |
 
 Do not restate a layer's rules here - link to `infra/charts/AGENTS.md`, `apps/worker/tests/AGENTS.md` and
 the rest instead.
@@ -95,6 +96,9 @@ what produced D10).
 5. The SDK's `template_agents.md` is the *standard*, not a to-do list: it describes the
    Astro project it came from, so never copy its `src/...` layer map into this repo
    (the root `AGENTS.md` CommonAgentSDK section records the applicability).
+6. A change that moves a documented fact carries its owner with it: `openspec/specs/` states
+   observable behaviour only, `CONSTITUTION.md` stays the architecture and invariant truth, and a
+   change is archived (`openspec archive`) only once `openspec validate --all --strict` is clean.
 
 ## Don't
 

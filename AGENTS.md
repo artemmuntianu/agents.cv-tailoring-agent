@@ -34,6 +34,7 @@ and the root keeps the cross-cutting tooling (`scripts/`, `docs/`, `.github/`, `
 - **`apps/worker/tests/AGENTS.md`** - the hermetic verification layer.
 - **`packages/AGENTS.md`** - the reserved shared-library slot and the rule for when a package earns a home there.
 - **`docs/AGENTS.md`** - architecture / contract / runbook documentation, and which doc owns what; it also owns the runtime diagram spec + artifact in `docs/diagrams/` and the README screenshots in `docs/images/`.
+- **`openspec/AGENTS.md`** - the change-planning layer: how a change is proposed, validated, applied and archived, the capability backlog, and how the specs relate to `CONSTITUTION.md`.
 - **`.github/AGENTS.md`** - CI workflows.
 - **Root entry points** (`apps/worker/config.py`, `apps/worker/worker.py`,
   `apps/worker/publisher.py`, `apps/worker/healthcheck.py`) are
@@ -51,6 +52,11 @@ Adding a layer (a new top-level directory with real behaviour) means, in one
 change: write `<dir>/AGENTS.md`, add it to the architecture map above, and record
 any new fact or discrepancy in `CONSTITUTION.md`. Renaming or deleting a layer
 does the same in reverse.
+
+A fourth layer sits on top: `openspec/` holds the **change proposals** (the plan reviewed
+before code) and, once archived, the **behaviour specs** they produced. It never restates an
+invariant - architecture and invariants stay in `CONSTITUTION.md` - and `openspec/AGENTS.md`
+owns that layer's rules and its capability backlog.
 
 ## CommonAgentSDK (instructions + tooling)
 
@@ -133,6 +139,17 @@ helm dependency update infra/charts/cv-tailoring-platform     # required before 
 helm lint infra/charts/cv-tailoring-platform
 helm template cv-tailoring infra/charts/cv-tailoring-platform -f infra/deploy/values/dev.yaml > rendered.yaml
 kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 rendered.yaml
+```
+
+Change planning (the specs and the in-flight proposals - `openspec/AGENTS.md`; the CLI is a
+global npm tool, not a repo dependency):
+
+```sh
+openspec list --specs                               # the capability set
+openspec list                                       # the in-flight changes
+openspec validate --all --strict --no-interactive    # the gate CI runs (pinned in ci.yml)
+openspec archive <change-id>                        # merge the delta into openspec/specs/
+openspec update                                     # refresh .agents/skills/ after a CLI upgrade
 ```
 
 `make help` lists every developer target (`Makefile`); on a machine without
@@ -321,6 +338,9 @@ not add a dependency just to answer a reference/dead-code question.
   local cluster provider - see `CONSTITUTION.md` section 5, legacy list).
 - Trust `helm lint` alone for a chart change.
 - Treat `docs/PROJECT_STATE.md` as live status; it is a point-in-time handoff (its counts are stale - `CONSTITUTION.md` D7).
+- Let a spec restate an invariant, define a mechanism, or contradict `CONSTITUTION.md`: the spec set
+  states behaviour, `CONSTITUTION.md` owns the architecture and the invariants, and a change that
+  moves a documented fact updates its owner in the same change.
 
 ## When unsure
 

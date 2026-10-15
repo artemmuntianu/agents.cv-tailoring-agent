@@ -1,0 +1,56 @@
+schema: spec-driven
+
+# Project context: the constraints an agent cannot infer by reading the code.
+context: |
+  CVTailoringAgent turns a job description into a CV tailored for it, delivered as DOCX + PDF.
+  One machine, one local Kubernetes cluster (Docker Desktop); the only outbound call is Gemini.
+  Monorepo: apps/worker (Python 3.12, LangGraph + Gemini, RabbitMQ consumers),
+  apps/backoffice (Astro SSR + React islands, Tailwind v4, vitest - the operator UI and the API
+  gateway), apps/extension (Chrome MV3 scraper + application-form filler), infra/charts (Helm),
+  scripts/ (operator tooling), docs/, packages/ (reserved, empty).
+
+  Sources of truth: CONSTITUTION.md is canonical for the architecture, the 37 numbered invariants,
+  the D-numbered discrepancy table and the legacy list; one AGENTS.md per layer carries the
+  mechanics; docs/AGENTS.md says which document owns what; openspec/specs/* describes observable
+  behaviour and nothing else. Read CONSTITUTION.md and the owning layer AGENTS.md before proposing.
+
+  Hard constraints an agent will not guess:
+  - One Postgres, one DDL: apps/worker/utils/db.py::SCHEMA_SQL. Never create a second schema file.
+  - The board never writes resumes.status; the worker owns that column and ACTIVE_STATUSES.
+  - A queue topology or payload change updates apps/worker/utils/messaging.py,
+    apps/worker/agent/contracts.py and apps/backoffice/src/lib/queue.ts together, or RabbitMQ
+    refuses the redeclare.
+  - Files are LF-only (.gitattributes; invariant 37).
+  - Shell examples are Windows PowerShell 5.1: chain with ';' only, because '&&' is a parse error.
+  - Secrets never live in git (.env is ignored; charts use existingSecret).
+
+  Gates: python -m pytest -q, python -m ruff check ., python tools/analyze.py validate-docs.
+  In apps/backoffice: npm test, npx tsc --noEmit, npm run build. A chart change: helm lint + render.
+
+rules:
+  proposal:
+    - Name the layers the change touches and the CONSTITUTION.md invariants it must not break.
+    - Name the documents that move with it (CONSTITUTION.md, the owning layer AGENTS.md, docs/).
+    - State what is deliberately out of scope - this repo documents its omissions.
+  specs:
+    - State observable behaviour (the operator sees, the route answers, the column renders), never
+      the implementation that produces it.
+    - One capability per openspec/specs/<capability>/spec.md; reuse an existing capability path.
+    - Every requirement carries SHALL/MUST prose before its scenarios, and at least one scenario.
+    - Name the queue, route, table or page the behaviour is observed through.
+  design:
+    - Record the tradeoff and the rejected alternative, citing the invariant by number.
+    - 'No second source of truth: one DDL, one queue topology, board state only in Postgres.'
+  tasks:
+    - Every task names the files it touches and the gate that proves it (pytest / vitest / helm lint).
+    - Add a task to update the owning document whenever a documented fact changes.
+
+operations:
+  apply:
+    guidance:
+      - Run the gate a task names before ticking it; a task is not done because the code exists.
+      - Keep the change to the file set its proposal lists; a new file means the proposal changed.
+  archive:
+    guidance:
+      - Tick every task or say why one does not apply, then archive so the delta merges into specs/.
+      - Report which capability specs changed and which documents moved with the change.
