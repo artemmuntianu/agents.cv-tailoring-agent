@@ -1,15 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
 import { VOCABULARY_KINDS, summarizeVocabulary } from '../lib/admin';
-import type { BoardAction } from '../lib/types';
+import IslandProvider from '../state/IslandProvider';
+import { useAppDispatch, useAppSelector } from '../state/hooks';
+import { request } from '../state/request';
+import {
+  adminAddRequested,
+  adminLoadRequested,
+  adminRemoveRequested,
+  adminRenameRequested,
+} from '../state/admin/slice';
+import {
+  selectAdminBusy,
+  selectAdminError,
+  selectAdminLoading,
+  selectAdminNote,
+  selectAdminVocabulary,
+} from '../state/admin/selectors';
 import ActionVocabulary from './ActionVocabulary';
 import AppShell from './AppShell';
-
-interface Vocabulary {
-  actions: BoardAction[];
-  actors: { value: string; hint: string }[];
-  stages: { id: string; label: string; hint: string }[];
-  subStates: { id: string; label: string }[];
-}
 
 interface AdminAppProps {
   session: { email: string; name: string | null; admin: boolean };
@@ -32,83 +39,21 @@ function ReadOnlyTable({ rows }: { rows: { id: string; label: string; hint: stri
 /**
  * `/admin` - the vocabulary admin surface, and the only screen a non-admin cannot reach.
  *
- * It edits exactly one list: **Actions** (`board_actions`). The Actor, column and
- * sub-state vocabularies are rendered from the code that defines them, because changing
- * any of them means changing behaviour - the page says so instead of pretending a
- * checkbox could do it.
+ * It edits exactly one list: **Actions** (`board_actions`). The read and the three writes
+ * are sagas that re-read the vocabulary after every write, so the table is always what
+ * Postgres holds; the page itself is a rendering layer.
  */
-export default function AdminApp({ session }: AdminAppProps) {
-  const [vocabulary, setVocabulary] = useState<Vocabulary | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+function Admin({ session }: AdminAppProps) {
+  const dispatch = useAppDispatch();
+  const vocabulary = useAppSelector(selectAdminVocabulary);
+  const loading = useAppSelector(selectAdminLoading);
+  const busy = useAppSelector(selectAdminBusy);
+  const error = useAppSelector(selectAdminError);
+  const note = useAppSelector(selectAdminNote);
 
-  const load = useCallback(async () => {
-    try {
-      const response = await fetch('/api/admin/vocabulary');
-      if (response.status === 401) {
-        window.location.assign('/login?next=/admin');
-        return;
-      }
-      const payload = (await response.json()) as {
-        ok: boolean;
-        actions?: BoardAction[];
-        actors?: Vocabulary['actors'];
-        stages?: Vocabulary['stages'];
-        subStates?: Vocabulary['subStates'];
-        error?: string;
-      };
-      if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-      setVocabulary({
-        actions: payload.actions ?? [],
-        actors: payload.actors ?? [],
-        stages: payload.stages ?? [],
-        subStates: payload.subStates ?? [],
-      });
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  /** One write, then re-read: the database is the display here too. */
-  async function mutate(
-    method: 'POST' | 'PATCH' | 'DELETE',
-    body?: unknown,
-    query?: string,
-    success?: string,
-  ): Promise<boolean> {
-    setBusy(true);
-    let failure: string | null = null;
-    try {
-      const response = await fetch(`/api/admin/actions${query ?? ''}`, {
-        method,
-        // Also on a body-less DELETE: Astro's `checkOrigin` refuses a non-GET without a
-        // content-type (`apps/backoffice/AGENTS.md`).
-        headers: { 'content-type': 'application/json' },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-      const payload = (await response.json()) as { ok: boolean; error?: string };
-      if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-    } catch (cause) {
-      failure = cause instanceof Error ? cause.message : String(cause);
-    }
-    await load();
-    setBusy(false);
-    setError(failure);
-    setNote(failure ? null : (success ?? null));
-    return failure === null;
-  }
 
   const summary = vocabulary ? summarizeVocabulary(vocabulary.actions) : null;
-
   return (
     <AppShell
       active="vocabularies"
@@ -153,20 +98,9 @@ export default function AdminApp({ session }: AdminAppProps) {
                 actions={vocabulary.actions}
                 busy={busy}
                 kinds={VOCABULARY_KINDS}
-                onAdd={(value, kind) =>
-                  mutate('POST', { value, kind }, undefined, `Added “${value}”.`)
-                }
-                onRename={(from, to) =>
-                  mutate('PATCH', { from, to }, undefined, `“${from}” is now “${to}”.`)
-                }
-                onDelete={(value) =>
-                  mutate(
-                    'DELETE',
-                    undefined,
-                    `?value=${encodeURIComponent(value)}`,
-                    `Removed “${value}”.`,
-                  )
-                }
+                onAdd={(value, kind) => request<boolean>(dispatch, adminAddRequested(value, kind))}
+                onRename={(from, to) => request<boolean>(dispatch, adminRenameRequested(from, to))}
+                onDelete={(value) => request<boolean>(dispatch, adminRemoveRequested(value))}
               />
             </section>
 
@@ -220,5 +154,12 @@ export default function AdminApp({ session }: AdminAppProps) {
         )}
       </div>
     </AppShell>
+  );
+}
+export default function AdminApp(props: AdminAppProps) {
+  return (
+    <IslandProvider start={() => adminLoadRequested()}>
+      <Admin {...props} />
+    </IslandProvider>
   );
 }

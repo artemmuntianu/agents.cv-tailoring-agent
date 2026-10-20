@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from './AppShell';
 import BoardToolbar from './BoardToolbar';
 import KanbanBoard from './KanbanBoard';
@@ -6,189 +5,103 @@ import ReasonDialog from './ReasonDialog';
 import RemoveDialog from './RemoveDialog';
 import VacancyModal from './VacancyModal';
 import { defaultArchiveAction, defaultMoveAction } from '../lib/actions';
-import { countArchived, countByStage } from '../lib/board';
-import { DEFAULT_FILTERS, filterCards, type BoardFilters } from '../lib/filters';
 import { missingFields, missingRequest } from '../lib/missing';
 import { stageLabel } from '../lib/stages';
 import type {
   ActionRequest,
   Actor,
   ArchiveRequest,
-  BoardAction,
-  BoardCard,
   DetailsRequest,
   HistoryEntryRequest,
   InterviewRequest,
   MoveRequest,
-  StageId,
 } from '../lib/types';
+import IslandProvider from '../state/IslandProvider';
+import { useAppDispatch, useAppSelector } from '../state/hooks';
+import { request } from '../state/request';
+import {
+  actionConfirmed,
+  archiveConfirmed,
+  boardLiveSet,
+  boardRequested,
+  boardStarted,
+  detailsSaveRequested,
+  docxUploadRequested,
+  historyEditRequested,
+  historyRemoveRequested,
+  interviewAddRequested,
+  interviewEditRequested,
+  interviewRemoveRequested,
+  moveConfirmed,
+  removeConfirmed,
+  restoreRequested,
+} from '../state/board/slice';
+import {
+  selectArchivedCount,
+  selectBoardError,
+  selectBoardLoading,
+  selectBoardNote,
+  selectCards,
+  selectColumnCounts,
+  selectLive,
+  selectVisibleCards,
+} from '../state/board/selectors';
+import { filtersChanged, filtersReset } from '../state/filters/slice';
+import { selectFilters } from '../state/filters/selectors';
+import {
+  actionDialogRequested,
+  archiveDialogRequested,
+  dialogClosed,
+  dialogOpened,
+  dialogsClosed,
+  moveDialogRequested,
+  removeDialogRequested,
+} from '../state/dialogs/slice';
+import {
+  selectOpenCard,
+  selectPendingActionCard,
+  selectPendingArchiveCard,
+  selectPendingMove,
+  selectPendingRemovalCard,
+} from '../state/dialogs/selectors';
+import { selectActions } from '../state/vocabulary/selectors';
 
 interface AppProps {
   session: { email: string; name: string | null; admin: boolean };
 }
 
-/** How often live mode re-reads the board (ms). */
-const LIVE_INTERVAL_MS = 5000;
-
 /**
- * Board root. The database is the single source of truth: every confirmed move is
- * POSTed and the board is then re-read, so what you see is what was persisted.
- *
- * Live mode polls instead of using SSE/WebSocket: the worker writes `resumes.status`
- * from another container, and a short read-only poll survives the `kubectl
- * port-forward` the board runs behind without a long-lived connection to drop.
+ * Board root. The database is the single source of truth: every confirmed change is a saga
+ * that POSTs, re-reads `/api/board` and only then reports the failure, so what you see is
+ * what was persisted. The store is a cache of that read - never a second source of truth.
  */
-export default function App({ session }: AppProps) {
-  const [cards, setCards] = useState<BoardCard[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [live, setLive] = useState(true);
-  const [pending, setPending] = useState<{ card: BoardCard; to: StageId } | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<BoardFilters>(DEFAULT_FILTERS);
-  /** The persisted Action vocabulary: dialog suggestions + filter options. */
-  const [actions, setActions] = useState<BoardAction[]>([]);
-  /** The card waiting for the refusal dialog's confirmation. */
-  const [pendingArchive, setPendingArchive] = useState<BoardCard | null>(null);
-  /** The card waiting for the *removal* confirmation (irreversible). */
-  const [pendingRemoval, setPendingRemoval] = useState<BoardCard | null>(null);
-  /** A one-line explanation of what an action did (e.g. artifacts queued for the sweep). */
-  const [note, setNote] = useState<string | null>(null);
-  /** The card waiting for the Add Action dialog: the Move dialog, with no column change. */
-  const [pendingAction, setPendingAction] = useState<BoardCard | null>(null);
+function Board({ session }: AppProps) {
+  const dispatch = useAppDispatch();
+  const cards = useAppSelector(selectCards);
+  const visible = useAppSelector(selectVisibleCards);
+  const counts = useAppSelector(selectColumnCounts);
+  const archivedCount = useAppSelector(selectArchivedCount);
+  const loading = useAppSelector(selectBoardLoading);
+  const error = useAppSelector(selectBoardError);
+  const note = useAppSelector(selectBoardNote);
+  const live = useAppSelector(selectLive);
+  const filters = useAppSelector(selectFilters);
+  const actions = useAppSelector(selectActions);
 
-  const refresh = useCallback(async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setLoading(true);
-    try {
-      const response = await fetch('/api/board');
-      if (response.status === 401) {
-        // The 8h session expired; the login page sends us back here afterwards.
-        window.location.assign('/login?next=/');
-        return;
-      }
-      const payload = (await response.json()) as {
-        ok: boolean;
-        cards?: BoardCard[];
-        error?: string;
-      };
-      if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-      setCards(payload.cards ?? []);
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setCards([]);
-    } finally {
-      if (!options?.silent) setLoading(false);
-    }
-  }, []);
+  const pending = useAppSelector(selectPendingMove);
+  const pendingAction = useAppSelector(selectPendingActionCard);
+  const pendingArchive = useAppSelector(selectPendingArchiveCard);
+  const pendingRemoval = useAppSelector(selectPendingRemovalCard);
+  const openCard = useAppSelector(selectOpenCard);
 
-  /**
-   * The Action vocabulary (dialog combobox + Filters panel). Read with the board and
-   * again after every confirmed change, so what the operator typed is offered at once.
-   */
-  const loadActions = useCallback(async () => {
-    try {
-      const response = await fetch('/api/board/actions');
-      if (!response.ok) return;
-      const payload = (await response.json()) as { ok: boolean; actions?: BoardAction[] };
-      if (payload.ok) setActions(payload.actions ?? []);
-    } catch {
-      // The board still works without suggestions: the Action field stays free text.
-    }
-  }, []);
 
-  useEffect(() => {
-    void refresh();
-    void loadActions();
-  }, [refresh, loadActions]);
 
-  useEffect(() => {
-    if (!live) return;
-    const timer = window.setInterval(() => {
-      // A background tab has no reader; skip the query and the wake-up cost.
-      if (document.visibilityState === 'visible') void refresh({ silent: true });
-    }, LIVE_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [live, refresh]);
-
-  useEffect(() => {
-    // A scrape happens in another tab (the extension popup), so re-read the board the
-    // moment this one is looked at again - no waiting for the next poll tick.
-    const onFocus = () => {
-      if (document.visibilityState === 'visible') void refresh({ silent: true });
-    };
-    document.addEventListener('visibilitychange', onFocus);
-    window.addEventListener('focus', onFocus);
-    return () => {
-      document.removeEventListener('visibilitychange', onFocus);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [refresh]);
-
-  useEffect(() => {
-    // The extension's `Scraped` link lands on `/?card=<job_id>`: open that vacancy as soon as
-    // the board has it. The modal renders from `cards`, not from the filtered view, so it also
-    // works when the current filters happen to hide the column.
-    if (openId) return;
-    const requested = new URLSearchParams(window.location.search).get('card');
-    if (!requested) return;
-    if (cards.some((card) => card.jobId === requested)) setOpenId(requested);
-  }, [cards, openId]);
-
-  /**
-   * One confirmed change: POST, then re-read the board and the vocabulary. A refused
-   * request sets the error *after* the re-read, because `refresh()` clears it (the DB is
-   * the display, so the previous state comes back on screen either way). The route's JSON is
-   * returned so a caller can surface its `note` (e.g. "artifacts queued for the sweep").
-   */
-  async function mutate(path: string, body: unknown): Promise<Record<string, unknown> | null> {
-    let failure: string | null = null;
-    let payload: Record<string, unknown> | null = null;
-    setNote(null);
-    // An upload is the one body that is *not* JSON: `FormData` must go out untouched so the
-    // browser writes the multipart boundary itself (`POST /api/board/docx/<id>`).
-    const upload = typeof FormData !== 'undefined' && body instanceof FormData;
-    try {
-      const response = await fetch(path, {
-        method: 'POST',
-        ...(upload ? {} : { headers: { 'content-type': 'application/json' } }),
-        body: upload ? (body as FormData) : JSON.stringify(body),
-      });
-      const parsed = (await response.json()) as { ok: boolean; error?: string } & Record<
-        string,
-        unknown
-      >;
-      if (!response.ok || !parsed.ok) throw new Error(parsed.error ?? `HTTP ${response.status}`);
-      payload = parsed;
-    } catch (cause) {
-      failure = cause instanceof Error ? cause.message : String(cause);
-    }
-    await refresh();
-    await loadActions();
-    if (failure) setError(failure);
-    return payload;
-  }
-
-  /**
-   * *Update docx*: the deliverable the operator edited by hand, uploaded as multipart.
-   *
-   * The route stores the bytes and asks `resumes.rerender` for a new PDF, so the board's own
-   * artifact links point at the same pair as before - and the card payload (the 5s poll) is how
-   * the modal shows the render landing.
-   */
+  /** *Update docx*: the card-scoped write whose dialog stays open on a refusal. */
   async function uploadDocx(jobId: string, file: File) {
-    const form = new FormData();
-    form.append('file', file);
-    await mutate(`/api/board/docx/${encodeURIComponent(jobId)}`, form);
+    await request(dispatch, docxUploadRequested(jobId, file));
   }
 
-  /**
-   * The move confirmed. Entering Interviewing can carry a first interview, which the move route
-   * inserts in the same transaction as the column change (so a card can never claim the column
-   * without it) - an empty draft simply sends nothing. The Missing fields section rides along
-   * the same way: whatever the operator typed for a field the scrape left empty is sent with the
-   * move, and the move route is what stores it.
-   */
+  /** The move confirmed; the saga drops the dialog and reports the route's `note`. */
   async function confirmMove(
     actor: Actor,
     action: string,
@@ -196,134 +109,60 @@ export default function App({ session }: AppProps) {
     missing: Record<string, string>,
   ) {
     if (!pending) return;
-    const request: MoveRequest = {
+    const body: MoveRequest = {
       jobId: pending.card.jobId,
       to: pending.to,
       actor,
       action,
-      // The Missing fields values: only the ones that were actually typed.
       ...missingRequest(missing),
     };
-    setPending(null);
-    const result = await mutate(
-      '/api/board/move',
-      interview ? { ...request, interview } : request,
-    );
-    // Entering Prepare also queues the cover letter; the route says what happened to it.
-    const explanation = typeof result?.note === 'string' ? result.note : null;
-    if (explanation) setNote(explanation);
+    dispatch(moveConfirmed(interview ? { ...body, interview } : body));
   }
 
-  /**
-   * The Add Action dialog confirmed: the Move dialog's actor + reason, with **no** column change.
-   *
-   * It records a history row and bumps the card's activity date - which is what keeps the
-   * auto-archiver away from a card the operator is still working on. It goes to its own route,
-   * because in Prepare a move into the current column would be a tailoring *retry*.
-   */
   async function confirmAction(actor: Actor, action: string) {
     if (!pendingAction) return;
-    const request: ActionRequest = { jobId: pendingAction.jobId, actor, action };
-    setPendingAction(null);
-    await mutate('/api/board/action', request);
-  }
-
-  /**
-   * A card-scoped write (interview or details). Unlike the board-level mutations it reports its
-   * failure to *its caller* - the card's own control stays open with the message - so it does not
-   * go through `mutate`, which speaks through the toolbar's error line. It still re-reads the
-   * board (the database is the display), and neither of these writes a history row: an interview
-   * list is its own history and the detail fields are card attributes (invariant 28).
-   */
-  async function boardWrite(
-    path: string,
-    method: 'POST' | 'PATCH' | 'DELETE',
-    body?: unknown,
-  ) {
-    // The JSON content-type is sent even for a body-less DELETE: Astro's `checkOrigin`
-    // middleware forbids a non-safe request that has *no* content-type and no matching
-    // `Origin` (a browser always sends one, a script or a proxy may not) - see
-    // `apps/backoffice/AGENTS.md`.
-    const response = await fetch(path, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    const payload = (await response.json()) as { ok: boolean; error?: string };
-    if (!response.ok || !payload.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
-    await refresh();
+    const body: ActionRequest = { jobId: pendingAction.jobId, actor, action };
+    dispatch(actionConfirmed(body));
   }
 
   async function addInterview(jobId: string, interview: InterviewRequest) {
-    await boardWrite('/api/board/interviews', 'POST', { jobId, ...interview });
+    await request(dispatch, interviewAddRequested(jobId, interview));
   }
 
   async function editInterview(id: number, interview: InterviewRequest) {
-    await boardWrite(`/api/board/interviews/${id}`, 'PATCH', interview);
+    await request(dispatch, interviewEditRequested(id, interview));
   }
 
   async function removeInterview(id: number) {
-    await boardWrite(`/api/board/interviews/${id}`, 'DELETE');
+    await request(dispatch, interviewRemoveRequested(id));
   }
 
-  /**
-   * The History section's two writes: correcting one audit line, and dropping one.
-   *
-   * Both go through `boardWrite` (so a refusal is reported in the dialog that caused it) and both
-   * are deliberately *not* activity: no column change, no `resume_board.updated_at`, no
-   * `board_actions` - fixing the record cannot buy a card another ten days from the sweep
-   * (invariant 29).
-   */
   async function editHistoryLine(id: number, line: HistoryEntryRequest) {
-    await boardWrite(`/api/board/history/${id}`, 'PATCH', line);
+    await request(dispatch, historyEditRequested(id, line));
   }
 
   async function removeHistoryLine(id: number) {
-    await boardWrite(`/api/board/history/${id}`, 'DELETE');
+    await request(dispatch, historyRemoveRequested(id));
   }
 
-  /** The card's own detail fields: one write for the set, no column change, no history row. */
   async function saveDetails(jobId: string, details: DetailsRequest) {
-    await boardWrite('/api/board/details', 'POST', { ...details, jobId });
+    await request(dispatch, detailsSaveRequested(jobId, { ...details, jobId }));
   }
 
-  /** The refusal dialog confirmed: the card is archived in place, with its reason. */
   async function confirmArchive(actor: Actor, action: string) {
     if (!pendingArchive) return;
-    const request: ArchiveRequest = { jobId: pendingArchive.jobId, actor, action };
-    setPendingArchive(null);
-    await mutate('/api/board/archive', request);
+    const body: ArchiveRequest = { jobId: pendingArchive.jobId, actor, action };
+    dispatch(archiveConfirmed(body));
   }
 
-  /**
-   * Restore is one click (the archived card's own button). The route records the actor
-   * and the action, so an undo is still an audited change - it just does not need a
-   * dialog.
-   */
-  async function restore(jobId: string) {
-    await mutate('/api/board/restore', { jobId });
+  function restore(jobId: string) {
+    dispatch(restoreRequested(jobId));
   }
 
-  /**
-   * Removal is the one action with no way back, so it happens only after the dialog and it
-   * deliberately leaves the board *without* the card: the vacancy is forgotten, artifacts
-   * included. Whatever the board could not delete itself is queued for the volume sweep, and
-   * the route's note tells the operator to run it.
-   */
   async function confirmRemove() {
     if (!pendingRemoval) return;
-    const jobId = pendingRemoval.jobId;
-    setPendingRemoval(null);
-    const result = await mutate('/api/board/remove', { jobId });
-    const explanation = typeof result?.note === 'string' ? result.note : null;
-    if (explanation) setNote(explanation);
+    dispatch(removeConfirmed(pendingRemoval.jobId));
   }
-
-  const visible = useMemo(() => filterCards(cards, filters), [cards, filters]);
-  const counts = useMemo(() => countByStage(visible), [visible]);
-  const archivedCount = useMemo(() => countArchived(visible), [visible]);
-  const openCard = cards.find((card) => card.jobId === openId) ?? null;
-
   return (
     <AppShell
       active="board"
@@ -339,7 +178,7 @@ export default function App({ session }: AppProps) {
         <>
           <button
             type="button"
-            onClick={() => setLive((value) => !value)}
+            onClick={() => dispatch(boardLiveSet(!live))}
             aria-pressed={live}
             className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
               live
@@ -351,7 +190,7 @@ export default function App({ session }: AppProps) {
           </button>
           <button
             type="button"
-            onClick={() => void refresh()}
+            onClick={() => dispatch(boardRequested())}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             {loading ? 'Loading…' : 'Reload'}
@@ -361,8 +200,8 @@ export default function App({ session }: AppProps) {
     >
       <BoardToolbar
         filters={filters}
-        onChange={setFilters}
-        onReset={() => setFilters(DEFAULT_FILTERS)}
+        onChange={(next) => dispatch(filtersChanged(next))}
+        onReset={() => dispatch(filtersReset())}
         actions={actions}
         shown={visible.length}
         total={cards.length}
@@ -399,7 +238,7 @@ export default function App({ session }: AppProps) {
           </span>
           <button
             type="button"
-            onClick={() => setFilters(DEFAULT_FILTERS)}
+            onClick={() => dispatch(filtersReset())}
             className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
           >
             Show all cards
@@ -409,15 +248,11 @@ export default function App({ session }: AppProps) {
 
       <KanbanBoard
         cards={visible}
-        onRequestMove={(card, to) => setPending({ card, to })}
-        onOpen={setOpenId}
-        onArchive={(jobId) =>
-          setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null)
-        }
-        onRestore={(jobId) => void restore(jobId)}
-        onRemove={(jobId) =>
-          setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null)
-        }
+        onRequestMove={(card, to) => dispatch(moveDialogRequested(card.jobId, to))}
+        onOpen={(jobId) => dispatch(dialogOpened(jobId))}
+        onArchive={(jobId) => dispatch(archiveDialogRequested(jobId))}
+        onRestore={(jobId) => dispatch(restoreRequested(jobId))}
+        onRemove={(jobId) => dispatch(removeDialogRequested(jobId))}
       />
 
     {pending && (
@@ -444,7 +279,7 @@ export default function App({ session }: AppProps) {
             : undefined
         }
         onProceed={confirmMove}
-        onCancel={() => setPending(null)}
+        onCancel={() => dispatch(dialogsClosed())}
       />
     )}
 
@@ -462,7 +297,7 @@ export default function App({ session }: AppProps) {
           'activity, so the auto-archiver leaves this vacancy alone.'
         }
         onProceed={confirmAction}
-        onCancel={() => setPendingAction(null)}
+        onCancel={() => dispatch(dialogsClosed())}
       />
     )}
 
@@ -483,38 +318,22 @@ export default function App({ session }: AppProps) {
         // starts empty.
         defaultAction={defaultArchiveAction(pendingArchive.stage)}
         onProceed={confirmArchive}
-        onCancel={() => setPendingArchive(null)}
+        onCancel={() => dispatch(dialogsClosed())}
       />
     )}
 
     {openCard && (
       <VacancyModal
         card={openCard}
-        onClose={() => setOpenId(null)}
-        onArchive={(jobId) => {
-          setOpenId(null);
-          setPendingArchive(cards.find((card) => card.jobId === jobId) ?? null);
-        }}
+        onClose={() => dispatch(dialogClosed())}
+        onArchive={(jobId) => dispatch(archiveDialogRequested(jobId))}
         onRestore={(jobId) => {
-          setOpenId(null);
-          void restore(jobId);
+          dispatch(dialogClosed());
+          dispatch(restoreRequested(jobId));
         }}
-        onRemove={(jobId) => {
-          setOpenId(null);
-          setPendingRemoval(cards.find((card) => card.jobId === jobId) ?? null);
-        }}
-        onAddAction={(jobId) => {
-          // Recording an action never moves the card, but the dialog is still closed first - the
-          // ReasonDialog (z-30) then owns the screen, exactly as it does after Archive.
-          setOpenId(null);
-          setPendingAction(cards.find((card) => card.jobId === jobId) ?? null);
-        }}
-        onRequestMove={(card, to) => {
-          // The header's `Move to <next column>` reuses the board's own move dialog, so the
-          // Prepare warning, the interview collection and the reason all come for free.
-          setOpenId(null);
-          setPending({ card, to });
-        }}
+        onRemove={(jobId) => dispatch(removeDialogRequested(jobId))}
+        onAddAction={(jobId) => dispatch(actionDialogRequested(jobId))}
+        onRequestMove={(card, to) => dispatch(moveDialogRequested(card.jobId, to))}
         onUploadDocx={uploadDocx}
         onAddInterview={addInterview}
         onEditInterview={editInterview}
@@ -529,9 +348,17 @@ export default function App({ session }: AppProps) {
       <RemoveDialog
         card={pendingRemoval}
         onConfirm={() => void confirmRemove()}
-        onCancel={() => setPendingRemoval(null)}
+        onCancel={() => dispatch(dialogsClosed())}
       />
     )}
     </AppShell>
+  );
+}
+
+export default function App({ session }: AppProps) {
+  return (
+    <IslandProvider start={() => boardStarted()}>
+      <Board session={session} />
+    </IslandProvider>
   );
 }

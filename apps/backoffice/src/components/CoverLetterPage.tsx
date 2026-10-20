@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import AppShell from './AppShell';
 import { sourceLabel } from '../lib/cardMeta';
 import {
@@ -8,47 +8,14 @@ import {
   coverState,
   coverStateLabel,
 } from '../lib/cover';
-import type { CoverLetterState } from '../lib/types';
-
-/**
- * `/cover/<job_id>` - **one vacancy's cover letter**: the text an application will send, and the
- * button that asks the worker for it.
- *
- * The letter used to live as a section of the card modal, where a two-hundred-word block sat between
- * the deliverable links and the interviews. Reading it is its own act, so it is its own page - and the
- * card keeps one link to it, which is where *Generate* went too: asking for a letter belongs beside
- * the letter, not beside the CV links.
- *
- * It is the letter's only reader **and** its only writer:
- *
- * * `GET /api/cover/<job_id>` returns the row (`status`/`text`/`model`/`error`/`updatedAt`) plus the
- *   `vacancy` block that says whose letter it is - the card's cards carry the letter, but the board
- *   ships a hundred of them, which is why a page asks for one;
- * * `POST /api/cover/<job_id>` is the ask - one Gemini call on `resumes.cover`, claimed in
- *   `resume_cover_letter` first so two clicks cannot queue two generations (`lib/coverRequest.ts`).
- *
- * The state machine is `lib/cover.ts`, unit tested; this file decides nothing about it. While the row
- * says `queued`/`running` the page polls itself - the board's 5s poll used to carry that, and a page
- * with no board has to carry it alone.
- */
-
-const POLL_MS = 3000;
-/** Give up watching after this: the queue is where a stuck letter is visible (`/processes`). */
-const POLL_DEADLINE_MS = 3 * 60 * 1000;
-
-interface CoverVacancy {
-  jobId: string;
-  source: string;
-  externalId: string;
-  title: string;
-  company: string;
-  sourceUrl: string | null;
-  hasDescription: boolean;
-}
-
-interface CoverPayload extends CoverLetterState {
-  vacancy: CoverVacancy | null;
-}
+import IslandProvider from '../state/IslandProvider';
+import { useAppDispatch, useAppSelector } from '../state/hooks';
+import { coverAskRequested, coverRequested } from '../state/cover/slice';
+import {
+  selectCoverAsking,
+  selectCoverError,
+  selectCoverPayload,
+} from '../state/cover/selectors';
 
 interface CoverLetterPageProps {
   jobId: string;
@@ -59,68 +26,25 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : '-';
 }
 
-export default function CoverLetterPage({ jobId, session }: CoverLetterPageProps) {
-  const [payload, setPayload] = useState<CoverPayload | null>(null);
-  const [error, setError] = useState('');
-  const [asking, setAsking] = useState(false);
+function CoverLetter({ jobId, session }: CoverLetterPageProps) {
+  const dispatch = useAppDispatch();
+  const payload = useAppSelector(selectCoverPayload);
+  const error = useAppSelector(selectCoverError);
+  const asking = useAppSelector(selectCoverAsking);
+  /** The copy confirmation is the page's own, not server state. */
   const [copied, setCopied] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/cover/${encodeURIComponent(jobId)}`);
-      const body = (await response.json()) as { ok: boolean; error?: string } & CoverPayload;
-      if (!body.ok) {
-        setError(body.error || `HTTP ${response.status}`);
-        return;
-      }
-      setError('');
-      setPayload(body);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    }
-  }, [jobId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   const state = coverState(payload);
   const vacancy = payload?.vacancy ?? null;
   const blocked = coverBlockedReason(vacancy ? vacancy.hasDescription : true);
 
-  // While the worker has it, this page is the only thing that will notice it landing.
-  useEffect(() => {
-    if (state !== 'queued' && state !== 'running') return;
-    const started = Date.now();
-    const timer = setInterval(() => {
-      if (Date.now() - started > POLL_DEADLINE_MS) {
-        clearInterval(timer);
-        return;
-      }
-      void load();
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [state, load]);
-
-  /** One ask, then re-read: the row comes back `queued` and the poll above takes over. */
-  async function ask() {
+  /** One ask; the saga re-reads the row and polls until it lands or the deadline passes. */
+  function ask() {
     if (asking || blocked) return;
-    setAsking(true);
     setCopied(false);
-    try {
-      const response = await fetch(`/api/cover/${encodeURIComponent(jobId)}`, {
-        method: 'POST',
-        // Body-less, but Astro's `checkOrigin` refuses a non-GET without a content-type.
-        headers: { 'content-type': 'application/json' },
-      });
-      const body = (await response.json()) as { ok: boolean; error?: string };
-      if (!body.ok) setError(body.error || `HTTP ${response.status}`);
-      else await load();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setAsking(false);
-    }
+    dispatch(coverAskRequested(jobId));
   }
 
   async function copy() {
@@ -134,7 +58,6 @@ export default function CoverLetterPage({ jobId, session }: CoverLetterPageProps
       setCopied(false);
     }
   }
-
   return (
     <AppShell
       title={vacancy ? vacancy.title || 'Untitled vacancy' : 'Cover letter'}
@@ -240,5 +163,13 @@ export default function CoverLetterPage({ jobId, session }: CoverLetterPageProps
         </div>
       )}
     </AppShell>
+  );
+}
+
+export default function CoverLetterPage(props: CoverLetterPageProps) {
+  return (
+    <IslandProvider start={() => coverRequested(props.jobId)}>
+      <CoverLetter {...props} />
+    </IslandProvider>
   );
 }
