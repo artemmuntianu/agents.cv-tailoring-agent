@@ -3,7 +3,7 @@
 ## 1. Dependencies and API
 
 - [x] 1.1 Add `@reduxjs/toolkit@^2.13`, remove `redux-saga`, and verify `npm ls @reduxjs/toolkit redux react-redux` resolves cleanly.
-- [x] 1.2 Create `src/state/api.ts` with `fetchBaseQuery`, the 401 wrapper, the board/actions/cover/admin queries and every mutation; add `src/state/api/errors.ts`; verify `npx tsc --noEmit`.
+- [x] 1.2 Create `src/state/api/baseQuery.ts` + `src/state/api/errors.ts` and one `src/state/{board,cover,admin}/api.ts` per slice with its queries and mutations; verify `npx tsc --noEmit`.
 
 ## 2. Store and provider
 

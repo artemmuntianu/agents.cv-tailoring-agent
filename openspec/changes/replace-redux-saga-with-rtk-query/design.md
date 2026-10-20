@@ -24,7 +24,7 @@ RTK Query is a cache with request deduplication, polling, mutation state and ref
 
 ### Decision: RTK Query owns server data; Redux keeps only UI state
 
-`api.ts` holds every request. The Redux store keeps `filters` and `dialogs` (multiple components read them) and RTK Query's cache; the board's `note`, `live` and write error are component state because only the board reads them.
+`src/state/{board,cover,admin}/api.ts` hold every request, one `createApi` per slice, sharing the base query and the error helper. The Redux store keeps `filters` and `dialogs` (multiple components read them) and RTK Query's cache; the board's `note`, `live` and write error are component state because only the board reads them.
 
 *Alternative rejected: keep the sagas alongside RTK Query.* Two caches and two effect systems would have to agree about the same rows, which is exactly the duplication this change removes.
 

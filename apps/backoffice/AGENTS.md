@@ -114,8 +114,8 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 
 ## Client state (RTK Query + Redux)
 
-- The three orchestrated islands - `/` (`App`), `/cover/<job_id>` and `/admin` - keep their **server** state in `src/state/api.ts` (RTK Query) and only small UI state in Redux.
-- **`src/state/api.ts` is the only request surface for those islands**: `createApi` + `fetchBaseQuery` with the board/actions/cover/admin queries and every mutation. A base-query wrapper sends a 401 to `/login?next=...`; `fetchBaseQuery` writes the JSON content-type for object bodies and leaves `FormData` alone, so the DOCX upload still works.
+- The three orchestrated islands - `/` (`App`), `/cover/<job_id>` and `/admin` - keep their **server** state in `src/state/{board,cover,admin}/api.ts` (RTK Query) and only small UI state in Redux.
+- **One `createApi` per slice**: `src/state/{board,cover,admin}/api.ts` hold the board/actions, cover-letter and admin queries and mutations, sharing `src/state/api/baseQuery.ts` (the `fetchBaseQuery` wrapper that sends a 401 to `/login?next=...`) and `src/state/api/errors.ts`. `fetchBaseQuery` writes the JSON content-type for object bodies and leaves `FormData` alone, so the DOCX upload still works.
 - **One store per island, never a module singleton** (`makeStore` + `IslandProvider`): `client:load` islands are server-rendered, so a shared store would leak between requests. `setupListeners` installs refetch-on-focus/reconnect in an effect and removes it on unmount; nothing is fetched during the server pass.
 - **The query cache is a cache, not a source of truth.** Every write is a mutation followed by an awaited `refetch()` (board + actions, board for card-scoped writes, the cover row, the admin vocabulary), and only then is the failure reported (`boardWrite` in `App.tsx`). No optimistic update, and no persisted cache.
 - **Polling is a query option**: the board's 5s interval runs only while the tab is visible (`useDocumentVisible`), and the cover letter polls every 3s with its 3-minute deadline. No sagas and no `setInterval` in a component.

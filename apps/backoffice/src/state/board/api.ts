@@ -1,66 +1,20 @@
-import {
-  createApi,
-  fetchBaseQuery,
-  type BaseQueryFn,
-  type FetchArgs,
-  type FetchBaseQueryError,
-} from '@reduxjs/toolkit/query/react';
-import type { VocabularyKind } from '../lib/admin';
+import { createApi } from '@reduxjs/toolkit/query/react';
 import type {
   ActionRequest,
   ArchiveRequest,
   BoardAction,
   BoardCard,
-  CoverLetterState,
   DetailsRequest,
   HistoryEntryRequest,
   InterviewRequest,
   MoveRequest,
-} from '../lib/types';
+} from '../../lib/types';
+import { baseQuery, JSON_HEADERS } from '../api/baseQuery';
+import type { WriteResult } from '../api/types';
 
-export interface CoverVacancy {
-  jobId: string;
-  source: string;
-  externalId: string;
-  title: string;
-  company: string;
-  sourceUrl: string | null;
-  hasDescription: boolean;
-}
-
-export interface CoverPayload extends CoverLetterState {
-  vacancy: CoverVacancy | null;
-}
-
-export interface AdminVocabulary {
-  actions: BoardAction[];
-  actors: { value: string; hint: string }[];
-  stages: { id: string; label: string; hint: string }[];
-  subStates: { id: string; label: string }[];
-}
-
-export type WriteResult = { ok: true; note?: string };
-
-const jsonHeaders = { 'content-type': 'application/json' };
-
-const rawBaseQuery = fetchBaseQuery({ baseUrl: '/' });
-
-/** The 8h session expired: send the browser to the login page and come back. */
-const baseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError> = async (
-  args,
-  api,
-  extraOptions,
-) => {
-  const result = await rawBaseQuery(args, api, extraOptions);
-  if (result.error?.status === 401 && typeof window !== 'undefined') {
-    const next = `${window.location.pathname}${window.location.search}`;
-    window.location.assign(`/login?next=${encodeURIComponent(next)}`);
-  }
-  return result;
-};
-
-export const api = createApi({
-  reducerPath: 'api',
+/** The board's server state: cards, the Action catalogue and every card write. */
+export const boardApi = createApi({
+  reducerPath: 'boardApi',
   baseQuery,
   endpoints: (build) => ({
     getBoard: build.query<BoardCard[], void>({
@@ -106,7 +60,7 @@ export const api = createApi({
       query: (id) => ({
         url: `/api/board/interviews/${id}`,
         method: 'DELETE',
-        headers: jsonHeaders,
+        headers: JSON_HEADERS,
       }),
     }),
 
@@ -121,7 +75,7 @@ export const api = createApi({
       query: (id) => ({
         url: `/api/board/history/${id}`,
         method: 'DELETE',
-        headers: jsonHeaders,
+        headers: JSON_HEADERS,
       }),
     }),
 
@@ -134,34 +88,6 @@ export const api = createApi({
         form.append('file', file);
         return { url: `/api/board/docx/${encodeURIComponent(jobId)}`, method: 'POST', body: form };
       },
-    }),
-
-    getCover: build.query<CoverPayload, string>({
-      query: (jobId) => `/api/cover/${encodeURIComponent(jobId)}`,
-    }),
-    askCover: build.mutation<WriteResult, string>({
-      query: (jobId) => ({
-        url: `/api/cover/${encodeURIComponent(jobId)}`,
-        method: 'POST',
-        headers: jsonHeaders,
-      }),
-    }),
-
-    getAdminVocabulary: build.query<AdminVocabulary, void>({
-      query: () => '/api/admin/vocabulary',
-    }),
-    adminAdd: build.mutation<WriteResult, { value: string; kind: VocabularyKind }>({
-      query: (body) => ({ url: '/api/admin/actions', method: 'POST', body }),
-    }),
-    adminRename: build.mutation<WriteResult, { from: string; to: string }>({
-      query: (body) => ({ url: '/api/admin/actions', method: 'PATCH', body }),
-    }),
-    adminRemove: build.mutation<WriteResult, string>({
-      query: (value) => ({
-        url: `/api/admin/actions?value=${encodeURIComponent(value)}`,
-        method: 'DELETE',
-        headers: jsonHeaders,
-      }),
     }),
   }),
 });
@@ -181,10 +107,4 @@ export const {
   useRemoveHistoryMutation,
   useSaveDetailsMutation,
   useUploadDocxMutation,
-  useGetCoverQuery,
-  useAskCoverMutation,
-  useGetAdminVocabularyQuery,
-  useAdminAddMutation,
-  useAdminRenameMutation,
-  useAdminRemoveMutation,
-} = api;
+} = boardApi;

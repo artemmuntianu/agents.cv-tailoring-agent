@@ -10,7 +10,7 @@ import {
 } from '../lib/cover';
 import IslandProvider from '../state/IslandProvider';
 import { errorMessage } from '../state/api/errors';
-import { useAskCoverMutation, useGetCoverQuery } from '../state/api';
+import { useAskCoverMutation, useGetCoverQuery } from '../state/cover/api';
 
 interface CoverLetterPageProps {
   jobId: string;

@@ -38,7 +38,7 @@ import {
   useRestoreMutation,
   useSaveDetailsMutation,
   useUploadDocxMutation,
-} from '../state/api';
+} from '../state/board/api';
 import {
   actionDialogRequested,
   archiveDialogRequested,

@@ -1,0 +1,1 @@
+export type WriteResult = { ok: true; note?: string };

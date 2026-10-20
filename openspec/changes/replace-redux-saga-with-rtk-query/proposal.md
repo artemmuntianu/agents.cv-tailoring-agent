@@ -9,7 +9,7 @@ Replacing the sagas with RTK Query keeps the same observable behaviour while del
 ## What Changes
 
 - Add `@reduxjs/toolkit@^2.13` and remove `redux-saga@^1.5`.
-- Add `src/state/api.ts`: one `createApi` with `fetchBaseQuery` for the board, the Action vocabulary, the cover letter and the admin vocabulary, plus their mutations. A small wrapper sends a 401 to `/login?next=...`.
+- Add one `createApi` per slice: `src/state/{board,cover,admin}/api.ts`, sharing `src/state/api/baseQuery.ts` (the `fetchBaseQuery` wrapper that sends a 401 to `/login?next=...`) and `src/state/api/errors.ts`.
 - Rewrite the store with `configureStore` (RTK Query reducer + middleware) and enable `refetchOnFocus`/`refetchOnReconnect` through `setupListeners`.
 - `IslandProvider` no longer starts a root saga or dispatches a start action: queries start when a component mounts, and the provider only creates the store and installs the listeners.
 - The board uses `useGetBoardQuery` + `useGetActionsQuery`; live mode is the query's `pollingInterval` (paused while the tab is hidden), and every write is a mutation followed by an explicit `refetch()` so the re-read still finishes before a failure is shown.
@@ -33,7 +33,7 @@ _None._ The server routes, responses and database contract are untouched.
 ## Impact
 
 - `apps/backoffice/package.json` and `package-lock.json` - `@reduxjs/toolkit` added, `redux-saga` removed.
-- `apps/backoffice/src/state/**` - `api.ts` and a smaller store; saga files, server-data slices/selectors, `request.ts` and `events.ts` removed.
+- `apps/backoffice/src/state/**` - three per-slice `api.ts` files and a smaller store; saga files, server-data slices/selectors, `request.ts` and `events.ts` removed.
 - `App.tsx`, `CoverLetterPage.tsx`, `AdminApp.tsx` - query/mutation hooks replace the store-backed effects.
 - `apps/backoffice/AGENTS.md` - the state-layer section and the tests it names.
 - **Not touched:** API routes, `lib/db.ts`, the queue, the worker, the extension, the charts, the schema.

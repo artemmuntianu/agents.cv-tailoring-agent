@@ -7,7 +7,7 @@ import {
   useAdminRemoveMutation,
   useAdminRenameMutation,
   useGetAdminVocabularyQuery,
-} from '../state/api';
+} from '../state/admin/api';
 import ActionVocabulary from './ActionVocabulary';
 import AppShell from './AppShell';
 
