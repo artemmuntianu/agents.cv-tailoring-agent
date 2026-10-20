@@ -1,20 +1,13 @@
+import { useState } from 'react';
 import { VOCABULARY_KINDS, summarizeVocabulary } from '../lib/admin';
 import IslandProvider from '../state/IslandProvider';
-import { useAppDispatch, useAppSelector } from '../state/hooks';
-import { request } from '../state/request';
+import { errorMessage } from '../state/api/errors';
 import {
-  adminAddRequested,
-  adminLoadRequested,
-  adminRemoveRequested,
-  adminRenameRequested,
-} from '../state/admin/slice';
-import {
-  selectAdminBusy,
-  selectAdminError,
-  selectAdminLoading,
-  selectAdminNote,
-  selectAdminVocabulary,
-} from '../state/admin/selectors';
+  useAdminAddMutation,
+  useAdminRemoveMutation,
+  useAdminRenameMutation,
+  useGetAdminVocabularyQuery,
+} from '../state/api';
 import ActionVocabulary from './ActionVocabulary';
 import AppShell from './AppShell';
 
@@ -39,19 +32,37 @@ function ReadOnlyTable({ rows }: { rows: { id: string; label: string; hint: stri
 /**
  * `/admin` - the vocabulary admin surface, and the only screen a non-admin cannot reach.
  *
- * It edits exactly one list: **Actions** (`board_actions`). The read and the three writes
- * are sagas that re-read the vocabulary after every write, so the table is always what
- * Postgres holds; the page itself is a rendering layer.
+ * It edits exactly one list: **Actions** (`board_actions`). RTK Query reads it; each mutation
+ * is followed by an awaited refetch, so the table is always what Postgres holds.
  */
 function Admin({ session }: AdminAppProps) {
-  const dispatch = useAppDispatch();
-  const vocabulary = useAppSelector(selectAdminVocabulary);
-  const loading = useAppSelector(selectAdminLoading);
-  const busy = useAppSelector(selectAdminBusy);
-  const error = useAppSelector(selectAdminError);
-  const note = useAppSelector(selectAdminNote);
+  const { data: vocabulary, isLoading, error: queryError, refetch } = useGetAdminVocabularyQuery();
+  const [add] = useAdminAddMutation();
+  const [rename] = useAdminRenameMutation();
+  const [remove] = useAdminRemoveMutation();
+  const [busy, setBusy] = useState(false);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
+  const loading = isLoading;
+  const error = writeError ?? (queryError ? errorMessage(queryError) : null);
 
+  /** One write, then a re-read: the database is the display here too. */
+  async function run(send: () => Promise<unknown>, success: string): Promise<boolean> {
+    setBusy(true);
+    setWriteError(null);
+    let failure: string | null = null;
+    try {
+      await send();
+    } catch (cause) {
+      failure = errorMessage(cause);
+    }
+    await refetch();
+    setBusy(false);
+    setWriteError(failure);
+    setNote(failure ? null : success);
+    return failure === null;
+  }
 
   const summary = vocabulary ? summarizeVocabulary(vocabulary.actions) : null;
   return (
@@ -98,9 +109,9 @@ function Admin({ session }: AdminAppProps) {
                 actions={vocabulary.actions}
                 busy={busy}
                 kinds={VOCABULARY_KINDS}
-                onAdd={(value, kind) => request<boolean>(dispatch, adminAddRequested(value, kind))}
-                onRename={(from, to) => request<boolean>(dispatch, adminRenameRequested(from, to))}
-                onDelete={(value) => request<boolean>(dispatch, adminRemoveRequested(value))}
+                onAdd={(value, kind) => run(() => add({ value, kind }).unwrap(), `Added “${value}”.`)}
+                onRename={(from, to) => run(() => rename({ from, to }).unwrap(), `“${from}” is now “${to}”.`)}
+                onDelete={(value) => run(() => remove(value).unwrap(), `Removed “${value}”.`)}
               />
             </section>
 
@@ -156,9 +167,10 @@ function Admin({ session }: AdminAppProps) {
     </AppShell>
   );
 }
+
 export default function AdminApp(props: AdminAppProps) {
   return (
-    <IslandProvider start={() => adminLoadRequested()}>
+    <IslandProvider>
       <Admin {...props} />
     </IslandProvider>
   );

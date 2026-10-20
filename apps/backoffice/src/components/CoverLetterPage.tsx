@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import AppShell from './AppShell';
 import { sourceLabel } from '../lib/cardMeta';
 import {
@@ -9,13 +9,8 @@ import {
   coverStateLabel,
 } from '../lib/cover';
 import IslandProvider from '../state/IslandProvider';
-import { useAppDispatch, useAppSelector } from '../state/hooks';
-import { coverAskRequested, coverRequested } from '../state/cover/slice';
-import {
-  selectCoverAsking,
-  selectCoverError,
-  selectCoverPayload,
-} from '../state/cover/selectors';
+import { errorMessage } from '../state/api/errors';
+import { useAskCoverMutation, useGetCoverQuery } from '../state/api';
 
 interface CoverLetterPageProps {
   jobId: string;
@@ -26,25 +21,54 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : '-';
 }
 
+const POLL_MS = 3000;
+const DEADLINE_MS = 3 * 60 * 1000;
+
 function CoverLetter({ jobId, session }: CoverLetterPageProps) {
-  const dispatch = useAppDispatch();
-  const payload = useAppSelector(selectCoverPayload);
-  const error = useAppSelector(selectCoverError);
-  const asking = useAppSelector(selectCoverAsking);
-  /** The copy confirmation is the page's own, not server state. */
   const [copied, setCopied] = useState(false);
+  const [askError, setAskError] = useState('');
+  const [polling, setPolling] = useState(true);
+  const [expired, setExpired] = useState(false);
+  const [deadlineKey, setDeadlineKey] = useState(0);
 
-
+  const { data: payload = null, error: queryError, refetch } = useGetCoverQuery(jobId, {
+    pollingInterval: polling && !expired ? POLL_MS : 0,
+  });
+  const [askCover, askState] = useAskCoverMutation();
 
   const state = coverState(payload);
   const vacancy = payload?.vacancy ?? null;
   const blocked = coverBlockedReason(vacancy ? vacancy.hasDescription : true);
+  const asking = askState.isLoading;
+  const error = askError || (queryError ? errorMessage(queryError) : '');
 
-  /** One ask; the saga re-reads the row and polls until it lands or the deadline passes. */
+  // A page with no board has to carry the poll itself; it stops when the letter lands.
+  useEffect(() => {
+    setPolling(state === 'queued' || state === 'running');
+  }, [state]);
+
+  // Give up after three minutes even if the row says queued; the queue owns a stuck letter.
+  useEffect(() => {
+    setExpired(false);
+    const timer = window.setTimeout(() => setExpired(true), DEADLINE_MS);
+    return () => window.clearTimeout(timer);
+  }, [jobId, deadlineKey]);
+
   function ask() {
     if (asking || blocked) return;
     setCopied(false);
-    dispatch(coverAskRequested(jobId));
+    setAskError('');
+    setExpired(false);
+    setPolling(true);
+    setDeadlineKey((value) => value + 1);
+    void (async () => {
+      try {
+        await askCover(jobId).unwrap();
+        await refetch();
+      } catch (cause) {
+        setAskError(errorMessage(cause));
+      }
+    })();
   }
 
   async function copy() {
@@ -166,9 +190,10 @@ function CoverLetter({ jobId, session }: CoverLetterPageProps) {
   );
 }
 
+
 export default function CoverLetterPage(props: CoverLetterPageProps) {
   return (
-    <IslandProvider start={() => coverRequested(props.jobId)}>
+    <IslandProvider>
       <CoverLetter {...props} />
     </IslandProvider>
   );

@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import AppShell from './AppShell';
 import BoardToolbar from './BoardToolbar';
 import KanbanBoard from './KanbanBoard';
@@ -5,6 +6,8 @@ import ReasonDialog from './ReasonDialog';
 import RemoveDialog from './RemoveDialog';
 import VacancyModal from './VacancyModal';
 import { defaultArchiveAction, defaultMoveAction } from '../lib/actions';
+import { countArchived, countByStage } from '../lib/board';
+import { filterCards } from '../lib/filters';
 import { missingFields, missingRequest } from '../lib/missing';
 import { stageLabel } from '../lib/stages';
 import type {
@@ -18,36 +21,24 @@ import type {
 } from '../lib/types';
 import IslandProvider from '../state/IslandProvider';
 import { useAppDispatch, useAppSelector } from '../state/hooks';
-import { request } from '../state/request';
+import { errorMessage } from '../state/api/errors';
+import { readCardQuery, useDocumentVisible } from '../state/browser';
 import {
-  actionConfirmed,
-  archiveConfirmed,
-  boardLiveSet,
-  boardRequested,
-  boardStarted,
-  detailsSaveRequested,
-  docxUploadRequested,
-  historyEditRequested,
-  historyRemoveRequested,
-  interviewAddRequested,
-  interviewEditRequested,
-  interviewRemoveRequested,
-  moveConfirmed,
-  removeConfirmed,
-  restoreRequested,
-} from '../state/board/slice';
-import {
-  selectArchivedCount,
-  selectBoardError,
-  selectBoardLoading,
-  selectBoardNote,
-  selectCards,
-  selectColumnCounts,
-  selectLive,
-  selectVisibleCards,
-} from '../state/board/selectors';
-import { filtersChanged, filtersReset } from '../state/filters/slice';
-import { selectFilters } from '../state/filters/selectors';
+  useAddInterviewMutation,
+  useArchiveMutation,
+  useEditHistoryMutation,
+  useEditInterviewMutation,
+  useGetActionsQuery,
+  useGetBoardQuery,
+  useMoveMutation,
+  useRecordActionMutation,
+  useRemoveHistoryMutation,
+  useRemoveInterviewMutation,
+  useRemoveMutation,
+  useRestoreMutation,
+  useSaveDetailsMutation,
+  useUploadDocxMutation,
+} from '../state/api';
 import {
   actionDialogRequested,
   archiveDialogRequested,
@@ -57,51 +48,126 @@ import {
   moveDialogRequested,
   removeDialogRequested,
 } from '../state/dialogs/slice';
-import {
-  selectOpenCard,
-  selectPendingActionCard,
-  selectPendingArchiveCard,
-  selectPendingMove,
-  selectPendingRemovalCard,
-} from '../state/dialogs/selectors';
-import { selectActions } from '../state/vocabulary/selectors';
+import { filtersChanged, filtersReset } from '../state/filters/slice';
 
 interface AppProps {
   session: { email: string; name: string | null; admin: boolean };
 }
 
 /**
- * Board root. The database is the single source of truth: every confirmed change is a saga
- * that POSTs, re-reads `/api/board` and only then reports the failure, so what you see is
- * what was persisted. The store is a cache of that read - never a second source of truth.
+ * Board root. The database is the single source of truth: every write is an RTK Query
+ * mutation followed by an explicit board re-read, so what you see is what was persisted.
+ * The query cache is a cache - never a second source of truth.
  */
 function Board({ session }: AppProps) {
   const dispatch = useAppDispatch();
-  const cards = useAppSelector(selectCards);
-  const visible = useAppSelector(selectVisibleCards);
-  const counts = useAppSelector(selectColumnCounts);
-  const archivedCount = useAppSelector(selectArchivedCount);
-  const loading = useAppSelector(selectBoardLoading);
-  const error = useAppSelector(selectBoardError);
-  const note = useAppSelector(selectBoardNote);
-  const live = useAppSelector(selectLive);
-  const filters = useAppSelector(selectFilters);
-  const actions = useAppSelector(selectActions);
+  const filters = useAppSelector((state) => state.filters);
+  const dialogs = useAppSelector((state) => state.dialogs);
+  const tabVisible = useDocumentVisible();
 
-  const pending = useAppSelector(selectPendingMove);
-  const pendingAction = useAppSelector(selectPendingActionCard);
-  const pendingArchive = useAppSelector(selectPendingArchiveCard);
-  const pendingRemoval = useAppSelector(selectPendingRemovalCard);
-  const openCard = useAppSelector(selectOpenCard);
+  const [live, setLive] = useState(true);
+  const [note, setNote] = useState<string | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
 
+  const board = useGetBoardQuery(undefined, {
+    pollingInterval: live && tabVisible ? 5000 : 0,
+    refetchOnFocus: true,
+    refetchOnReconnect: true,
+  });
+  const actionsQuery = useGetActionsQuery();
 
+  const [move] = useMoveMutation();
+  const [recordAction] = useRecordActionMutation();
+  const [archive] = useArchiveMutation();
+  const [restoreCard] = useRestoreMutation();
+  const [removeCard] = useRemoveMutation();
+  const [addInterview] = useAddInterviewMutation();
+  const [editInterview] = useEditInterviewMutation();
+  const [removeInterview] = useRemoveInterviewMutation();
+  const [editHistory] = useEditHistoryMutation();
+  const [removeHistory] = useRemoveHistoryMutation();
+  const [saveDetailsMutation] = useSaveDetailsMutation();
+  const [uploadDocxFile] = useUploadDocxMutation();
 
-  /** *Update docx*: the card-scoped write whose dialog stays open on a refusal. */
-  async function uploadDocx(jobId: string, file: File) {
-    await request(dispatch, docxUploadRequested(jobId, file));
+  const cards = board.data ?? [];
+  const actions = actionsQuery.data ?? [];
+  const visible = useMemo(() => filterCards(cards, filters), [cards, filters]);
+  const counts = useMemo(() => countByStage(visible), [visible]);
+  const archivedCount = useMemo(() => countArchived(visible), [visible]);
+  const error = writeError ?? (board.error ? errorMessage(board.error) : null);
+  const loading = board.isLoading || reloading;
+
+  const pendingMove = dialogs.pendingMove;
+  const pending = useMemo(() => {
+    if (!pendingMove) return null;
+    const card = cards.find((item) => item.jobId === pendingMove.jobId);
+    return card ? { card, to: pendingMove.to } : null;
+  }, [cards, pendingMove]);
+  const pendingAction = dialogs.pendingAction
+    ? (cards.find((item) => item.jobId === dialogs.pendingAction) ?? null)
+    : null;
+  const pendingArchive = dialogs.pendingArchive
+    ? (cards.find((item) => item.jobId === dialogs.pendingArchive) ?? null)
+    : null;
+  const pendingRemoval = dialogs.pendingRemoval
+    ? (cards.find((item) => item.jobId === dialogs.pendingRemoval) ?? null)
+    : null;
+  const openCard = dialogs.openId
+    ? (cards.find((item) => item.jobId === dialogs.openId) ?? null)
+    : null;
+
+  // The extension's `Scraped` link lands on `/?card=<job_id>`.
+  useEffect(() => {
+    if (dialogs.openId) return;
+    const requested = readCardQuery();
+    if (requested && cards.some((card) => card.jobId === requested)) {
+      dispatch(dialogOpened(requested));
+    }
+  }, [cards, dialogs.openId, dispatch]);
+
+  async function refresh() {
+    await Promise.all([board.refetch(), actionsQuery.refetch()]);
   }
 
-  /** The move confirmed; the saga drops the dialog and reports the route's `note`. */
+  async function reload() {
+    setReloading(true);
+    try {
+      await refresh();
+    } finally {
+      setReloading(false);
+    }
+  }
+
+  /** The board-level write contract: mutate, re-read both lists, then report. */
+  async function boardWrite<T>(send: () => Promise<T>): Promise<T | null> {
+    setNote(null);
+    setWriteError(null);
+    let payload: T | null = null;
+    let failure: string | null = null;
+    try {
+      payload = await send();
+    } catch (cause) {
+      failure = errorMessage(cause);
+    }
+    await refresh();
+    setWriteError(failure);
+    const resultNote =
+      payload && typeof payload === 'object' ? (payload as { note?: unknown }).note : null;
+    if (typeof resultNote === 'string' && resultNote) setNote(resultNote);
+    return payload;
+  }
+
+  /** A card-scoped write: the modal keeps the route's error, and success re-reads the board. */
+  async function cardWrite(send: () => Promise<unknown>) {
+    await send();
+    await board.refetch();
+  }
+
+  async function uploadDocx(jobId: string, file: File) {
+    await cardWrite(() => uploadDocxFile({ jobId, file }).unwrap());
+  }
+
   async function confirmMove(
     actor: Actor,
     action: string,
@@ -116,52 +182,56 @@ function Board({ session }: AppProps) {
       action,
       ...missingRequest(missing),
     };
-    dispatch(moveConfirmed(interview ? { ...body, interview } : body));
+    dispatch(dialogsClosed());
+    await boardWrite(() => move(interview ? { ...body, interview } : body).unwrap());
   }
 
   async function confirmAction(actor: Actor, action: string) {
     if (!pendingAction) return;
     const body: ActionRequest = { jobId: pendingAction.jobId, actor, action };
-    dispatch(actionConfirmed(body));
+    dispatch(dialogsClosed());
+    await boardWrite(() => recordAction(body).unwrap());
   }
 
-  async function addInterview(jobId: string, interview: InterviewRequest) {
-    await request(dispatch, interviewAddRequested(jobId, interview));
+  async function addInterviewLine(jobId: string, interview: InterviewRequest) {
+    await cardWrite(() => addInterview({ jobId, request: interview }).unwrap());
   }
 
-  async function editInterview(id: number, interview: InterviewRequest) {
-    await request(dispatch, interviewEditRequested(id, interview));
+  async function editInterviewLine(id: number, interview: InterviewRequest) {
+    await cardWrite(() => editInterview({ id, request: interview }).unwrap());
   }
 
-  async function removeInterview(id: number) {
-    await request(dispatch, interviewRemoveRequested(id));
+  async function removeInterviewLine(id: number) {
+    await cardWrite(() => removeInterview(id).unwrap());
   }
 
   async function editHistoryLine(id: number, line: HistoryEntryRequest) {
-    await request(dispatch, historyEditRequested(id, line));
+    await cardWrite(() => editHistory({ id, request: line }).unwrap());
   }
 
   async function removeHistoryLine(id: number) {
-    await request(dispatch, historyRemoveRequested(id));
+    await cardWrite(() => removeHistory(id).unwrap());
   }
 
   async function saveDetails(jobId: string, details: DetailsRequest) {
-    await request(dispatch, detailsSaveRequested(jobId, { ...details, jobId }));
+    await cardWrite(() => saveDetailsMutation({ ...details, jobId }).unwrap());
   }
 
   async function confirmArchive(actor: Actor, action: string) {
     if (!pendingArchive) return;
     const body: ArchiveRequest = { jobId: pendingArchive.jobId, actor, action };
-    dispatch(archiveConfirmed(body));
+    dispatch(dialogsClosed());
+    await boardWrite(() => archive(body).unwrap());
   }
 
-  function restore(jobId: string) {
-    dispatch(restoreRequested(jobId));
+  async function restore(jobId: string) {
+    await boardWrite(() => restoreCard(jobId).unwrap());
   }
 
   async function confirmRemove() {
     if (!pendingRemoval) return;
-    dispatch(removeConfirmed(pendingRemoval.jobId));
+    dispatch(dialogsClosed());
+    await boardWrite(() => removeCard(pendingRemoval.jobId).unwrap());
   }
   return (
     <AppShell
@@ -178,7 +248,7 @@ function Board({ session }: AppProps) {
         <>
           <button
             type="button"
-            onClick={() => dispatch(boardLiveSet(!live))}
+            onClick={() => setLive((value) => !value)}
             aria-pressed={live}
             className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
               live
@@ -190,7 +260,7 @@ function Board({ session }: AppProps) {
           </button>
           <button
             type="button"
-            onClick={() => dispatch(boardRequested())}
+            onClick={() => void reload()}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             {loading ? 'Loading…' : 'Reload'}
@@ -251,7 +321,7 @@ function Board({ session }: AppProps) {
         onRequestMove={(card, to) => dispatch(moveDialogRequested(card.jobId, to))}
         onOpen={(jobId) => dispatch(dialogOpened(jobId))}
         onArchive={(jobId) => dispatch(archiveDialogRequested(jobId))}
-        onRestore={(jobId) => dispatch(restoreRequested(jobId))}
+        onRestore={(jobId) => void restore(jobId)}
         onRemove={(jobId) => dispatch(removeDialogRequested(jobId))}
       />
 
@@ -329,15 +399,15 @@ function Board({ session }: AppProps) {
         onArchive={(jobId) => dispatch(archiveDialogRequested(jobId))}
         onRestore={(jobId) => {
           dispatch(dialogClosed());
-          dispatch(restoreRequested(jobId));
+          void restore(jobId);
         }}
         onRemove={(jobId) => dispatch(removeDialogRequested(jobId))}
         onAddAction={(jobId) => dispatch(actionDialogRequested(jobId))}
         onRequestMove={(card, to) => dispatch(moveDialogRequested(card.jobId, to))}
         onUploadDocx={uploadDocx}
-        onAddInterview={addInterview}
-        onEditInterview={editInterview}
-        onRemoveInterview={removeInterview}
+        onAddInterview={addInterviewLine}
+        onEditInterview={editInterviewLine}
+        onRemoveInterview={removeInterviewLine}
         onEditHistory={editHistoryLine}
         onRemoveHistory={removeHistoryLine}
         onSaveDetails={saveDetails}
@@ -355,9 +425,10 @@ function Board({ session }: AppProps) {
   );
 }
 
+
 export default function App({ session }: AppProps) {
   return (
-    <IslandProvider start={() => boardStarted()}>
+    <IslandProvider>
       <Board session={session} />
     </IslandProvider>
   );

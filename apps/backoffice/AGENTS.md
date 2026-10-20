@@ -33,7 +33,7 @@ npm test           # vitest: auth, board + archive, filters, actions, interviews
                    # scraper and the form filler (jsdom), the filler's page->card resolution (fake
                    # chrome/fetch), the candidate-facts edit rules, the answers editor's render and
                    # the analytics per-period series + the chart's own render, and the client
-                   # state layer (store, selectors, sagas)
+                   # state layer (filters/dialogs, error mapping)
 npx tsc --noEmit   # types
 npm run build      # SSR bundle -> dist/{server,client}
 npm start          # run the built server
@@ -100,7 +100,7 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/lib/processes.ts` | The Processes page's vocabulary: process labels and hints, run status chips, one-line run summaries, durations, the trigger label |
 | `src/lib/cardMeta.ts` | The card face's reading line: the site slug -> display name, and the change stamp's recency rule (`today` / `yesterday` / `N days ago` up to 9 days, then the plain date) |
 | `src/lib/admin.ts` | The admin surface's pure half: `isAdminPath`, the add/rename/remove parsers, table sorting |
-| `src/state/*` | The client state layer: plain Redux 5 + Redux Saga + reselect, one store per island, the board, filters, dialogs, vocabulary, cover and admin slices and their sagas |
+| `src/state/*` | The client state layer: RTK Query endpoints for the board, cover letter and admin, `configureStore` + `IslandProvider`, and the `filters`/`dialogs` UI slices |
 | `src/lib/stages.ts`, `src/lib/types.ts` | Column, sub-state and actor vocabulary · types |
 | `src/lib/cover.ts`, `src/lib/coverRequest.ts` | The cover letter: what the modal shows and needs (pure, unit tested) and the one claim -> publish -> rollback routine both callers share |
 | `src/lib/docxUpload.ts`, `src/lib/docxRequest.ts` | The *Update docx* upload: the rules a hand-edited DOCX must pass (`fileRejection`/`uploadRejection`, `renderState` for the deliverable's five states) and the claim -> publish -> rollback routine (`markDocxUpdateRequested` stores the bytes with the claim) |
@@ -112,18 +112,17 @@ from the cluster: it is hermetic, so it passes with both port-forwards down.
 | `src/components/*` | `App` · `AppShell` · `NavBar` · `BoardToolbar` · `FilterDialog` · `KanbanBoard` · `VacancyCard` · `VacancyModal` · `VacancyTextPage` · `CoverLetterPage` · `ReasonDialog` · `RemoveDialog` · `ChannelSelect` · `InterviewFields` · `InterviewDialog` · `HistoryDialog` · `HistoryRemoveDialog` · `ProcessesPage` · `ProcessRunTable` · `AnalyticsPage` · `StageMixChart` · `ActionCombobox` · `LoginForm` |
 | `scripts/user.mjs` | Administrator CLI: `add` / `list` / `password` / `disable` / `enable` |
 
-## Client state (Redux + Redux Saga)
+## Client state (RTK Query + Redux)
 
-- The three orchestrated islands - `/` (`App`), `/cover/<job_id>` and `/admin` - keep their client state in `src/state/`: a plain Redux 5 store, Redux Saga effects and `reselect` selectors.
-- **One store per island, never a module singleton** (`makeStore` + `IslandProvider`): `client:load` islands are server-rendered, so a shared store would leak between requests. Sagas start in an effect and are cancelled with the island; nothing is dispatched during render, so the SSR HTML and the first client render agree.
-- **The island's first action is dispatched by `startIsland` right after `runSaga`**, never from a child effect: a child effect runs first and its action would be lost before the saga is listening (the `/admin` stuck on `Loading…` bug, 2026-10-20).
-- **The store is a cache, not a source of truth.** Every write goes through a saga that re-reads `/api/board`, and only then reports the failure (`mutateSaga`). No optimistic update, and no persisted store (the nav preference stays in `NavBar`).
-- **Effects live in sagas**: the 5s live poll (paused while the tab is hidden), the `focus`/`visibilitychange` refetch, the `?card=` deep link, the cover letter's 3s poll with its 3-minute deadline, and the admin write -> re-read.
-- **`lib/*` stays pure.** `filters.ts`, `board.ts`, `analytics.ts`, `interviews.ts`, `details.ts`, `history.ts`, `cover.ts`, `profile.ts` keep every rule; slices and selectors only hold state and call them.
-- **`src/state/api/client.ts` is the only fetch wrapper** (JSON content-type on every non-GET, `{ ok, error }` parsing, 401 -> login redirect), so no component can forget the contract.
-- `/analytics`, `/processes`, `/sources`, `/new-vacancy`, `/vacancy/<id>` and `/login` are **not** migrated: a single `fetch` or a plain form does not earn a slice.
-- Tests: `src/state/**/*.test.ts` (reducers, selectors, sagas with `runSaga`, the fetch wrapper) run in the existing vitest node environment.
-
+- The three orchestrated islands - `/` (`App`), `/cover/<job_id>` and `/admin` - keep their **server** state in `src/state/api.ts` (RTK Query) and only small UI state in Redux.
+- **`src/state/api.ts` is the only request surface for those islands**: `createApi` + `fetchBaseQuery` with the board/actions/cover/admin queries and every mutation. A base-query wrapper sends a 401 to `/login?next=...`; `fetchBaseQuery` writes the JSON content-type for object bodies and leaves `FormData` alone, so the DOCX upload still works.
+- **One store per island, never a module singleton** (`makeStore` + `IslandProvider`): `client:load` islands are server-rendered, so a shared store would leak between requests. `setupListeners` installs refetch-on-focus/reconnect in an effect and removes it on unmount; nothing is fetched during the server pass.
+- **The query cache is a cache, not a source of truth.** Every write is a mutation followed by an awaited `refetch()` (board + actions, board for card-scoped writes, the cover row, the admin vocabulary), and only then is the failure reported (`boardWrite` in `App.tsx`). No optimistic update, and no persisted cache.
+- **Polling is a query option**: the board's 5s interval runs only while the tab is visible (`useDocumentVisible`), and the cover letter polls every 3s with its 3-minute deadline. No sagas and no `setInterval` in a component.
+- **Only `filters` and `dialogs` remain Redux slices**; the board's `note`/`live`/write-error and the cover/admin messages are component state because only their page reads them.
+- **`lib/*` stays pure.** `filters.ts`, `board.ts`, `analytics.ts`, `interviews.ts`, `details.ts`, `history.ts`, `cover.ts`, `profile.ts` keep every rule; components and queries only call them.
+- `/analytics`, `/processes`, `/sources`, `/new-vacancy`, `/vacancy/<id>` and `/login` are **not** migrated: a single `fetch` or a plain form does not earn a query.
+- Tests: `src/state/state.test.ts` covers the remaining filters/dialogs reducers and `errorMessage`; the request layer is covered by `npm test`, `npx tsc --noEmit` and `npm run build` (hermetic - no cluster).
 ## Vocabulary admin (`/admin`)
 
 - **Admin-only, and actually enforced.** The session token carries
@@ -799,9 +798,9 @@ holding one of a period's two entries still has room for its own number.
   appears when the worker claims it, not at publish time.
 - No "add vacancy", no pagination (`BOARD_LIMIT` = 1000 cards, newest `updated_at` first -
   the window the toolbar filters in the browser).
-- **No persisted client store and no optimistic updates**: the Redux store is a per-island
-  cache of `/api/board`, every write re-reads it, and a page navigation starts from the
-  server again - a failed write never leaves a card moved on screen.
+- **No persisted query cache and no optimistic updates**: the RTK Query cache is per island,
+  every write re-reads the server, and a page navigation starts from the server again - a
+  failed write never leaves a card moved on screen.
 - **No dark theme**: the board is light-only on purpose (`global.css` says "no dark mode
   switch"), so the UX spec's `dark:` variants are deliberately not half-applied.
 - **No bulk archive/restore** and no multi-select: one card, one confirmed change.
